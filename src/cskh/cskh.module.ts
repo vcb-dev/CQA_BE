@@ -7,6 +7,7 @@ import { FacebookGraphService } from './facebook-graph.service';
 import { SapoProductService } from './sapo-product.service';
 import { SapoOAuthService } from './sapo-oauth.service';
 import { CskhCronService } from './cskh-cron.service';
+import { RedisQueueService } from './redis-queue.service';
 import { AiModule } from '../ai/ai.module';
 import { AuthModule } from '../auth/auth.module';
 import { UsersModule } from '../users/users.module';
@@ -22,7 +23,8 @@ import { UsersModule } from '../users/users.module';
     SapoProductService,
     SapoOAuthService,
     CskhCronService,
+    RedisQueueService,
   ],
-  exports: [CskhService, CskhInboxService],
+  exports: [CskhService, CskhInboxService, RedisQueueService],
 })
 export class CskhModule {}

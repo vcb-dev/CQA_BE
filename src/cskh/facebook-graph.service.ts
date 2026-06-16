@@ -59,6 +59,7 @@ export type TranscriptLine = {
 export class FacebookGraphService {
   private readonly logger = new Logger(FacebookGraphService.name);
   private readonly graphVersion = process.env.FB_GRAPH_VERSION?.trim() || 'v21.0';
+  private readonly failedProfileFetches = new Map<string, number>();
 
   async getPagePictureUrl(pageId: string, pageToken: string): Promise<string | null> {
     try {
@@ -91,17 +92,37 @@ export class FacebookGraphService {
     const url = isFullUrl
       ? urlOrPath
       : `${GRAPH_BASE}${urlOrPath.startsWith('/') ? '' : '/'}${urlOrPath}`;
-    try {
-      const res = await axios.get<T>(url, {
-        params: isFullUrl ? undefined : { access_token: token, ...params },
-        timeout: 60000,
-      });
-      return res.data;
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { error?: { message?: string } } }; message?: string };
-      const fbErr = err.response?.data?.error;
-      throw new Error(fbErr?.message || err.message || 'Graph API error');
+
+    let lastError: any = null;
+    const maxRetries = 3;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const res = await axios.get<T>(url, {
+          params: isFullUrl ? undefined : { access_token: token, ...params },
+          timeout: 60000,
+        });
+        return res.data;
+      } catch (e: unknown) {
+        lastError = e;
+        const err = e as { response?: { status?: number; data?: { error?: { message?: string } } }; message?: string };
+        const fbErr = err.response?.data?.error;
+        const errMsg = fbErr?.message || err.message || 'Graph API error';
+        const status = err.response?.status;
+
+        const isRateLimit = fbErr?.message?.includes('limit') || status === 429;
+        const isServerError = status ? status >= 500 : true;
+
+        if (attempt < maxRetries && (isRateLimit || isServerError)) {
+          const delay = attempt * 2000 + (isRateLimit ? 5000 : 0);
+          this.logger.warn(`GraphRequest failed (attempt ${attempt}/${maxRetries}): ${errMsg}. Retrying in ${delay}ms...`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          continue;
+        }
+
+        throw new Error(fbErr?.message || err.message || 'Graph API error');
+      }
     }
+    throw lastError;
   }
 
   async verifyPage(pageId: string, token: string) {
@@ -122,7 +143,7 @@ export class FacebookGraphService {
             fields: 'id,updated_time,participants',
             limit: Math.min(50, maxCount - convs.length),
           })
-        : await axios.get<Page>(nextUrl!, { timeout: 60000 }).then((r) => r.data);
+        : await this.graphRequest<Page>(nextUrl!, token);
       first = false;
       if (Array.isArray(data.data)) convs.push(...data.data);
       nextUrl = data.paging?.next ?? null;
@@ -153,7 +174,7 @@ export class FacebookGraphService {
             fields,
             limit: Math.min(50, maxCount - convs.length),
           })
-        : await axios.get<Page>(nextUrl!, { timeout: 60000 }).then((r) => r.data);
+        : await this.graphRequest<Page>(nextUrl!, token);
       first = false;
       if (Array.isArray(data.data)) convs.push(...data.data);
       nextUrl = data.paging?.next ?? null;
@@ -236,6 +257,7 @@ export class FacebookGraphService {
     convFilter?: (conv: FbConversation) => 'include' | 'exclude' | 'stop',
     /** Dừng quét inbox khi đủ số hội thoại mới cần chấm (ô Giới hạn trên FE). */
     maxNewMatches = 0,
+    onMatch?: (conv: FbConversation) => void | Promise<void>,
   ): Promise<FbConversation[]> {
     const auditDateToResolved = auditDateTo?.trim() || auditDateFrom;
     const { start, end } = this.vietnamDateRange(auditDateFrom, auditDateToResolved);
@@ -251,10 +273,11 @@ export class FacebookGraphService {
     let nextUrl: string | null = null;
     let first = true;
     const safeMsgMax = Math.min(Math.max(msgLimit, 20), 500);
-    // Embed nhỏ chỉ để lọc nhanh — transcript đầy đủ fetch riêng từng hội thoại.
-    const embedPreview = Math.min(15, safeMsgMax);
+    // Embed cực kỳ nhỏ chỉ lấy id và created_time để lọc nhanh các hội thoại qua date range
+    // Giúp tối ưu hóa tốc độ tải trang /conversations lên gấp nhiều lần
+    const embedPreview = Math.min(20, safeMsgMax);
     const fields =
-      `id,updated_time,participants,messages.limit(${embedPreview}){${FB_MESSAGE_FIELDS}}`;
+      `id,updated_time,participants,messages.limit(${embedPreview}){id,created_time}`;
 
     this.logger.log(
       `[AuditRange] page=${pageId} range=${rangeLabel} ${start.toISOString()} → ${end.toISOString()} (VN +7)`,
@@ -280,7 +303,7 @@ export class FacebookGraphService {
             fields,
             limit: 50,
           })
-        : await axios.get<Page>(nextUrl!, { timeout: 120000 }).then((r) => r.data);
+        : await this.graphRequest<Page>(nextUrl!, token);
       first = false;
 
       const batch = data.data ?? [];
@@ -326,17 +349,9 @@ export class FacebookGraphService {
           // Chưa thấy tin ngày audit trong embed — vẫn thử fetch đầy đủ
         }
 
-        let needsFetch = true;
-        if (rawMsgs.length < embedPreview) {
-          needsFetch = false;
-        } else {
-          const oldest = rawMsgs[rawMsgs.length - 1];
-          const oldestTime = oldest?.created_time ? new Date(oldest.created_time).getTime() : 0;
-          if (oldestTime > 0 && oldestTime < start.getTime()) {
-            needsFetch = false;
-          }
-        }
-
+        // Vì embed preview chỉ lấy id và created_time để tối ưu tốc độ,
+        // chúng ta bắt buộc phải fetch đầy đủ (nội dung, người gửi, đính kèm) cho mọi cuộc hội thoại được giữ lại
+        const needsFetch = true;
         candidates.push({ conv, allMsgs: rawMsgs, needsFetch });
       }
 
@@ -415,10 +430,14 @@ export class FacebookGraphService {
           );
         }
 
-        matched.push({
+        const matchedConv = {
           ...conv,
           messages: { data: transcriptMsgs },
-        });
+        };
+        matched.push(matchedConv);
+        if (onMatch) {
+          await onMatch(matchedConv);
+        }
       }
 
       this.logger.debug(
@@ -548,7 +567,7 @@ export class FacebookGraphService {
             fields: FB_MESSAGE_FIELDS,
             limit: Math.min(50, limit - messages.length),
           })
-        : await axios.get<Page>(nextUrl!, { timeout: 60000 }).then((r) => r.data);
+        : await this.graphRequest<Page>(nextUrl!, token);
       first = false;
       if (Array.isArray(data.data)) messages.push(...data.data);
       nextUrl = data.paging?.next ?? null;
@@ -583,9 +602,9 @@ export class FacebookGraphService {
       const data: Page = first
         ? await this.graphRequest<Page>(`/${conversationId}/messages`, token, {
             fields: FB_MESSAGE_FIELDS,
-            limit: Math.min(50, safeMax - fetched.length),
+            limit: Math.min(25, safeMax - fetched.length),
           })
-        : await axios.get<Page>(nextUrl!, { timeout: 90000 }).then((r) => r.data);
+        : await this.graphRequest<Page>(nextUrl!, token);
       first = false;
 
       const batch = data.data ?? [];
@@ -624,32 +643,10 @@ export class FacebookGraphService {
     psid: string,
     pageToken: string,
   ): Promise<{ name: string | null; pictureUrl: string | null }> {
-    if (!psid || !pageToken) return { name: null, pictureUrl: null };
-    let name: string | null = null;
-    let pictureUrl: string | null = null;
-
-    try {
-      const pic = await this.graphRequest<{
-        data?: { url?: string; is_silhouette?: boolean };
-      }>(`/${psid}/picture`, pageToken, { redirect: '0', type: 'large' });
-      pictureUrl = pic?.data?.url ?? null;
-    } catch (e) {
-      this.logger.debug(`PSID picture endpoint ${psid}: ${(e as Error).message}`);
-    }
-
-    try {
-      const data = await this.graphRequest<{
-        name?: string;
-        first_name?: string;
-        picture?: { data?: { url?: string } };
-      }>(`/${psid}`, pageToken, { fields: 'name,first_name,picture.type(large)' });
-      name = data.name?.trim() || data.first_name?.trim() || null;
-      pictureUrl = pictureUrl ?? data.picture?.data?.url ?? null;
-    } catch (e) {
-      this.logger.warn(`PSID profile ${psid}: ${(e as Error).message}`);
-    }
-
-    return { name, pictureUrl };
+    // Tạm thời tắt toàn bộ cuộc gọi lấy thông tin khách hàng từ Facebook Graph API
+    // để tránh bị Meta khóa API (rate limit) khi ứng dụng chưa qua Xét duyệt (App Review).
+    // Khi ứng dụng đã được duyệt, bạn có thể khôi phục lại code cũ ở git history.
+    return { name: null, pictureUrl: null };
   }
 
   async getMessengerUserName(psid: string, pageToken: string): Promise<string | null> {
@@ -1127,5 +1124,25 @@ export class FacebookGraphService {
         message: { text },
       },
     );
+  }
+
+  /** Gửi hành động sender (typing_on, typing_off, mark_seen) từ Page → khách (PSID). */
+  async sendPageSenderAction(
+    pageId: string,
+    token: string,
+    recipientPsid: string,
+    senderAction: 'mark_seen' | 'typing_on' | 'typing_off',
+  ) {
+    return this.graphPost<{ recipient_id?: string }>(
+      `/${pageId}/messages`,
+      token,
+      {
+        recipient: { id: recipientPsid },
+        sender_action: senderAction,
+      },
+    ).catch((e) => {
+      this.logger.warn(`Failed to send sender action ${senderAction}: ${(e as Error).message}`);
+      return null;
+    });
   }
 }

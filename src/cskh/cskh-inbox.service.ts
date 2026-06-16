@@ -1,8 +1,9 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, Inject, forwardRef } from '@nestjs/common';
 import type { CskhInboxConversation, CskhInboxMessage } from '@prisma/client';
+import { RedisQueueService } from './redis-queue.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AiService } from '../ai/ai.service';
-import { FacebookGraphService, type FbMessage } from './facebook-graph.service';
+import { FacebookGraphService, type FbMessage, type FbConversation } from './facebook-graph.service';
 import { dedupeMediaUrls, repairStoredMessage } from './facebook-message.util';
 import {
   detectAdFromFbMessages,
@@ -46,7 +47,9 @@ type WebhookMessagingEvent = {
 @Injectable()
 export class CskhInboxService {
   private readonly logger = new Logger(CskhInboxService.name);
-  private readonly syncLimit = Number(process.env.CSKH_INBOX_SYNC_LIMIT || 30);
+  private readonly syncLimit = Number(process.env.CSKH_INBOX_SYNC_LIMIT || 100);
+  private readonly listSyncCooldownMs = Number(process.env.CSKH_INBOX_LIST_SYNC_COOLDOWN_MS || 120_000);
+  private readonly lastListSync = new Map<string, number>();
   private readonly msgLimit = Number(process.env.CSKH_INBOX_MSG_LIMIT || 50);
   /** Khi recheck audit — tải nhiều tin hơn để so khớp transcript. */
   private readonly auditRecheckMsgLimit = Number(
@@ -68,6 +71,8 @@ export class CskhInboxService {
     private readonly realtime: CskhInboxRealtimeService,
     private readonly ai: AiService,
     private readonly sapoProducts: SapoProductService,
+    @Inject(forwardRef(() => RedisQueueService))
+    private readonly redisQueue: RedisQueueService,
   ) {}
 
   private formatMessageRow(row: CskhInboxMessage): InboxMessagePayload {
@@ -122,8 +127,8 @@ export class CskhInboxService {
       tenantId: finalTenantId,
     });
     if (analyzeIntent && messages.some((m) => m.senderType === 'customer')) {
-      void this.analyzeAndBroadcastIntent(conversationId, finalTenantId).catch((e) => {
-        this.logger.warn(`Intent broadcast failed: ${(e as Error).message}`);
+      await this.redisQueue.enqueueIntent(conversationId, finalTenantId).catch((e) => {
+        this.logger.warn(`Intent enqueue failed: ${(e as Error).message}`);
       });
     }
   }
@@ -162,10 +167,13 @@ export class CskhInboxService {
 
     const signature = `${auditKey}|${intentMessagesSignature(aiMessages)}`;
     const cacheKey = auditKey ? `${conversationId}:${auditKey}` : conversationId;
-    const cached = this.intentCache.get(cacheKey);
-    if (cached && cached.signature === signature && Date.now() - cached.at < 120_000) {
+    
+    // Read from Redis Cache
+    const cached = await this.redisQueue.getIntentCache(cacheKey);
+    if (cached && cached.signature === signature) {
       return cached.data;
     }
+    
     const analyzed = await this.ai.analyzeCustomerIntent({
       messages: aiMessages,
       customerName: conv.customerName,
@@ -194,11 +202,13 @@ export class CskhInboxService {
       products,
       sapoConfigured,
     };
-    this.intentCache.set(cacheKey, { signature, at: Date.now(), data: payload });
+    
+    // Write to Redis Cache (120s TTL)
+    await this.redisQueue.setIntentCache(cacheKey, { signature, data: payload }, 120);
     return payload;
   }
 
-  private async analyzeAndBroadcastIntent(conversationId: string, tenantId?: string) {
+  async analyzeAndBroadcastIntent(conversationId: string, tenantId?: string) {
     const intent = await this.getCustomerIntent(conversationId, undefined, tenantId);
     this.realtime.publish({ type: 'intent', conversationId, intent, tenantId });
   }
@@ -223,15 +233,15 @@ export class CskhInboxService {
       const pageId = String(entry.id || '');
       if (!pageId) continue;
       for (const event of entry.messaging ?? []) {
-        await this.ingestMessagingEvent(pageId, event).catch((e) => {
-          this.logger.warn(`Webhook ingest failed page=${pageId}: ${(e as Error).message}`);
+        await this.redisQueue.enqueueWebhook(pageId, event).catch((e) => {
+          this.logger.warn(`Webhook enqueue failed page=${pageId}: ${(e as Error).message}`);
         });
       }
     }
     return { ok: true };
   }
 
-  private async ingestMessagingEvent(pageId: string, event: WebhookMessagingEvent) {
+  async ingestMessagingEvent(pageId: string, event: WebhookMessagingEvent) {
     const msg = event.message;
     const referral = event.referral ?? msg?.referral;
     if (referral) {
@@ -306,13 +316,14 @@ export class CskhInboxService {
 
     const config = await this.prisma.facebookCskhConfig.findUnique({ where: { pageId } });
     const pageName = config?.pageName ?? null;
-    let customerName: string | null = null;
-    let customerPictureUrl: string | null = null;
-    if (!isFromPage && config?.pageAccessToken) {
-      const profile = await this.graph.getMessengerUserProfile(customerPsid, config.pageAccessToken);
-      customerName = profile.name;
-      customerPictureUrl = profile.pictureUrl;
-    }
+
+    // Fast path: Reuse profile info if we already have the conversation
+    const existingConv = await this.prisma.cskhInboxConversation.findUnique({
+      where: { pageId_participantPsid: { pageId, participantPsid: customerPsid } },
+    });
+
+    let customerName = existingConv?.customerName ?? null;
+    let customerPictureUrl = existingConv?.customerPictureUrl ?? null;
 
     const conv = await this.prisma.cskhInboxConversation.upsert({
       where: { pageId_participantPsid: { pageId, participantPsid: customerPsid } },
@@ -320,7 +331,7 @@ export class CskhInboxService {
         pageId,
         pageName,
         participantPsid: customerPsid,
-        customerName,
+        customerName: customerName || 'Khách hàng Messenger',
         customerPictureUrl,
         lastMessage: msg.text ?? '',
         lastMessageAt: new Date(event.timestamp ?? Date.now()),
@@ -337,6 +348,13 @@ export class CskhInboxService {
         tenantId: config?.tenantId || undefined,
       },
     });
+
+    // Asynchronously fetch profile for new conversations in the background
+    if (!existingConv && !isFromPage && config?.pageAccessToken) {
+      void this.enrichNewConversationProfile(conv.id, customerPsid, config.pageAccessToken).catch((e) => {
+        this.logger.warn(`Background new profile enrichment failed: ${(e as Error).message}`);
+      });
+    }
 
     if (msg.mid) {
       const existing = await this.prisma.cskhInboxMessage.findUnique({
@@ -526,6 +544,17 @@ export class CskhInboxService {
   }
 
   async listConversations(pageId?: string, tenantId?: string) {
+    // Auto-sync từ Graph API nếu chưa sync gần đây (giống Pancake)
+    const syncKey = `${pageId ?? 'all'}:${tenantId ?? ''}`;
+    const lastSync = this.lastListSync.get(syncKey) ?? 0;
+    const shouldSync = Date.now() - lastSync >= this.listSyncCooldownMs;
+    if (shouldSync) {
+      this.lastListSync.set(syncKey, Date.now());
+      void this.syncFromGraph(pageId, tenantId).catch((e) => {
+        this.logger.warn(`Auto-sync inbox from Graph failed: ${(e as Error).message}`);
+      });
+    }
+
     const where: any = {};
     if (pageId) where.pageId = pageId;
     if (tenantId) where.tenantId = tenantId;
@@ -536,12 +565,12 @@ export class CskhInboxService {
       take: 200,
     });
 
-    const missing = rows.filter((r) => !r.customerPictureUrl).slice(0, 50);
-    if (missing.length) {
-      void this.enrichCustomerPictures(missing.map((r) => r.id)).catch((e) => {
-        this.logger.warn(`Background picture enrichment failed: ${(e as Error).message}`);
-      });
-    }
+    // const missing = rows.filter((r) => !r.customerPictureUrl).slice(0, 50);
+    // if (missing.length) {
+    //   void this.enrichCustomerPictures(missing.map((r) => r.id)).catch((e) => {
+    //     this.logger.warn(`Background picture enrichment failed: ${(e as Error).message}`);
+    //   });
+    // }
 
     return rows;
   }
@@ -582,6 +611,32 @@ export class CskhInboxService {
     );
   }
 
+  private async enrichNewConversationProfile(
+    conversationId: string,
+    customerPsid: string,
+    pageAccessToken: string,
+  ) {
+    try {
+      const profile = await this.graph.getMessengerUserProfile(customerPsid, pageAccessToken);
+      if (!profile.name && !profile.pictureUrl) return;
+      const updatedConv = await this.prisma.cskhInboxConversation.update({
+        where: { id: conversationId },
+        data: {
+          customerName: profile.name ?? undefined,
+          customerPictureUrl: profile.pictureUrl ?? undefined,
+        },
+      });
+      this.realtime.publish({
+        type: 'conversation',
+        conversationId,
+        pageId: updatedConv.pageId,
+        conversation: this.formatConversationRow(updatedConv),
+      });
+    } catch (e) {
+      this.logger.debug(`Background profile fetch failed for ${customerPsid}: ${(e as Error).message}`);
+    }
+  }
+
   async getMessages(
     conversationId: string,
     since?: string,
@@ -607,21 +662,25 @@ export class CskhInboxService {
           where: { pageId: conv.pageId },
         });
         if (config?.pageAccessToken) {
-          await this.refreshConversationMessages(
+          // Chạy đồng bộ tin nhắn dưới nền để tránh gây lag giao diện khi click chọn cuộc hội thoại
+          void this.refreshConversationMessages(
             conv.id,
             conv.pageId,
             conv.fbConversationId,
             config.pageAccessToken,
             fetchLimit,
             tenantId,
-          );
-          this.lastGraphRefresh.set(conversationId, Date.now());
+          ).then(() => {
+            this.lastGraphRefresh.set(conversationId, Date.now());
+          }).catch((e) => {
+            this.logger.warn(`Background message refresh failed: ${(e as Error).message}`);
+          });
         }
       }
     }
 
     const sinceDate = since ? new Date(since) : undefined;
-    let messages = await this.prisma.cskhInboxMessage.findMany({
+    const messages = await this.prisma.cskhInboxMessage.findMany({
       where: {
         conversationId,
         ...(sinceDate && !Number.isNaN(sinceDate.getTime()) ? { sentAt: { gt: sinceDate } } : {}),
@@ -631,12 +690,15 @@ export class CskhInboxService {
     });
 
     if (!since) {
-      messages = await this.backfillMissingMediaUrls(
+      // Chạy phân tích tải media dưới nền để tránh chặn luồng HTTP làm đứng màn hình chat
+      void this.backfillMissingMediaUrls(
         conv.pageId,
         conv.id,
         conv.fbConversationId,
         messages,
-      );
+      ).catch((e) => {
+        this.logger.warn(`Background media backfill failed: ${(e as Error).message}`);
+      });
     }
 
     await this.prisma.cskhInboxConversation.update({
@@ -667,16 +729,29 @@ export class CskhInboxService {
         where: { conversationId },
         select: { id: true, text: true },
       });
-      for (const row of existing) {
-        if (this.graph.isStoredMessageNoise(row.text)) {
-          await this.prisma.cskhInboxMessage.delete({ where: { id: row.id } });
-        }
+      
+      // Bulk delete noise messages to optimize DB round trips
+      const noiseIds = existing
+        .filter((row) => this.graph.isStoredMessageNoise(row.text))
+        .map((row) => row.id);
+      if (noiseIds.length) {
+        await this.prisma.cskhInboxMessage.deleteMany({
+          where: { id: { in: noiseIds } },
+        });
       }
 
       let lastPreview: string | null = null;
-      for (const msg of ordered) {
-        const saved = await this.persistGraphMessage(conversationId, pageId, msg, token, tenantId);
-        if (saved) lastPreview = saved.text;
+      const concurrency = 5;
+      for (let i = 0; i < ordered.length; i += concurrency) {
+        const batch = ordered.slice(i, i + concurrency);
+        const results = await Promise.all(
+          batch.map((msg) =>
+            this.persistGraphMessage(conversationId, pageId, msg, token, tenantId),
+          ),
+        );
+        for (const res of results) {
+          if (res) lastPreview = res.text;
+        }
       }
 
       await this.linkFbMessageIdsFromGraph(conversationId, pageId, fbConversationId, token);
@@ -830,7 +905,7 @@ export class CskhInboxService {
             progress = true;
             const newText =
               row.text === '[Ảnh]' || row.text === '[attachment]' ? '' : row.text;
-            await this.prisma.cskhInboxMessage.update({
+            const updated = await this.prisma.cskhInboxMessage.update({
               where: { id: row.id },
               data: {
                 attachmentUrl: resolved.url,
@@ -847,6 +922,10 @@ export class CskhInboxService {
                 text: newText,
               };
             }
+            // Phát sóng SSE cập nhật media thời gian thực cho FE hiển thị hình ảnh ngay khi vừa resolve xong
+            void this.publishMessageRealtime(pageId, conversationId, [updated]).catch((err) => {
+              this.logger.warn(`Failed to publish realtime media update: ${(err as Error).message}`);
+            });
           } catch (e) {
             this.logger.warn(`Failed to resolve media URL for message ${row.id}: ${(e as Error).message}`);
           }
@@ -1304,6 +1383,18 @@ export class CskhInboxService {
     });
     if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
 
+    const config = await this.prisma.facebookCskhConfig.findFirst({
+      where: tenantId ? { pageId: conv.pageId, tenantId } : { pageId: conv.pageId },
+    });
+    if (config?.pageAccessToken) {
+      void this.graph.sendPageSenderAction(
+        conv.pageId,
+        config.pageAccessToken,
+        conv.participantPsid,
+        'typing_on',
+      );
+    }
+
     this.realtime.publish({
       type: 'typing',
       conversationId,
@@ -1318,6 +1409,18 @@ export class CskhInboxService {
       where: tenantId ? { id: conversationId, tenantId } : { id: conversationId },
     });
     if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
+
+    const config = await this.prisma.facebookCskhConfig.findFirst({
+      where: tenantId ? { pageId: conv.pageId, tenantId } : { pageId: conv.pageId },
+    });
+    if (config?.pageAccessToken) {
+      void this.graph.sendPageSenderAction(
+        conv.pageId,
+        config.pageAccessToken,
+        conv.participantPsid,
+        'mark_seen',
+      );
+    }
 
     const updatedConv = await this.prisma.cskhInboxConversation.update({
       where: { id: conversationId },
@@ -1440,6 +1543,144 @@ export class CskhInboxService {
       }
     }
     return { synced, pageCount: pages.length };
+  }
+
+  /**
+   * Tự động liên kết Inbox, đồng bộ tin nhắn cũ và phân tích Intent khi Audit Job chấm điểm xong.
+   * Chạy nền không chặn tiến trình chấm điểm AI.
+   */
+  async autoLinkAndSync(
+    auditId: string,
+    conv: FbConversation,
+    messages: FbMessage[],
+    pageId: string,
+    pageAccessToken: string,
+    customerName: string,
+    tenantId?: string,
+  ) {
+    const participantPsid = this.graph.resolveParticipantPsid(conv.participants, pageId);
+    if (!participantPsid) {
+      this.logger.warn(`[AutoLinkAndSync] Cannot resolve participantPsid for convId=${conv.id}`);
+      return;
+    }
+
+    const customerPictureUrl: string | null = null;
+    const finalCustomerName = customerName;
+
+    const page = await this.prisma.facebookCskhConfig.findFirst({
+      where: tenantId ? { pageId, tenantId } : { pageId },
+    });
+    const pageName = page?.pageName ?? null;
+
+    const inboxConv = await this.prisma.cskhInboxConversation.upsert({
+      where: { pageId_participantPsid: { pageId, participantPsid } },
+      create: {
+        pageId,
+        pageName,
+        fbConversationId: conv.id,
+        participantPsid,
+        customerName: finalCustomerName,
+        customerPictureUrl,
+        lastMessage: messages[messages.length - 1]?.message ?? null,
+        lastMessageAt: conv.updated_time ? new Date(conv.updated_time) : new Date(),
+        tenantId,
+      },
+      update: {
+        fbConversationId: conv.id,
+        customerName: finalCustomerName || undefined,
+        customerPictureUrl: customerPictureUrl || undefined,
+      },
+    });
+
+    // Đồng bộ tin nhắn
+    if (messages.length) {
+      const ordered = [...messages].reverse();
+      let lastPreview: string | null = null;
+      for (const msg of ordered) {
+        const saved = await this.persistGraphMessage(
+          inboxConv.id,
+          pageId,
+          msg,
+          pageAccessToken,
+          tenantId,
+        );
+        if (saved) lastPreview = saved.text;
+      }
+      if (lastPreview) {
+        await this.prisma.cskhInboxConversation.update({
+          where: { id: inboxConv.id },
+          data: { lastMessage: lastPreview },
+        });
+      }
+      await this.markAdFromGraphMessages(inboxConv.id, messages);
+    }
+
+    // Phân tích ý định khách hàng bằng AI & Sapo Matching
+    const intentMessages = messages
+      .map((m) => {
+        const isStaff = m.from?.id === pageId;
+        return {
+          sender: isStaff ? 'Staff' : 'Customer',
+          text: (m.message ?? '').trim(),
+        };
+      })
+      .filter((m) => m.text.length > 0);
+
+    if (intentMessages.length > 0) {
+      try {
+        const aiMessages = capIntentMessages(intentMessages);
+        const signature = `${auditId}|${intentMessagesSignature(aiMessages)}`;
+
+        const analyzed = await this.ai.analyzeCustomerIntent({
+          messages: aiMessages,
+          customerName: finalCustomerName,
+        });
+
+        const sapoConfigured = this.sapoProducts.isConfigured();
+        let products: CustomerIntentPayload['products'];
+        if (sapoConfigured) {
+          const catalog = await this.sapoProducts.getCatalog();
+          products = matchInterestedProducts(
+            catalog,
+            analyzed.productMentions ?? [],
+            analyzed.topics,
+            analyzed.summary,
+          );
+        }
+
+        const payload: CustomerIntentPayload = {
+          summary: analyzed.summary,
+          intentLabel: analyzed.intentLabel,
+          topics: analyzed.topics,
+          urgency: analyzed.urgency,
+          suggestedFocus: analyzed.suggestedFocus,
+          analyzedAt: new Date().toISOString(),
+          productMentions: analyzed.productMentions,
+          products,
+          sapoConfigured,
+        };
+
+        // Cache in memory cho endpoint GET intent
+        const cacheKey = `${inboxConv.id}:${auditId}`;
+        this.intentCache.set(cacheKey, { signature, at: Date.now(), data: payload });
+
+        // Cập nhật metadata của bản ghi ChatAudit
+        const audit = await this.prisma.chatAudit.findUnique({
+          where: { id: auditId },
+          select: { metadata: true },
+        });
+        if (audit) {
+          const currentMeta = (audit.metadata as Record<string, any> | null) ?? {};
+          currentMeta.customerIntent = payload;
+          await this.prisma.chatAudit.update({
+            where: { id: auditId },
+            data: { metadata: currentMeta },
+          });
+        }
+      } catch (err) {
+        this.logger.warn(`[AutoLinkAndSync] Failed to analyze customer intent: ${(err as Error).message}`);
+      }
+    }
   }
 
   /** Liên kết inbox từ metadata audit — dùng PSID hoặc FB conversation id lưu trong audit. */

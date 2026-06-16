@@ -83,12 +83,35 @@ export function getFacebookWebhookVerifyToken(): string {
 
 export function verifyFacebookWebhookSignature(rawBody: Buffer, signatureHeader?: string): boolean {
   const secret = getFacebookAppSecret();
-  if (!secret || !signatureHeader?.startsWith('sha256=')) return false;
+  if (!secret) {
+    console.error('[Webhook Signature] Verification failed: FB_APP_SECRET is not configured or is empty.');
+    return false;
+  }
+  if (!signatureHeader) {
+    console.error('[Webhook Signature] Verification failed: Missing signatureHeader.');
+    return false;
+  }
+  if (!signatureHeader.startsWith('sha256=')) {
+    console.error(`[Webhook Signature] Verification failed: Header format is invalid (received: ${signatureHeader}). Expected starts with sha256=`);
+    return false;
+  }
+  if (!rawBody) {
+    console.error('[Webhook Signature] Verification failed: rawBody is empty/undefined.');
+    return false;
+  }
   const expected = createHmac('sha256', secret).update(rawBody).digest('hex');
   const received = signatureHeader.slice('sha256='.length);
   try {
-    return timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(received, 'hex'));
-  } catch {
+    const isMatch = timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(received, 'hex'));
+    if (!isMatch) {
+      const maskedSecret = secret.length > 6 ? `${secret.slice(0, 3)}...${secret.slice(-3)}` : '***';
+      console.error(`[Webhook Signature] Verification failed: Signature mismatch. Received: ${received}, Expected: ${expected}. Using Secret: ${maskedSecret}, Body length: ${rawBody.length}`);
+    } else {
+      console.log(`[Webhook Signature] Verification successful. Body length: ${rawBody.length}`);
+    }
+    return isMatch;
+  } catch (err) {
+    console.error('[Webhook Signature] Verification errored during comparison:', err);
     return false;
   }
 }

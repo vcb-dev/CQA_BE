@@ -16,6 +16,7 @@ import {
   UnauthorizedException,
   Sse,
   MessageEvent,
+  Header,
 } from '@nestjs/common';
 import type { Response, Request } from 'express';
 import type { RawBodyRequest } from '@nestjs/common';
@@ -392,20 +393,40 @@ export class CskhController {
     @Query('hub.verify_token') token: string,
     @Query('hub.challenge') challenge: string,
   ) {
-    return this.inbox.verifyWebhookToken(mode, token, challenge);
+    console.log(`[Webhook GET] Received verification request: mode=${mode}, token=${token}, challenge=${challenge}`);
+    try {
+      const result = this.inbox.verifyWebhookToken(mode, token, challenge);
+      console.log(`[Webhook GET] Verification successful. Returning challenge: ${result}`);
+      return result;
+    } catch (e) {
+      console.error(`[Webhook GET] Verification failed: ${(e as Error).message}`);
+      throw e;
+    }
   }
 
   /** Meta Webhook events — không JWT. */
   @Post('webhook')
-  handleWebhook(
+  async handleWebhook(
     @Req() req: RawBodyRequest<Request>,
     @Headers('x-hub-signature-256') signature: string,
   ) {
     const raw = req.rawBody;
+    console.log(`[Webhook POST] Received event from Meta. Signature header: ${signature}, Raw body length: ${raw ? raw.length : 0}`);
+    
     if (!raw || !verifyFacebookWebhookSignature(raw, signature)) {
+      console.warn(`[Webhook POST] Rejecting request due to signature verification failure.`);
       throw new UnauthorizedException('Invalid webhook signature');
     }
-    return this.inbox.handleWebhookPayload(req.body);
+    
+    try {
+      console.log(`[Webhook POST] Processing payload: ${JSON.stringify(req.body).slice(0, 1000)}`);
+      const result = await this.inbox.handleWebhookPayload(req.body);
+      console.log(`[Webhook POST] Payload processed successfully: ${JSON.stringify(result)}`);
+      return result;
+    } catch (e) {
+      console.error(`[Webhook POST] Error processing webhook payload: ${(e as Error).message}`, e);
+      throw e;
+    }
   }
 
   @Get('inbox/conversations')
@@ -416,6 +437,10 @@ export class CskhController {
 
   /** SSE — push realtime khi webhook/send có tin mới (FE không cần bấm đồng bộ). */
   @Sse('inbox/stream')
+  @Header('Content-Type', 'text/event-stream')
+  @Header('Cache-Control', 'no-cache, no-transform')
+  @Header('Connection', 'keep-alive')
+  @Header('X-Accel-Buffering', 'no')
   @UseGuards(JwtAuthGuard)
   inboxStream(@CurrentUser() user: User): Observable<MessageEvent> {
     const heartbeat = interval(25_000).pipe(

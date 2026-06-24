@@ -102,8 +102,24 @@ export class CskhController {
 
   @Get('pages')
   @UseGuards(JwtAuthGuard)
-  listPages(@CurrentUser() user: User) {
-    return this.cskh.listPages(user.tenantId || undefined);
+  listPages(@CurrentUser() user: User, @Query('month') month?: string) {
+    const monthTrimmed = month?.trim();
+    if (monthTrimmed && !/^\d{4}-\d{2}$/.test(monthTrimmed)) {
+      throw new BadRequestException('Tháng không hợp lệ (YYYY-MM)');
+    }
+    return this.cskh.listPages(user.tenantId || undefined, {
+      month: monthTrimmed || undefined,
+    });
+  }
+
+  /** Kiểm tra nhanh BE đã deploy bản có thống kê tin theo tháng chưa. */
+  @Get('features')
+  @UseGuards(JwtAuthGuard)
+  getFeatures() {
+    return {
+      inboundMonthStats: true,
+      buildTag: 'inbound-month-v1',
+    };
   }
 
   @Put('pages/manual')
@@ -239,6 +255,8 @@ export class CskhController {
       maxConversations?: number;
       force?: boolean;
       pageId?: string;
+      /** Quét tất cả kênh — mỗi kênh tối đa maxConversations cuộc. */
+      scanAllChannels?: boolean;
     },
   ) {
     const auditDateFrom = (body.auditDateFrom || body.auditDate || '').trim();
@@ -252,13 +270,14 @@ export class CskhController {
     if (auditDateFrom > auditDateTo) {
       throw new BadRequestException('Ngày bắt đầu phải trước hoặc bằng ngày kết thúc');
     }
-    const pageId = body.pageId?.trim();
-    if (!pageId) {
-      throw new BadRequestException('Bắt buộc chọn kênh (page) để chấm điểm');
+    const pageId = body.pageId?.trim() || undefined;
+    const scanAllChannels = Boolean(body.scanAllChannels) || !pageId;
+    if (!scanAllChannels && !pageId) {
+      throw new BadRequestException('Thiếu pageId hoặc bật scanAllChannels');
     }
     const maxConversations =
       body.maxConversations != null && body.maxConversations > 0
-        ? Math.floor(body.maxConversations)
+        ? Math.min(100, Math.floor(body.maxConversations))
         : undefined;
     if (body.force) {
       await this.cskh.cancelRunningJobs('audit', undefined, user.tenantId || undefined);
@@ -275,7 +294,7 @@ export class CskhController {
       auditDateTo,
       maxConversations,
       force: Boolean(body.force),
-      pageId,
+      pageId: scanAllChannels ? undefined : pageId,
     });
     return { jobId: job.id, status: 'running', alreadyRunning: false };
   }
@@ -450,8 +469,15 @@ export class CskhController {
     const filteredStream = this.inboxRealtime.stream().pipe(
       filter((event) => {
         const payload = event.data as any;
-        if (!payload || !payload.tenantId) return true;
-        return payload.tenantId === tenantId;
+        const eventType = payload?.type || 'unknown';
+        const eventConvId = payload?.conversationId || 'unknown';
+        if (!payload || !payload.tenantId) {
+          console.log(`[SSE Filter Match] eventType=${eventType} conv=${eventConvId} passed (no payload tenantId). User tenantId=${tenantId}`);
+          return true;
+        }
+        const isMatched = payload.tenantId === tenantId;
+        console.log(`[SSE Filter Match] eventType=${eventType} conv=${eventConvId} payloadTenantId=${payload.tenantId} userTenantId=${tenantId} -> matched=${isMatched}`);
+        return isMatched;
       }),
     );
     return merge(filteredStream, heartbeat);

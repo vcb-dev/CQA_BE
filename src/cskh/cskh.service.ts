@@ -40,14 +40,20 @@ export class CskhService implements OnModuleInit {
   /** Monitor: số hội thoại gần nhất cần quét / Page. */
   private readonly monitorMax = Number(process.env.CSKH_MONITOR_MAX_CONVERSATIONS || 10);
   private readonly auditMax = Number(process.env.CSKH_AUDIT_MAX_CONVERSATIONS || 0);
+  /** Cron ban đêm: số cuộc hội thoại gần nhất / kênh. */
+  private readonly auditCronMax = Number(process.env.CSKH_AUDIT_CRON_MAX || 30);
+  /** Số ngày lùi khi quét (manual + cron) — lấy hội thoại mới nhất trong khoảng này. */
+  private readonly auditDefaultLookbackDays = Number(
+    process.env.CSKH_AUDIT_LOOKBACK_DAYS || 30,
+  );
   /** Số hội thoại chấm AI song song (tăng = nhanh hơn, cẩn thận rate limit AI/Meta). */
-  private readonly auditConcurrency = Number(process.env.CSKH_AUDIT_CONCURRENCY || 24);
+  private readonly auditConcurrency = Number(process.env.CSKH_AUDIT_CONCURRENCY || 4);
   /** Số hội thoại fetch tin FB song song / batch. */
-  private readonly auditFetchConcurrency = Number(process.env.CSKH_AUDIT_FETCH_CONCURRENCY || 18);
+  private readonly auditFetchConcurrency = Number(process.env.CSKH_AUDIT_FETCH_CONCURRENCY || 6);
   /** Số Page quét FB song song (khi bật nhiều page). */
   private readonly auditPageConcurrency = Number(process.env.CSKH_AUDIT_PAGE_CONCURRENCY || 2);
-  private readonly auditMsgLimit = Number(process.env.CSKH_AUDIT_MSG_LIMIT || 300);
-  private readonly auditSource = process.env.CSKH_AUDIT_SOURCE || 'database';
+  private readonly auditMsgLimit = Number(process.env.CSKH_AUDIT_MSG_LIMIT || 100);
+  private readonly auditSource = process.env.CSKH_AUDIT_SOURCE || 'facebook';
   /** Tối đa dòng transcript gửi AI (DB vẫn lưu đủ). */
   private readonly auditAiTranscriptMax = Number(process.env.CSKH_AUDIT_AI_TRANSCRIPT_MAX || 100);
   private readonly auditProgressEvery = Math.max(
@@ -324,7 +330,7 @@ export class CskhService implements OnModuleInit {
     return buildFacebookOAuthUrl(returnUrl?.trim() || this.defaultOAuthReturnUrl(), tenantId);
   }
 
-  async listPages(tenantId?: string) {
+  async listPages(tenantId?: string, options?: { month?: string }) {
     type PageListRow = {
       pageId: string;
       pageName: string | null;
@@ -340,11 +346,41 @@ export class CskhService implements OnModuleInit {
       metadata: true,
     } as const;
 
-    let rows: PageListRow[] = await this.prisma.facebookCskhConfig.findMany({
+    const month = options?.month?.trim();
+    const inboundMonth = month && /^\d{4}-\d{2}$/.test(month) ? month : undefined;
+
+    const rows = await this.prisma.facebookCskhConfig.findMany({
       where: tenantId ? { tenantId } : undefined,
       orderBy: [{ enabled: 'desc' }, { pageName: 'asc' }],
       select: pageListSelect,
     });
+    const pageIds = rows.map((r) => r.pageId);
+
+    type ConvGroupRow = { pageId: string; _count: { id: number } };
+    const emptyConvGroups: ConvGroupRow[] = [];
+
+    const [convCounts, unreadCounts, inboundStatsMap] = await Promise.all([
+      pageIds.length
+        ? this.prisma.cskhInboxConversation.groupBy({
+            by: ['pageId'],
+            where: { pageId: { in: pageIds } },
+            _count: { id: true },
+          })
+        : Promise.resolve(emptyConvGroups),
+      pageIds.length
+        ? this.prisma.cskhInboxConversation.groupBy({
+            by: ['pageId'],
+            where: { pageId: { in: pageIds }, unreadCount: { gt: 0 } },
+            _count: { id: true },
+          })
+        : Promise.resolve(emptyConvGroups),
+      inboundMonth && pageIds.length
+        ? this.loadPageInboundMessageStats(inboundMonth, pageIds)
+        : Promise.resolve(new Map<string, number>()),
+    ]);
+
+    const convCountMap = new Map(convCounts.map((c) => [c.pageId, c._count.id]));
+    const unreadCountMap = new Map(unreadCounts.map((c) => [c.pageId, c._count.id]));
 
     const missingPictureIds = rows
       .filter((r) => !this.pagePictureUrl(r.metadata))
@@ -360,6 +396,7 @@ export class CskhService implements OnModuleInit {
       orderBy: { updatedAt: 'desc' },
       select: { fbUserId: true, fbUserName: true, tokenExpiresAt: true, updatedAt: true },
     });
+
     return {
       pages: rows.map((row) => ({
         pageId: row.pageId,
@@ -367,12 +404,66 @@ export class CskhService implements OnModuleInit {
         enabled: row.enabled,
         updatedAt: row.updatedAt,
         pagePictureUrl: this.pagePictureUrl(row.metadata),
-        metadata: row.metadata,
+        conversationCount: convCountMap.get(row.pageId) || 0,
+        unreadConversationCount: unreadCountMap.get(row.pageId) || 0,
+        inboundMessageCount: inboundMonth ? inboundStatsMap.get(row.pageId) || 0 : undefined,
       })),
+      inboundMonth: inboundMonth
+        ? {
+            month: inboundMonth,
+            totalInbound: Array.from(inboundStatsMap.values()).reduce((sum, n) => sum + n, 0),
+          }
+        : undefined,
+      statsMeta: inboundMonth
+        ? { inboundMonthStats: true as const, requestedMonth: inboundMonth, buildTag: 'inbound-month-v1' }
+        : undefined,
       oauthConnected: Boolean(oauth),
       oauthUser: oauth?.fbUserName || oauth?.fbUserId || null,
       oauthUpdatedAt: oauth?.updatedAt || null,
       oauthExpiresAt: oauth?.tokenExpiresAt || null,
+    };
+  }
+
+  /** Số tin nhắn khách gửi đến (inbound) theo page trong tháng lịch VN (UTC+7). */
+  private async loadPageInboundMessageStats(month: string, pageIds: string[]) {
+    if (!pageIds.length) return new Map<string, number>();
+    const { from, to } = this.monthRangeDays(month);
+    const { start, end } = this.graph.vietnamDateRange(from, to);
+    type StatRow = { pageId: string; inboundCount: number };
+    const rows = await this.prisma.$queryRaw<StatRow[]>`
+      SELECT
+        c.page_id AS "pageId",
+        COUNT(*)::int AS "inboundCount"
+      FROM cskh_inbox_messages m
+      INNER JOIN cskh_inbox_conversations c ON c.id = m.conversation_id
+      WHERE c.page_id IN (${Prisma.join(pageIds)})
+        AND (
+          m.direction = 'inbound'
+          OR m.sender_type = 'customer'
+        )
+        AND m.sent_at >= ${start}
+        AND m.sent_at <= ${end}
+      GROUP BY c.page_id
+    `;
+    return new Map(rows.map((r) => [r.pageId, r.inboundCount]));
+  }
+
+  private monthRangeDays(month: string): { from: string; to: string } {
+    const [yearStr, monthStr] = month.split('-');
+    const year = Number(yearStr);
+    const monthNum = Number(monthStr);
+    if (
+      !Number.isFinite(year) ||
+      !Number.isFinite(monthNum) ||
+      monthNum < 1 ||
+      monthNum > 12
+    ) {
+      throw new BadRequestException('Tháng không hợp lệ (YYYY-MM)');
+    }
+    const lastDay = new Date(year, monthNum, 0).getDate();
+    return {
+      from: `${month}-01`,
+      to: `${month}-${String(lastDay).padStart(2, '0')}`,
     };
   }
 
@@ -710,6 +801,42 @@ export class CskhService implements OnModuleInit {
       orderBy: { pageName: 'asc' },
       select: { pageId: true, pageName: true, pageAccessToken: true },
     });
+  }
+
+  /** Khoảng ngày quét audit — mặc định N ngày gần nhất (VN). */
+  buildAuditDateRange(lookbackDays = this.auditDefaultLookbackDays): {
+    auditDateFrom: string;
+    auditDateTo: string;
+  } {
+    const days = Math.max(1, Math.floor(lookbackDays));
+    const today = new Date();
+    const from = new Date(today.getTime() - days * 24 * 60 * 60 * 1000);
+    return {
+      auditDateFrom: from.toISOString().split('T')[0],
+      auditDateTo: today.toISOString().split('T')[0],
+    };
+  }
+
+  /** Mọi kênh đã kết nối — dùng cho cron ban đêm. */
+  async listConnectedPages(tenantId?: string) {
+    return this.prisma.facebookCskhConfig.findMany({
+      where: tenantId ? { tenantId } : undefined,
+      orderBy: { pageName: 'asc' },
+      select: {
+        pageId: true,
+        pageName: true,
+        pageAccessToken: true,
+        tenantId: true,
+        enabled: true,
+      },
+    });
+  }
+
+  getAuditCronDefaults() {
+    return {
+      maxConversations: this.auditCronMax,
+      lookbackDays: this.auditDefaultLookbackDays,
+    };
   }
 
   async createJob(type: 'monitor' | 'audit', tenantId?: string) {
@@ -1059,18 +1186,14 @@ export class CskhService implements OnModuleInit {
           },
         },
       },
-      include: {
-        messages: {
-          where: {
-            sentAt: {
-              lte: end,
-            },
-          },
-          orderBy: {
-            sentAt: 'desc',
-          },
-          take: msgLimit,
-        },
+      orderBy: [{ lastMessageAt: 'desc' }, { updatedAt: 'desc' }],
+      select: {
+        id: true,
+        fbConversationId: true,
+        participantPsid: true,
+        customerName: true,
+        lastMessageAt: true,
+        updatedAt: true,
       },
     });
 
@@ -1087,38 +1210,15 @@ export class CskhService implements OnModuleInit {
         ],
       };
 
-      const fbMessages: FbMessage[] = dbConv.messages.map((dbMsg) => {
-        const fromId = dbMsg.direction === 'outbound' ? pageId : dbConv.participantPsid;
-        const fromName = dbMsg.direction === 'outbound' ? 'Staff' : (dbConv.customerName || 'Khách hàng');
-
-        const attachments = dbMsg.attachmentUrl
-          ? {
-              data: [
-                {
-                  url: dbMsg.attachmentUrl,
-                  type: dbMsg.messageType || 'text',
-                },
-              ],
-            }
-          : undefined;
-
-        return {
-          id: dbMsg.fbMessageId || dbMsg.id,
-          message: dbMsg.text,
-          created_time: dbMsg.sentAt.toISOString(),
-          from: { id: fromId, name: fromName },
-          attachments,
-        };
-      });
-
       const conv: FbConversation = {
         id: dbConv.fbConversationId || dbConv.id,
         updated_time: dbConv.lastMessageAt
           ? dbConv.lastMessageAt.toISOString()
           : dbConv.updatedAt.toISOString(),
         participants,
-        messages: { data: fbMessages },
+        messages: { data: [] }, // Load messages just-in-time inside worker to prevent OOM
       };
+      (conv as any).dbConversationId = dbConv.id;
 
       if (convFilter) {
         const decision = convFilter(conv);
@@ -1145,6 +1245,15 @@ export class CskhService implements OnModuleInit {
     }
 
     return matched;
+  }
+
+  private countAuditedForPage(auditedKeys: Set<string>, pageId: string): number {
+    let count = 0;
+    const prefix = `${pageId}:`;
+    for (const key of auditedKeys) {
+      if (key.startsWith(prefix)) count++;
+    }
+    return count;
   }
 
   async runAuditJob(
@@ -1179,13 +1288,20 @@ export class CskhService implements OnModuleInit {
           : 0;
     try {
       const job = await this.prisma.cskhJobRun.findUnique({ where: { id: jobId } });
-      let pages = await this.allPages(job?.tenantId || undefined);
-      if (!pageId?.trim()) {
-        throw new BadRequestException('Bắt buộc chọn kênh (page) để chấm điểm');
-      }
-      pages = pages.filter((p) => p.pageId === pageId.trim());
-      if (!pages.length) {
-        throw new BadRequestException('Kênh không tồn tại — kết nối lại Facebook ở tab Cài đặt');
+      const pageIdTrimmed = pageId?.trim() || undefined;
+      let pages: EnabledFacebookPage[] = [];
+
+      if (pageIdTrimmed) {
+        const all = await this.allPages(job?.tenantId || undefined);
+        pages = all.filter((p) => p.pageId === pageIdTrimmed);
+        if (!pages.length) {
+          throw new BadRequestException('Kênh không tồn tại — kết nối lại Facebook ở tab Cài đặt');
+        }
+      } else {
+        pages = await this.allPages(job?.tenantId || undefined);
+        if (!pages.length) {
+          throw new BadRequestException('Không có kênh nào được kết nối để chấm điểm');
+        }
       }
 
       type AuditTask = {
@@ -1197,6 +1313,32 @@ export class CskhService implements OnModuleInit {
       const auditedKeys = force
         ? new Set<string>()
         : await this.loadAuditedConversationKeys(auditDateFrom, auditDateTo, pageIds);
+
+      const scanAllPages = !pageIdTrimmed;
+
+      // Một kênh: trừ cuộc đã chấm khỏi cap. Tất cả kênh: cap áp dụng riêng từng page.
+      if (!scanAllPages && !force && cap > 0) {
+        const alreadyAuditedCount = this.countAuditedForPage(auditedKeys, pageIdTrimmed!);
+        const effectiveCap = Math.max(0, cap - alreadyAuditedCount);
+        if (effectiveCap === 0) {
+          await this.finishJob(jobId, 'done', {
+            auditDate: auditDateFrom,
+            auditDateFrom,
+            auditDateTo,
+            pageId: pageIdTrimmed,
+            allAlreadyAudited: true,
+            skippedAlready: alreadyAuditedCount,
+            pageCount: pages.length,
+            audited: 0,
+            maxConversations: cap,
+          });
+          this.activeJobs.delete(jobId);
+          return;
+        }
+        this.logger.log(
+          `Audit job ${jobId.slice(0, 8)}: tiếp tục ${effectiveCap} cuộc còn lại (${alreadyAuditedCount}/${cap} đã chấm)`,
+        );
+      }
 
       const queue: AuditTask[] = [];
       let fetchCompleted = false;
@@ -1222,8 +1364,11 @@ export class CskhService implements OnModuleInit {
         auditDate: auditDateFrom,
         auditDateFrom,
         auditDateTo,
-        pageId: pageId.trim(),
+        pageId: pageIdTrimmed || null,
+        scanAllPages,
         maxConversations: cap > 0 ? cap : null,
+        remainingCap: cap > 0 ? cap : null,
+        alreadyAudited: scanAllPages ? 0 : this.countAuditedForPage(auditedKeys, pageIdTrimmed || ''),
         fetched: 0,
         scanned: 0,
         pagesTotal: pages.length,
@@ -1282,6 +1427,47 @@ export class CskhService implements OnModuleInit {
         if (await this.shouldStopAuditJob(jobId)) return;
 
         const pageName = config.pageName || 'Facebook Page';
+
+        // Load messages just-in-time from local DB if empty (to optimize memory usage)
+        if (this.auditSource === 'database' && (!conv.messages?.data || conv.messages.data.length === 0)) {
+          const { end } = this.graph.vietnamDateRange(auditDateFrom, auditDateTo);
+          const dbMessages = await this.prisma.cskhInboxMessage.findMany({
+            where: {
+              conversationId: (conv as any).dbConversationId || conv.id,
+              sentAt: { lte: end },
+            },
+            orderBy: { sentAt: 'desc' },
+            take: this.auditMsgLimit,
+          });
+
+          const participantPsid = this.graph.resolveParticipantPsid(conv.participants, config.pageId) || 'Customer';
+
+          const fbMessages: FbMessage[] = dbMessages.map((dbMsg) => {
+            const fromId = dbMsg.direction === 'outbound' ? config.pageId : participantPsid;
+            const fromName = dbMsg.direction === 'outbound' ? 'Staff' : 'Customer';
+            const attachments = dbMsg.attachmentUrl
+              ? {
+                  data: [
+                    {
+                      url: dbMsg.attachmentUrl,
+                      type: dbMsg.messageType || 'text',
+                    },
+                  ],
+                }
+              : undefined;
+
+            return {
+              id: dbMsg.fbMessageId || dbMsg.id,
+              message: dbMsg.text,
+              created_time: dbMsg.sentAt.toISOString(),
+              from: { id: fromId, name: fromName },
+              attachments,
+            };
+          });
+
+          conv.messages = { data: fbMessages };
+        }
+
         const messages = this.graph.latestMessages(conv);
         const rangeMessages = this.graph.filterMessagesByDateRange(
           messages,
@@ -1431,105 +1617,135 @@ export class CskhService implements OnModuleInit {
           this.auditPageConcurrency,
           async ({ config, pageIndex }) => {
             const pageName = config.pageName || config.pageId;
-            await reportFetchProgress({
-              currentPage: pageName,
-            });
-
-            let skippedOnPage = 0;
-            let pageMatchedCount = 0;
-            let conversations: FbConversation[] = [];
-            let usingDb = false;
-
-            const onMatch = async (conv: FbConversation) => {
-              pageMatchedCount++;
-              queue.push({ config, conv });
-              inMemorySummary.fetched = (inMemorySummary.fetched || 0) + 1;
-              await reportFetchProgress({
-                fetched: inMemorySummary.fetched,
-              });
-            };
-
-            if (this.auditSource === 'database') {
-              this.logger.log(`[CskhService] Thử nghiệm quét từ database cục bộ cho Page ${pageName}...`);
-              conversations = await this.fetchConversationsForAuditFromDb(
-                config.pageId,
-                auditDateFrom,
-                auditDateTo,
-                this.auditMsgLimit,
-                async (scanned, matchedOnPage) => {
-                  pageScannedMap.set(config.pageId, scanned);
-                  const totalScanned = Array.from(pageScannedMap.values()).reduce((a, b) => a + b, 0);
-                  await reportFetchProgress({
-                    scanned: totalScanned,
-                    currentPage: pageName,
-                  });
-                },
-                (conv) => {
-                  if (this.isConversationAlreadyAudited(auditedKeys, config.pageId, conv)) {
-                    skippedOnPage++;
-                    return 'exclude';
-                  }
-                  return 'include';
-                },
-                cap > 0 ? cap : 0,
-                onMatch,
-              );
-              if (conversations.length > 0) {
-                usingDb = true;
-              } else {
-                this.logger.warn(
-                  `[CskhService] Không tìm thấy cuộc hội thoại nào trong database cho Page ${pageName} trong khoảng ${rangeLabel}. ` +
-                    `Tự động fallback sang quét trực tiếp từ Facebook API...`,
+            let effectiveCapForPage = cap;
+            if (!force && cap > 0) {
+              const pageAudited = this.countAuditedForPage(auditedKeys, config.pageId);
+              effectiveCapForPage = Math.max(0, cap - pageAudited);
+              if (effectiveCapForPage === 0) {
+                pagesFetchDone++;
+                this.logger.log(
+                  `Audit job ${jobId.slice(0, 8)}: Page ${pageName} — đã đủ ${cap} cuộc, bỏ qua`,
                 );
+                await reportFetchProgress(
+                  { pagesProcessed: pagesFetchDone, currentPage: pageName },
+                  true,
+                );
+                return;
               }
             }
+            try {
+              await reportFetchProgress({
+                currentPage: pageName,
+              });
 
-            if (!usingDb) {
-              conversations = await this.graph.fetchConversationsForAuditByDate(
-                config.pageId,
-                config.pageAccessToken,
-                auditDateFrom,
-                auditDateTo,
-                this.auditMsgLimit,
-                async (scanned, matchedOnPage) => {
-                  pageScannedMap.set(config.pageId, scanned);
-                  const totalScanned = Array.from(pageScannedMap.values()).reduce((a, b) => a + b, 0);
-                  await reportFetchProgress({
-                    scanned: totalScanned,
-                    currentPage: pageName,
-                  });
+              let skippedOnPage = 0;
+              let pageMatchedCount = 0;
+              let conversations: FbConversation[] = [];
+              let usingDb = false;
+
+              const onMatch = async (conv: FbConversation) => {
+                pageMatchedCount++;
+                queue.push({ config, conv });
+                inMemorySummary.fetched = (inMemorySummary.fetched || 0) + 1;
+                await reportFetchProgress({
+                  fetched: inMemorySummary.fetched,
+                });
+              };
+
+              if (this.auditSource === 'database') {
+                this.logger.log(`[CskhService] Thử nghiệm quét từ database cục bộ cho Page ${pageName}...`);
+                conversations = await this.fetchConversationsForAuditFromDb(
+                  config.pageId,
+                  auditDateFrom,
+                  auditDateTo,
+                  this.auditMsgLimit,
+                  async (scanned, matchedOnPage) => {
+                    pageScannedMap.set(config.pageId, scanned);
+                    const totalScanned = Array.from(pageScannedMap.values()).reduce((a, b) => a + b, 0);
+                    await reportFetchProgress({
+                      scanned: totalScanned,
+                      currentPage: pageName,
+                    });
+                  },
+                  (conv) => {
+                    if (this.isConversationAlreadyAudited(auditedKeys, config.pageId, conv)) {
+                      skippedOnPage++;
+                      return 'exclude';
+                    }
+                    return 'include';
+                  },
+                  effectiveCapForPage > 0 ? effectiveCapForPage : 0,
+                  onMatch,
+                );
+                if (conversations.length > 0) {
+                  usingDb = true;
+                } else {
+                  this.logger.warn(
+                    `[CskhService] Không tìm thấy cuộc hội thoại nào trong database cho Page ${pageName} trong khoảng ${rangeLabel}. ` +
+                      `Tự động fallback sang quét trực tiếp từ Facebook API...`,
+                  );
+                }
+              }
+
+              if (!usingDb) {
+                conversations = await this.graph.fetchConversationsForAuditByDate(
+                  config.pageId,
+                  config.pageAccessToken,
+                  auditDateFrom,
+                  auditDateTo,
+                  this.auditMsgLimit,
+                  async (scanned, matchedOnPage) => {
+                    pageScannedMap.set(config.pageId, scanned);
+                    const totalScanned = Array.from(pageScannedMap.values()).reduce((a, b) => a + b, 0);
+                    await reportFetchProgress({
+                      scanned: totalScanned,
+                      currentPage: pageName,
+                    });
+                  },
+                  this.auditFetchConcurrency,
+                  () => this.shouldStopAuditJob(jobId),
+                  (conv) => {
+                    if (this.isConversationAlreadyAudited(auditedKeys, config.pageId, conv)) {
+                      skippedOnPage++;
+                      return 'exclude';
+                    }
+                    return 'include';
+                  },
+                  effectiveCapForPage > 0 ? effectiveCapForPage : 0,
+                  onMatch,
+                );
+              }
+
+              pagesFetchDone++;
+              skippedAlready += skippedOnPage;
+
+              this.logger.log(
+                `Audit job ${jobId.slice(0, 8)}: Page ${pageName} — ${rangeLabel}: chấm ${pageMatchedCount} cuộc mới` +
+                  (cap > 0 ? ` (giới hạn ${cap})` : '') +
+                  `, bỏ qua ${skippedOnPage} đã chấm`,
+              );
+
+              await reportFetchProgress(
+                {
+                  pagesProcessed: pagesFetchDone,
+                  currentPage: pageName,
+                  skippedAlready,
                 },
-                this.auditFetchConcurrency,
-                () => this.shouldStopAuditJob(jobId),
-                (conv) => {
-                  if (this.isConversationAlreadyAudited(auditedKeys, config.pageId, conv)) {
-                    skippedOnPage++;
-                    return 'exclude';
-                  }
-                  return 'include';
+                true,
+              );
+            } catch (err) {
+              this.logger.error(`Lỗi khi quét page ${pageName} (${config.pageId}): ${(err as Error).message}`);
+              // Vẫn tăng pagesProcessed để thanh tiến độ không bị kẹt
+              pagesFetchDone++;
+              await reportFetchProgress(
+                {
+                  pagesProcessed: pagesFetchDone,
+                  currentPage: pageName,
+                  skippedAlready,
                 },
-                cap > 0 ? cap : 0,
-                onMatch,
+                true,
               );
             }
-
-            pagesFetchDone++;
-            skippedAlready += skippedOnPage;
-
-            this.logger.log(
-              `Audit job ${jobId.slice(0, 8)}: Page ${pageName} — ${rangeLabel}: chấm ${pageMatchedCount} cuộc mới` +
-                (cap > 0 ? ` (giới hạn ${cap})` : '') +
-                `, bỏ qua ${skippedOnPage} đã chấm`,
-            );
-
-            await reportFetchProgress(
-              {
-                pagesProcessed: pagesFetchDone,
-                currentPage: pageName,
-                skippedAlready,
-              },
-              true,
-            );
           },
           () => this.shouldStopAuditJob(jobId),
         );
@@ -2098,24 +2314,37 @@ export class CskhService implements OnModuleInit {
     if (url.startsWith('http://')) {
       url = `https://${url.slice('http://'.length)}`;
     }
-    const axios = (await import('axios')).default;
-    const upstream = await axios.get(url, {
-      responseType: 'stream',
-      timeout: 30000,
-      maxRedirects: 5,
-      headers: {
-        'User-Agent': 'TalentManagement-CSKH/1.0',
-        Referer: 'https://www.facebook.com/',
-      },
-    });
-    res.set('Cache-Control', 'public, max-age=3600');
-    res.set('Cross-Origin-Resource-Policy', 'cross-origin');
-    const contentType = upstream.headers['content-type'];
-    res.set(
-      'Content-Type',
-      typeof contentType === 'string' ? contentType : 'application/octet-stream',
-    );
-    upstream.data.pipe(res);
+    try {
+      const upstream = await axios.get(url, {
+        responseType: 'stream',
+        timeout: 30000,
+        maxRedirects: 5,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          Referer: 'https://www.facebook.com/',
+        },
+      });
+      res.set('Cache-Control', 'public, max-age=3600');
+      res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+      const contentType = upstream.headers['content-type'];
+      res.set(
+        'Content-Type',
+        typeof contentType === 'string' ? contentType : 'application/octet-stream',
+      );
+      upstream.data.pipe(res);
+    } catch (e) {
+      this.logger.warn(`Failed to proxy media URL: ${(e as Error).message}. Redirecting to original URL.`);
+      try {
+        if (!res.headersSent) {
+          res.redirect(url);
+        }
+      } catch (redirectErr) {
+        this.logger.error(`Failed to redirect: ${(redirectErr as Error).message}`);
+        if (!res.headersSent) {
+          res.status(404).send('Media not found');
+        }
+      }
+    }
   }
 
   /** @deprecated Dùng proxyMediaUrl */
@@ -2237,19 +2466,40 @@ export class CskhService implements OnModuleInit {
   }
 
   /** Một endpoint gộp: trạng thái job + kết quả audit từ DB (nguồn sự thật cho UI). */
-  async getAuditProgress(jobId: string, tenantId?: string) {
+  async getAuditProgress(jobId: string, tenantId?: string, opts?: { includeAudits?: boolean }) {
+    const includeAudits = opts?.includeAudits !== false;
     let job = await this.prisma.cskhJobRun.findFirst({
       where: tenantId ? { id: jobId, tenantId } : { id: jobId },
     });
     if (!job) throw new NotFoundException('Job không tồn tại hoặc không có quyền');
-    let audits = await this.listAuditsByJobRunId(jobId, 500, tenantId);
-    if (await this.failGhostJobIfNeeded(job, audits.length)) {
+
+    let auditCount = 0;
+    let audits: Awaited<ReturnType<typeof this.listAuditsByJobRunId>> = [];
+    if (includeAudits) {
+      audits = await this.listAuditsByJobRunId(jobId, 500, tenantId);
+      auditCount = audits.length;
+    } else {
+      const countRow = await this.prisma.$queryRaw<{ count: bigint }[]>`
+        SELECT COUNT(*)::bigint AS count
+        FROM chat_audits
+        WHERE metadata->>'jobRunId' = ${jobId}
+      `;
+      auditCount = Number(countRow[0]?.count ?? 0);
+    }
+
+    if (await this.failGhostJobIfNeeded(job, auditCount)) {
       job = await this.prisma.cskhJobRun.findFirst({
         where: tenantId ? { id: jobId, tenantId } : { id: jobId },
       });
       if (!job) throw new NotFoundException('Job không tồn tại hoặc không có quyền');
+      if (includeAudits && job.status !== 'running') {
+        audits = await this.listAuditsByJobRunId(jobId, 500, tenantId);
+        auditCount = audits.length;
+      }
+    } else if (includeAudits) {
+      auditCount = audits.length;
     }
-    audits = await this.listAuditsByJobRunId(jobId, 500, tenantId);
+
     const summary = (job.summary as Record<string, unknown> | null) ?? {};
     return {
       id: job.id,
@@ -2259,9 +2509,9 @@ export class CskhService implements OnModuleInit {
       finishedAt: job.finishedAt,
       summary: {
         ...summary,
-        auditCount: audits.length,
+        auditCount,
       },
-      audits,
+      audits: includeAudits ? audits : [],
     };
   }
 

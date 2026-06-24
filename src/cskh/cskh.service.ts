@@ -359,7 +359,7 @@ export class CskhService implements OnModuleInit {
     type ConvGroupRow = { pageId: string; _count: { id: number } };
     const emptyConvGroups: ConvGroupRow[] = [];
 
-    const [convCounts, unreadCounts, inboundStatsMap] = await Promise.all([
+    const [convCounts, unreadCounts, inboundStatsMap, totalMessageStatsMap] = await Promise.all([
       pageIds.length
         ? this.prisma.cskhInboxConversation.groupBy({
             by: ['pageId'],
@@ -376,6 +376,9 @@ export class CskhService implements OnModuleInit {
         : Promise.resolve(emptyConvGroups),
       inboundMonth && pageIds.length
         ? this.loadPageInboundMessageStats(inboundMonth, pageIds)
+        : Promise.resolve(new Map<string, number>()),
+      pageIds.length
+        ? this.loadPageTotalMessageStats(pageIds)
         : Promise.resolve(new Map<string, number>()),
     ]);
 
@@ -405,6 +408,7 @@ export class CskhService implements OnModuleInit {
         updatedAt: row.updatedAt,
         pagePictureUrl: this.pagePictureUrl(row.metadata),
         conversationCount: convCountMap.get(row.pageId) || 0,
+        messageCount: totalMessageStatsMap.get(row.pageId) || 0,
         unreadConversationCount: unreadCountMap.get(row.pageId) || 0,
         inboundMessageCount: inboundMonth ? inboundStatsMap.get(row.pageId) || 0 : undefined,
       })),
@@ -446,6 +450,22 @@ export class CskhService implements OnModuleInit {
       GROUP BY c.page_id
     `;
     return new Map(rows.map((r) => [r.pageId, r.inboundCount]));
+  }
+
+  /** Tổng số tin nhắn (mọi chiều, mọi thời điểm) theo page. */
+  private async loadPageTotalMessageStats(pageIds: string[]) {
+    if (!pageIds.length) return new Map<string, number>();
+    type StatRow = { pageId: string; totalCount: number };
+    const rows = await this.prisma.$queryRaw<StatRow[]>`
+      SELECT
+        c.page_id AS "pageId",
+        COUNT(*)::int AS "totalCount"
+      FROM cskh_inbox_messages m
+      INNER JOIN cskh_inbox_conversations c ON c.id = m.conversation_id
+      WHERE c.page_id IN (${Prisma.join(pageIds)})
+      GROUP BY c.page_id
+    `;
+    return new Map(rows.map((r) => [r.pageId, r.totalCount]));
   }
 
   private monthRangeDays(month: string): { from: string; to: string } {

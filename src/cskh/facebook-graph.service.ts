@@ -42,6 +42,7 @@ export type FbConversation = {
   participants?: { data?: Array<{ id?: string; name?: string; email?: string }> };
   link?: string;
   messages?: { data?: FbMessage[] };
+  unread_count?: number;
 };
 
 export type TranscriptLine = {
@@ -140,7 +141,7 @@ export class FacebookGraphService {
       const data: Page = first
         ? await this.graphRequest<Page>(`/${pageId}/conversations`, token, {
             platform: 'messenger',
-            fields: 'id,updated_time,participants',
+            fields: 'id,updated_time,participants,unread_count',
             limit: Math.min(50, maxCount - convs.length),
           })
         : await this.graphRequest<Page>(nextUrl!, token);
@@ -165,7 +166,7 @@ export class FacebookGraphService {
     let nextUrl: string | null = null;
     let first = true;
     const fields =
-      `id,updated_time,participants,messages.limit(1){${FB_MESSAGE_FIELDS}}`;
+      `id,updated_time,participants,unread_count,messages.limit(1){${FB_MESSAGE_FIELDS}}`;
     while (convs.length < maxCount) {
       type Page = { data?: FbConversation[]; paging?: { next?: string } };
       const data: Page = first
@@ -548,7 +549,7 @@ export class FacebookGraphService {
   async fetchConversationById(conversationId: string, token: string): Promise<FbConversation | null> {
     try {
       return await this.graphRequest<FbConversation>(`/${conversationId}`, token, {
-        fields: 'id,updated_time,participants',
+        fields: 'id,updated_time,participants,unread_count',
       });
     } catch (e) {
       this.logger.warn(`fetchConversationById ${conversationId}: ${(e as Error).message}`);
@@ -556,16 +557,19 @@ export class FacebookGraphService {
     }
   }
 
+  /** limit <= 0 → lấy TẤT CẢ tin nhắn của hội thoại (phân trang đến hết). */
   async fetchMessages(conversationId: string, token: string, limit = 50): Promise<FbMessage[]> {
+    const unlimited = !limit || limit <= 0;
     const messages: FbMessage[] = [];
     let nextUrl: string | null = null;
     let first = true;
-    while (messages.length < limit) {
+    while (unlimited || messages.length < limit) {
       type Page = { data?: FbMessage[]; paging?: { next?: string } };
+      const pageLimit = unlimited ? 50 : Math.min(50, limit - messages.length);
       const data: Page = first
         ? await this.graphRequest<Page>(`/${conversationId}/messages`, token, {
             fields: FB_MESSAGE_FIELDS,
-            limit: Math.min(50, limit - messages.length),
+            limit: pageLimit,
           })
         : await this.graphRequest<Page>(nextUrl!, token);
       first = false;
@@ -915,6 +919,8 @@ export class FacebookGraphService {
     messageId: string,
     token: string,
   ): Promise<NonNullable<NonNullable<FbMessage['attachments']>['data']>[number] | null> {
+    // Skip internal UUIDs — only Facebook IDs are valid for Graph API
+    if (messageId.includes('-') && !messageId.startsWith('m_')) return null;
     try {
       const detail = await this.graphRequest<{ attachments?: FbMessage['attachments'] }>(
         `/${messageId}`,
@@ -946,6 +952,8 @@ export class FacebookGraphService {
   ): Promise<Array<{ url: string; messageType: 'image' | 'video' }>> {
     const id = messageId.trim();
     if (!id || !token) return [];
+    // Skip internal UUIDs — only Facebook message IDs (m_xxx) are valid for Graph API
+    if (!id.startsWith('m_')) return [];
 
     try {
       const detail = await this.graphRequest<{ attachments?: FbMessage['attachments'] }>(
@@ -989,6 +997,8 @@ export class FacebookGraphService {
   ): Promise<{ url: string | null; messageType: 'image' | 'video' | null }> {
     const id = messageOrAttachmentId.trim();
     if (!id || !token) return { url: null, messageType: null };
+    // Skip internal UUIDs — only Facebook IDs (m_xxx or numeric) are valid for Graph API
+    if (id.includes('-') && !id.startsWith('m_')) return { url: null, messageType: null };
 
     const att = await this.fetchFirstAttachmentFromMessage(id, token);
     let url = pickAttachmentUrl(att ?? undefined);

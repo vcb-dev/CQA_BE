@@ -543,8 +543,13 @@ export class CskhController {
 
   @Post('inbox/sync')
   @UseGuards(JwtAuthGuard)
-  syncInbox(@CurrentUser() user: User, @Body() body: { pageId?: string }) {
-    return this.inbox.syncFromGraph(body.pageId?.trim(), user.tenantId || undefined);
+  syncInbox(
+    @CurrentUser() user: User,
+    @Body() body: { pageId?: string; full?: boolean },
+  ) {
+    return this.inbox.syncFromGraph(body.pageId?.trim(), user.tenantId || undefined, {
+      full: body.full === true,
+    });
   }
 
   @Post('inbox/link-audit')

@@ -11,6 +11,8 @@ import {
   normalizeFbMessage,
   pickAttachmentUrl,
 } from './facebook-message.util';
+import { GraphApiCoordinatorService, type GraphRequestPriority } from './graph-api-coordinator.service';
+import { CskhRedisSignalsService } from '../redis/cskh-redis-signals.service';
 
 export type FbMessage = {
   id?: string;
@@ -41,7 +43,7 @@ export type FbConversation = {
   updated_time?: string;
   participants?: { data?: Array<{ id?: string; name?: string; email?: string }> };
   link?: string;
-  messages?: { data?: FbMessage[] };
+  messages?: { data?: FbMessage[]; paging?: { next?: string } };
   unread_count?: number;
 };
 
@@ -61,6 +63,11 @@ export class FacebookGraphService {
   private readonly logger = new Logger(FacebookGraphService.name);
   private readonly graphVersion = process.env.FB_GRAPH_VERSION?.trim() || 'v21.0';
   private readonly failedProfileFetches = new Map<string, number>();
+
+  constructor(
+    private readonly graphCoordinator: GraphApiCoordinatorService,
+    private readonly redisSignals: CskhRedisSignalsService,
+  ) {}
 
   async getPagePictureUrl(pageId: string, pageToken: string): Promise<string | null> {
     try {
@@ -85,6 +92,28 @@ export class FacebookGraphService {
   }
 
   async graphRequest<T>(
+    urlOrPath: string,
+    token: string,
+    params: Record<string, string | number> = {},
+    options?: { priority?: GraphRequestPriority },
+  ): Promise<T> {
+    const priority = options?.priority ?? 'high';
+    if (priority === 'low') {
+      const yieldStart = Date.now();
+      while (await this.redisSignals.shouldYieldGraphToInbox()) {
+        if (Date.now() - yieldStart > 120_000) break;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+    }
+    const release = await this.graphCoordinator.acquire(priority);
+    try {
+      return await this.graphRequestRaw<T>(urlOrPath, token, params);
+    } finally {
+      release();
+    }
+  }
+
+  private async graphRequestRaw<T>(
     urlOrPath: string,
     token: string,
     params: Record<string, string | number> = {},
@@ -166,7 +195,7 @@ export class FacebookGraphService {
     let nextUrl: string | null = null;
     let first = true;
     const fields =
-      `id,updated_time,participants,unread_count,messages.limit(1){${FB_MESSAGE_FIELDS}}`;
+      `id,updated_time,participants,unread_count,messages.limit(8){${FB_MESSAGE_FIELDS}}`;
     while (convs.length < maxCount) {
       type Page = { data?: FbConversation[]; paging?: { next?: string } };
       const data: Page = first
@@ -235,14 +264,33 @@ export class FacebookGraphService {
     concurrency: number,
     fn: (item: T) => Promise<void>,
   ) {
+    await this.runWithConcurrencyStoppable(items, concurrency, fn);
+  }
+
+  private async runWithConcurrencyStoppable<T>(
+    items: T[],
+    concurrency: number,
+    fn: (item: T) => Promise<void>,
+    shouldAbort?: () => boolean | Promise<boolean>,
+  ): Promise<boolean> {
+    if (!items.length) return false;
+    let stoppedEarly = false;
     let nextIndex = 0;
-    const workers = Array.from({ length: Math.min(Math.max(concurrency, 1), items.length) }, async () => {
-      while (nextIndex < items.length) {
+    const workerCount = Math.min(Math.max(concurrency, 1), items.length);
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (true) {
+        if (shouldAbort && (await shouldAbort())) {
+          stoppedEarly = true;
+          return;
+        }
+        if (nextIndex >= items.length) return;
         const index = nextIndex++;
         await fn(items[index]);
       }
     });
     await Promise.all(workers);
+    if (!stoppedEarly && shouldAbort && (await shouldAbort())) stoppedEarly = true;
+    return stoppedEarly;
   }
 
   /** include = thêm vào danh sách; exclude = bỏ qua; stop = dừng quét page. */
@@ -303,8 +351,8 @@ export class FacebookGraphService {
             platform: 'messenger',
             fields,
             limit: 50,
-          })
-        : await this.graphRequest<Page>(nextUrl!, token);
+          }, { priority: 'low' })
+        : await this.graphRequest<Page>(nextUrl!, token, {}, { priority: 'low' });
       first = false;
 
       const batch = data.data ?? [];
@@ -315,6 +363,17 @@ export class FacebookGraphService {
       const candidates: BatchCandidate[] = [];
 
       for (const conv of batch) {
+        if (shouldAbort && (await shouldAbort())) {
+          stoppedEarly = true;
+          this.logAuditDateSummary(rangeLabel, pageId, {
+            scanned,
+            matched: matched.length,
+            skippedAfterDay,
+            skippedNoDayMsg,
+            stoppedEarly: true,
+          });
+          return matched;
+        }
         scanned++;
         const updatedMs = conv.updated_time ? new Date(conv.updated_time).getTime() : 0;
 
@@ -360,22 +419,50 @@ export class FacebookGraphService {
         c.needsFetch ? [{ index, conv: c.conv }] : [],
       );
 
-      await this.runWithConcurrency(pendingFetches, fetchConcurrency, async ({ index, conv }) => {
-        try {
-          const fetched = await this.fetchMessagesForAuditTranscript(
-            conv.id,
-            token,
-            auditDateFrom,
-            auditDateToResolved,
-            safeMsgMax,
-          );
-          if (fetched.length > 0) candidates[index].allMsgs = fetched;
-        } catch {
-          /* giữ embed */
-        }
-      });
+      const fetchStopped = await this.runWithConcurrencyStoppable(
+        pendingFetches,
+        fetchConcurrency,
+        async ({ index, conv }) => {
+          try {
+            const fetched = await this.fetchMessagesForAuditTranscript(
+              conv.id,
+              token,
+              auditDateFrom,
+              auditDateToResolved,
+              safeMsgMax,
+              shouldAbort,
+            );
+            if (fetched.length > 0) candidates[index].allMsgs = fetched;
+          } catch {
+            /* giữ embed */
+          }
+        },
+        shouldAbort,
+      );
+      if (fetchStopped) {
+        stoppedEarly = true;
+        this.logAuditDateSummary(rangeLabel, pageId, {
+          scanned,
+          matched: matched.length,
+          skippedAfterDay,
+          skippedNoDayMsg,
+          stoppedEarly: true,
+        });
+        return matched;
+      }
 
       for (const { conv, allMsgs, needsFetch } of candidates) {
+        if (shouldAbort && (await shouldAbort())) {
+          stoppedEarly = true;
+          this.logAuditDateSummary(rangeLabel, pageId, {
+            scanned,
+            matched: matched.length,
+            skippedAfterDay,
+            skippedNoDayMsg,
+            stoppedEarly: true,
+          });
+          return matched;
+        }
         const transcriptMsgs = this.filterMessagesUpToRangeEnd(allMsgs, auditDateToResolved);
         const dayInTranscript = this.filterMessagesByDateRange(
           transcriptMsgs,
@@ -514,6 +601,7 @@ export class FacebookGraphService {
     maxCount = 0,
     msgLimit = 25,
     onBatch?: (fetchedOnPage: number) => void | Promise<void>,
+    shouldStop?: () => boolean,
   ): Promise<FbConversation[]> {
     const convs: FbConversation[] = [];
     let nextUrl: string | null = null;
@@ -523,6 +611,7 @@ export class FacebookGraphService {
     const fields =
       `id,updated_time,participants,messages.limit(${safeMsgLimit}){${FB_MESSAGE_FIELDS}}`;
     while (unlimited || convs.length < maxCount) {
+      if (shouldStop?.()) break;
       type Page = { data?: FbConversation[]; paging?: { next?: string } };
       const pageLimit = unlimited ? 50 : Math.min(50, maxCount - convs.length);
       const data: Page = first
@@ -530,7 +619,7 @@ export class FacebookGraphService {
             platform: 'messenger',
             fields,
             limit: pageLimit,
-          })
+          }, { priority: 'low' })
         : await axios.get<Page>(nextUrl!, { timeout: 120000 }).then((r) => r.data);
       first = false;
       if (Array.isArray(data.data)) convs.push(...data.data);
@@ -540,6 +629,49 @@ export class FacebookGraphService {
       if (!unlimited && convs.length >= maxCount) break;
     }
     return unlimited ? convs : convs.slice(0, maxCount);
+  }
+
+  /**
+   * Quét backfill theo từng trang Graph — xử lý ngay, không tải hết hội thoại vào RAM trước.
+   * Tránh treo UI khi page có hàng nghìn hội thoại.
+   */
+  async streamConversationsForBackfill(
+    pageId: string,
+    token: string,
+    msgLimit: number,
+    handlers: {
+      onBatch: (convs: FbConversation[]) => Promise<'continue' | 'stop'>;
+      shouldStop?: () => boolean;
+    },
+  ): Promise<number> {
+    let total = 0;
+    let nextUrl: string | null = null;
+    let first = true;
+    const safeMsgLimit = Math.min(Math.max(msgLimit, 5), 50);
+    const fields =
+      `id,updated_time,participants,messages.limit(${safeMsgLimit}){${FB_MESSAGE_FIELDS}}`;
+
+    while (true) {
+      if (handlers.shouldStop?.()) break;
+      type Page = { data?: FbConversation[]; paging?: { next?: string } };
+      const data: Page = first
+        ? await this.graphRequest<Page>(
+            `/${pageId}/conversations`,
+            token,
+            { platform: 'messenger', fields, limit: 50 },
+            { priority: 'low' },
+          )
+        : await this.graphRequest<Page>(nextUrl!, token, {}, { priority: 'low' });
+      first = false;
+      const batch = Array.isArray(data.data) ? data.data : [];
+      if (!batch.length) break;
+      total += batch.length;
+      const action = await handlers.onBatch(batch);
+      if (action === 'stop') break;
+      nextUrl = data.paging?.next ?? null;
+      if (!nextUrl) break;
+    }
+    return total;
   }
 
   latestMessages(conv: FbConversation): FbMessage[] {
@@ -555,6 +687,34 @@ export class FacebookGraphService {
       this.logger.warn(`fetchConversationById ${conversationId}: ${(e as Error).message}`);
       return null;
     }
+  }
+
+  /**
+   * Quét đầy đủ tin nhắn DỰA TRÊN tin đã tải kèm (inline) khi lấy danh sách hội thoại.
+   * Tránh gọi lại Graph từ đầu cho mỗi hội thoại → nhanh hơn nhiều khi backfill.
+   * Tiếp tục phân trang từ cursor `next` của inline cho đến hết.
+   */
+  async fetchAllMessagesFromInline(
+    inline: FbMessage[] | undefined,
+    nextUrl: string | null | undefined,
+    token: string,
+    options?: { shouldStop?: () => boolean; maxPages?: number },
+  ): Promise<FbMessage[]> {
+    const messages: FbMessage[] = inline ? [...inline] : [];
+    let url = nextUrl ?? null;
+    const maxPages = Math.max(Number(options?.maxPages ?? 40), 1);
+    let pages = 0;
+    while (url) {
+      if (options?.shouldStop?.()) break;
+      if (pages >= maxPages) break;
+      type Page = { data?: FbMessage[]; paging?: { next?: string } };
+      const data: Page = await this.graphRequest<Page>(url, token, {}, { priority: 'low' });
+      pages++;
+      if (Array.isArray(data.data)) messages.push(...data.data);
+      url = data.paging?.next ?? null;
+      if (!data.data?.length) break;
+    }
+    return messages;
   }
 
   /** limit <= 0 → lấy TẤT CẢ tin nhắn của hội thoại (phân trang đến hết). */
@@ -591,6 +751,7 @@ export class FacebookGraphService {
     auditDateFrom: string,
     auditDateTo?: string,
     maxMessages = 300,
+    shouldAbort?: () => boolean | Promise<boolean>,
   ): Promise<FbMessage[]> {
     const auditDateToResolved = auditDateTo?.trim() || auditDateFrom;
     const { start, end } = this.vietnamDateRange(auditDateFrom, auditDateToResolved);
@@ -602,13 +763,14 @@ export class FacebookGraphService {
     let first = true;
 
     while (fetched.length < safeMax) {
+      if (shouldAbort && (await shouldAbort())) break;
       type Page = { data?: FbMessage[]; paging?: { next?: string } };
       const data: Page = first
         ? await this.graphRequest<Page>(`/${conversationId}/messages`, token, {
             fields: FB_MESSAGE_FIELDS,
             limit: Math.min(25, safeMax - fetched.length),
-          })
-        : await this.graphRequest<Page>(nextUrl!, token);
+          }, { priority: 'low' })
+        : await this.graphRequest<Page>(nextUrl!, token, {}, { priority: 'low' });
       first = false;
 
       const batch = data.data ?? [];
@@ -897,8 +1059,8 @@ export class FacebookGraphService {
     return isNoiseMessageText(text);
   }
 
-  normalizeMessageForInbox(msg: FbMessage, pageId: string) {
-    return normalizeFbMessage(msg, pageId);
+  normalizeMessageForInbox(msg: FbMessage, pageId: string, customerPsid?: string) {
+    return normalizeFbMessage(msg, pageId, customerPsid);
   }
 
   private mediaKindFromAttachment(

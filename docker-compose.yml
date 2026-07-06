@@ -11,7 +11,7 @@ services:
       - .env.ai
     restart: unless-stopped
 
-  # Backend Container
+  # API — HTTP webhook nhận request, SSE inbox, cron xếp hàng job nền
   cqa-be:
     image: viejhaf/cqa-be:latest
     container_name: cqa-be
@@ -19,6 +19,21 @@ services:
       - "3000:3000"
     env_file:
       - .env.be
+    environment:
+      - CSKH_RUN_MODE=api
     restart: unless-stopped
     depends_on:
       - cqa-ai
+
+  # Worker — xử lý tin webhook, quét đầy đủ, audit AI (tách khỏi API để inbox không lag)
+  cqa-worker:
+    image: viejhaf/cqa-be:latest
+    container_name: cqa-worker
+    command: node dist/worker.js
+    env_file:
+      - .env.be
+    environment:
+      - CSKH_RUN_MODE=worker
+    restart: unless-stopped
+    depends_on:
+      - cqa-be

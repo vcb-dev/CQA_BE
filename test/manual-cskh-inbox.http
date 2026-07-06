@@ -1,0 +1,41 @@
+# Manual test — CSKH Inbox + Ads Insights
+# Dùng VS Code REST Client hoặc copy curl. Thay {{token}} và {{conversationId}}.
+
+@baseUrl = http://localhost:3003
+@token = YOUR_JWT_TOKEN
+@conversationId = YOUR_CONVERSATION_UUID
+@pageId = YOUR_FB_PAGE_ID
+
+### 1. Stats inbox (tab Chưa đọc / Ads)
+GET {{baseUrl}}/cskh/inbox/conversation-stats
+Authorization: Bearer {{token}}
+
+### 2. Danh sách hội thoại Ads (50 đầu)
+GET {{baseUrl}}/cskh/inbox/conversations?fromAdOnly=1&limit=50
+Authorization: Bearer {{token}}
+
+### 3. Tin nhắn hội thoại (25 tin — path nhanh)
+GET {{baseUrl}}/cskh/inbox/conversations/{{conversationId}}/messages?limit=25
+Authorization: Bearer {{token}}
+
+### 4. Chi phí QC / ad insights (sidebar phải)
+GET {{baseUrl}}/cskh/inbox/conversations/{{conversationId}}/ad-insights
+Authorization: Bearer {{token}}
+
+### 5. AI intent
+GET {{baseUrl}}/cskh/inbox/conversations/{{conversationId}}/intent
+Authorization: Bearer {{token}}
+
+### 6. OAuth ad accounts (Settings)
+GET {{baseUrl}}/cskh/oauth/ad-accounts-status
+Authorization: Bearer {{token}}
+
+### 7. Backfill tag Ads từ DB
+POST {{baseUrl}}/cskh/inbox/backfill-ad-referrals
+Authorization: Bearer {{token}}
+
+# --- Kỳ vọng ad-insights ---
+# - Có ad_id từ webhook → insightsScope: "ad", campaignName có thể có
+# - Tin cũ không ad_id → insightsScope: "page", costPerConversation TB Page 30 ngày
+# - unavailableReason: "no_messaging_insights" + estimateNote → OAuth lại đúng tài khoản QC
+# - unavailableReason: "no_ad_accounts" → OAuth chưa có ads_read

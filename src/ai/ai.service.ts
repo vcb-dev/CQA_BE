@@ -4,7 +4,7 @@ import http from 'http';
 import https from 'https';
 import { PrismaService } from '../prisma/prisma.service';
 import { User, ChatAudit } from '@prisma/client';
-import { buildAnalysisPayloadFromAi } from '../cskh/audit-analytics.util';
+import { buildAnalysisPayloadFromAi } from '../cskh/audit/audit-analytics.util';
 
 function normalizeAuditListField(value: unknown): string | null {
   if (value == null) return null;
@@ -305,6 +305,7 @@ export class AiService {
     productMentions: string[];
     urgency: 'low' | 'normal' | 'high';
     suggestedFocus: string;
+    suggestedReply: string;
   }> {
     try {
       const { data: result } = await axios.post(
@@ -331,6 +332,7 @@ export class AiService {
             : [],
         urgency,
         suggestedFocus: String(result.suggested_focus ?? result.suggestedFocus ?? '').trim(),
+        suggestedReply: String(result.suggested_reply ?? result.suggestedReply ?? '').trim(),
       };
     } catch (error: unknown) {
       const err = error as { message?: string };
@@ -342,6 +344,7 @@ export class AiService {
         productMentions: [],
         urgency: 'normal',
         suggestedFocus: 'Đọc tin nhắn mới và phản hồi khách.',
+        suggestedReply: '',
       };
     }
   }

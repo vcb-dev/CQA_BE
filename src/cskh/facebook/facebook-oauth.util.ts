@@ -4,14 +4,15 @@ const GRAPH_VERSION = process.env.FB_GRAPH_VERSION?.trim() || 'v21.0';
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
 
 /**
- * Đọc inbox Messenger cần pages_messaging + pages_read_engagement + pages_manage_metadata.
- * Meta App → App Review → Permissions: bật 3 quyền trên, rồi OAuth lại.
+ * Messenger + Marketing API (đọc chi phí QC).
+ * Meta App → App Review: pages_* + ads_read, rồi OAuth lại.
  */
 export const FB_OAUTH_SCOPES = [
   'pages_show_list',
   'pages_messaging',
   'pages_manage_metadata',
   'pages_read_engagement',
+  'ads_read',
 ].join(',');
 
 export function getFacebookAppId(): string {

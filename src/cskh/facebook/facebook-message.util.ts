@@ -1,4 +1,5 @@
 import type { FbMessage } from './facebook-graph.service';
+import { isAdReferralNoiseText } from './facebook-referral.util';
 
 export type ChatMessageType = 'text' | 'image' | 'video' | 'sticker';
 
@@ -12,6 +13,40 @@ export type NormalizedChatMessage = {
   timestamp: string;
 };
 
+/** PSID khách trong webhook/Graph — ưu tiên participant đã biết. */
+export function resolveMessengerCustomerPsid(
+  senderPsid: string,
+  recipientPsid: string,
+  pageId: string,
+  options?: { isEcho?: boolean; participantPsid?: string | null },
+): string | null {
+  const sender = String(senderPsid || '');
+  const recipient = String(recipientPsid || '');
+  const page = String(pageId || '');
+
+  if (options?.participantPsid) {
+    return String(options.participantPsid);
+  }
+  if (!sender || !recipient) return null;
+
+  if (options?.isEcho || sender === page) {
+    return recipient !== page ? recipient : null;
+  }
+  if (recipient === page) {
+    return sender;
+  }
+  // Page/agent → khách: recipient là PSID khách
+  if (recipient !== page) {
+    return recipient;
+  }
+  return sender;
+}
+
+/** Tin từ khách khi from.id trùng PSID khách của hội thoại. */
+export function isMessengerFromCustomer(senderPsid: string, customerPsid: string): boolean {
+  return String(senderPsid) === String(customerPsid);
+}
+
 const FB_MEDIA_URL =
   /https?:\/\/(?:[\w.-]+\.)*(?:fbcdn\.net|fbsbx\.com)\/[^\s<>"']+/i;
 
@@ -21,9 +56,6 @@ export function isNoiseMessageText(text: string): boolean {
   if (!t) return false;
 
   const patterns: RegExp[] = [
-    /đã trả lời một quảng cáo/i,
-    /replied to (?:your|an?) ad/i,
-    /replied to an advertisement/i,
     /^Chào\s+.+\!\s*Chúng tôi có thể giúp gì cho bạn\??$/i,
     /^Hi\s+.+\!\s*How can we help you\??$/i,
     /^Xin chào\s+.+\!\s*Chúng tôi có thể giúp gì/i,
@@ -33,13 +65,10 @@ export function isNoiseMessageText(text: string): boolean {
     /View comment\.?\s*\(?https?:\/\/(www\.)?facebook\.com/i,
     /https?:\/\/(www\.)?facebook\.com\/reel\/[^\s)]*comment_id=/i,
     /https?:\/\/(www\.)?facebook\.com\/[^\s)]*comment_id=/i,
-    /^Bạn đã trả lời qua quảng cáo/i,
-    /^You replied via ad/i,
     /sent (?:you )?a product/i,
-    /Through Facebook ads/i,
-    /Qua quảng cáo trên Facebook/i,
   ];
 
+  if (isAdReferralNoiseText(t)) return true;
   return patterns.some((p) => p.test(t));
 }
 
@@ -319,9 +348,19 @@ export function extractMessageAttachment(msg: FbMessage): {
 export function normalizeFbMessage(
   msg: FbMessage,
   pageId: string,
+  customerPsid?: string,
 ): NormalizedChatMessage | null {
   const fromId = String(msg.from?.id || '');
-  const sender: 'Staff' | 'Customer' = fromId === String(pageId) ? 'Staff' : 'Customer';
+  if (!fromId) return null;
+  // Phân loại theo PSID khách: chỉ tin từ đúng PSID khách là Customer,
+  // mọi người gửi khác (page, nhân viên, bot) đều là Staff.
+  const sender: 'Staff' | 'Customer' = customerPsid
+    ? fromId === String(customerPsid)
+      ? 'Customer'
+      : 'Staff'
+    : fromId === String(pageId)
+      ? 'Staff'
+      : 'Customer';
   const allAttachments = extractAllMessageAttachments(msg);
   const mediaAttachments = allAttachments.filter(
     (a) => a.messageType === 'image' || a.messageType === 'video',
@@ -377,6 +416,25 @@ export function normalizeFbMessage(
     sender,
     timestamp: msg.created_time || '',
   };
+}
+
+/**
+ * Đếm tin KHÁCH chưa được trả lời: các tin liên tiếp mới nhất từ khách
+ * cho tới khi gặp tin page/nhân viên. rawMsgs theo thứ tự Graph: mới → cũ.
+ */
+export function computeTrailingCustomerUnread(
+  rawMsgs: FbMessage[],
+  pageId: string,
+  customerPsid: string,
+): number {
+  let count = 0;
+  for (const m of rawMsgs) {
+    const normalized = normalizeFbMessage(m, pageId, customerPsid);
+    if (!normalized) continue;
+    if (normalized.sender === 'Staff') break;
+    count++;
+  }
+  return count;
 }
 
 export function dedupeChatMessages(messages: NormalizedChatMessage[]): NormalizedChatMessage[] {

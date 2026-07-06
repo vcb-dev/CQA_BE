@@ -23,6 +23,7 @@ model Tenant {
   monitors     CskhMonitorItem[]
   convs        CskhInboxConversation[]
   messages     CskhInboxMessage[]
+  inboxLabels  CskhInboxLabel[]
 
   @@map("tenants")
 }
@@ -40,7 +41,9 @@ model User {
   tenant      Tenant?     @relation(fields: [tenantId], references: [id], onDelete: SetNull)
   createdAt   DateTime    @default(now()) @map("created_at")
   updatedAt   DateTime    @updatedAt @map("updated_at")
-  chatAudits  ChatAudit[]
+  chatAudits       ChatAudit[]
+  inboxLabels      CskhInboxLabel[]
+  inboxConvViews   CskhInboxConversationView[]
 
   @@map("users")
 }
@@ -61,6 +64,8 @@ model ChatAudit {
   updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
   user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
+  @@index([tenantId])
+  @@index([tenantId, createdAt(sort: Desc)])
   @@map("chat_audits")
 }
 
@@ -137,6 +142,8 @@ model CskhInboxConversation {
   lastMessage        String?            @map("last_message") @db.Text
   lastMessageAt      DateTime?          @map("last_message_at") @db.Timestamptz(6)
   unreadCount        Int                @default(0) @map("unread_count")
+  /** NV đã mở hội thoại nhưng chưa gán nhãn — vẫn hiện tab Chưa đọc. */
+  awaitingLabel      Boolean            @default(false) @map("awaiting_label")
   fromAd             Boolean            @default(false) @map("from_ad")
   adId               String?            @map("ad_id") @db.VarChar
   adTitle            String?            @map("ad_title") @db.VarChar
@@ -147,8 +154,13 @@ model CskhInboxConversation {
   createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
   messages           CskhInboxMessage[]
+  labelAssignments   CskhInboxConversationLabel[]
+  views              CskhInboxConversationView[]
 
   @@unique([pageId, participantPsid])
+  @@index([tenantId, lastMessageAt(sort: Desc), id(sort: Desc)])
+  @@index([pageId, lastMessageAt(sort: Desc), id(sort: Desc)])
+  @@index([tenantId, fromAd, lastMessageAt(sort: Desc), id(sort: Desc)])
   @@map("cskh_inbox_conversations")
 }
 
@@ -167,5 +179,82 @@ model CskhInboxMessage {
   status         String                @default("sent")
   conversation   CskhInboxConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
+  @@index([tenantId])
+  @@index([conversationId, sentAt(sort: Desc)])
+  @@index([sentAt(sort: Desc)])
+  @@index([direction, sentAt(sort: Desc)])
   @@map("cskh_inbox_messages")
+}
+
+/** Nhãn hội thoại — nhân viên (staff) hoặc trạng thái (status) giống Sapo OmniAI. */
+model CskhInboxLabel {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String?  @map("tenant_id") @db.Uuid
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String   @db.VarChar(80)
+  color     String   @default("#6366f1") @db.VarChar(20)
+  type      String   @db.VarChar(20)
+  userId    Int?     @map("user_id")
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sortOrder Int      @default(0) @map("sort_order")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  assignments CskhInboxConversationLabel[]
+
+  @@unique([tenantId, type, userId])
+  @@unique([tenantId, type, name])
+  @@index([tenantId, type, sortOrder])
+  @@map("cskh_inbox_labels")
+}
+
+model CskhInboxConversationLabel {
+  id               String                @id @default(uuid()) @db.Uuid
+  conversationId   String                @map("conversation_id") @db.Uuid
+  labelId          String                @map("label_id") @db.Uuid
+  assignedByUserId Int?                  @map("assigned_by_user_id")
+  assignedAt       DateTime              @default(now()) @map("assigned_at") @db.Timestamptz(6)
+  conversation     CskhInboxConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  label            CskhInboxLabel        @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, labelId])
+  @@index([conversationId])
+  @@index([labelId])
+  @@map("cskh_inbox_conversation_labels")
+}
+
+/** Ai đã mở/xem hội thoại (chưa gán nhãn vẫn giữ trạng thái chờ xử lý). */
+model CskhInboxConversationView {
+  id             String                @id @default(uuid()) @db.Uuid
+  conversationId String                @map("conversation_id") @db.Uuid
+  userId         Int                   @map("user_id")
+  viewedAt       DateTime              @default(now()) @map("viewed_at") @db.Timestamptz(6)
+  conversation   CskhInboxConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([conversationId, viewedAt(sort: Desc)])
+  @@map("cskh_inbox_conversation_views")
+}
+
+/** Cache chi tiêu QC theo Page + ngày (VN) — cron đêm + hiển thị Page/Kênh. */
+model CskhPageAdSpendDaily {
+  id                    String   @id @default(uuid()) @db.Uuid
+  pageId                String   @map("page_id")
+  statDate              String   @map("stat_date") @db.VarChar(10)
+  spend                 Float?
+  currency              String?  @db.VarChar(8)
+  messagingConversations Int?    @map("messaging_conversations")
+  costPerConversation   Float?   @map("cost_per_conversation")
+  adAccountId           String?  @map("ad_account_id")
+  adAccountName         String?  @map("ad_account_name") @db.VarChar
+  unavailableReason     String?  @map("unavailable_reason") @db.VarChar(64)
+  tenantId              String?  @map("tenant_id") @db.Uuid
+  syncedAt              DateTime @default(now()) @map("synced_at") @db.Timestamptz(6)
+  updatedAt             DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([pageId, statDate])
+  @@index([statDate])
+  @@index([tenantId, statDate])
+  @@map("cskh_page_ad_spend_daily")
 }

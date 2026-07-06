@@ -19,7 +19,8 @@ export type ParsedAdReferral = {
   referralSource: string | null;
 };
 
-const AD_NOISE_PATTERNS: RegExp[] = [
+/** Mẫu regex — tin hệ thống Facebook báo khách vào từ quảng cáo. */
+export const AD_REFERRAL_NOISE_PATTERNS: RegExp[] = [
   /đã trả lời một quảng cáo/i,
   /replied to (?:your|an?) ad/i,
   /replied to an advertisement/i,
@@ -27,13 +28,37 @@ const AD_NOISE_PATTERNS: RegExp[] = [
   /^You replied via ad/i,
   /Through Facebook ads/i,
   /Qua quảng cáo trên Facebook/i,
+  /via (?:a )?Facebook ad/i,
+  /จากโฆษณา/i,
+  /ตอบกลับโฆษณ/i,
+  /ตอบผ่านโฆษณ/i,
+  /ตอบ.*โฆษณ.*(?:Facebook|ของคุณ)/i,
+  /ผ่านโฆษณ/i,
+  /โฆษณ.*Facebook/i,
+  /님이 광고에/i,
+  /광고를 통해/i,
+];
+
+/** Chuỗi con cho backfill SQL ILIKE (Việt / Anh / Thái). */
+export const AD_REFERRAL_ILIKE_SUBSTRINGS: string[] = [
+  'replied to your ad',
+  'replied to an ad',
+  'You replied via ad',
+  'Through Facebook ads',
+  'đã trả lời một quảng cáo',
+  'trả lời qua quảng cáo',
+  'Qua quảng cáo',
+  'ตอบกลับโฆษณ',
+  'ตอบผ่านโฆษณ',
+  'ผ่านโฆษณ',
+  'จากโฆษณ',
 ];
 
 /** Tin hệ thống Facebook báo khách vào từ quảng cáo (heuristic khi không có webhook). */
 export function isAdReferralNoiseText(text: string): boolean {
   const t = text.trim();
   if (!t) return false;
-  return AD_NOISE_PATTERNS.some((p) => p.test(t));
+  return AD_REFERRAL_NOISE_PATTERNS.some((p) => p.test(t));
 }
 
 export function parseWebhookReferral(referral: FbWebhookReferral | null | undefined): ParsedAdReferral {

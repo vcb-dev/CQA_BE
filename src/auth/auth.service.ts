@@ -8,11 +8,9 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
 import { UsersService } from '../users/users.service';
 import { RegisterDto } from './dto/register.dto';
-import { LoginDto } from './dto/login.dto';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
 import { User } from '@prisma/client';
 import axios from 'axios';
-import * as crypto from 'crypto';
 
 @Injectable()
 export class AuthService {
@@ -23,7 +21,14 @@ export class AuthService {
   ) {}
 
   // ─── Validate user credentials ──────────────────────────────────────────────
-  async validateUser(email: string, password: string): Promise<User | null> {
+  private resolveLoginIdentifier(input: string): string {
+    const trimmed = input.trim().toLowerCase();
+    if (trimmed.includes('@')) return trimmed;
+    return `${trimmed}@cqa.vn`;
+  }
+
+  async validateUser(identifier: string, password: string): Promise<User | null> {
+    const email = this.resolveLoginIdentifier(identifier);
     const user = await this.usersService.findByEmail(email);
     if (!user) return null;
 
@@ -31,6 +36,21 @@ export class AuthService {
     if (!isPasswordValid) return null;
 
     return user;
+  }
+
+  async login(loginDto: { email: string; password: string }) {
+    const user = await this.validateUser(loginDto.email, loginDto.password);
+    if (!user) {
+      throw new UnauthorizedException('Tài khoản hoặc mật khẩu không đúng');
+    }
+    if (!user.isActive) {
+      throw new UnauthorizedException('Tài khoản đã bị khóa');
+    }
+    const tokens = await this.generateTokens(user);
+    return {
+      user: this.sanitizeUser(user),
+      ...tokens,
+    };
   }
 
   // ─── Register ────────────────────────────────────────────────────────────────
@@ -45,24 +65,6 @@ export class AuthService {
       ...registerDto,
       password: hashedPassword,
     });
-
-    const tokens = await this.generateTokens(user);
-    return {
-      user: this.sanitizeUser(user),
-      ...tokens,
-    };
-  }
-
-  // ─── Login ───────────────────────────────────────────────────────────────────
-  async login(loginDto: LoginDto) {
-    const user = await this.validateUser(loginDto.email, loginDto.password);
-    if (!user) {
-      throw new UnauthorizedException('Email hoặc mật khẩu không đúng');
-    }
-
-    if (!user.isActive) {
-      throw new UnauthorizedException('Tài khoản đã bị khóa');
-    }
 
     const tokens = await this.generateTokens(user);
     return {
@@ -173,32 +175,29 @@ export class AuthService {
       throw new BadRequestException('Google profile does not contain email');
     }
 
-    // 3. Find or create user in database
-    let user = await this.usersService.findByEmail(profile.email);
+    const email = profile.email.trim().toLowerCase();
+
+    // Chỉ email đã có trong bảng users mới được đăng nhập (không tự tạo tài khoản)
+    const user = await this.usersService.findByEmail(email);
     if (!user) {
-      const randomPassword = crypto.randomUUID();
-      const hashedPassword = await bcrypt.hash(randomPassword, 12);
-      user = await this.usersService.create({
-        email: profile.email,
-        fullName: profile.name || profile.email.split('@')[0],
-        password: hashedPassword,
-        avatarUrl: profile.picture,
-      });
-    } else {
-      // Optionally update user's avatar if not set
-      if (!user.avatarUrl && profile.picture) {
-        user = await this.usersService.update(user.id, { avatarUrl: profile.picture });
-      }
+      throw new UnauthorizedException(
+        'Email bạn không được phép truy cập vào hệ thống.',
+      );
     }
 
-    if (!user.isActive) {
+    let activeUser = user;
+    if (!activeUser.avatarUrl && profile.picture) {
+      activeUser = await this.usersService.update(activeUser.id, { avatarUrl: profile.picture });
+    }
+
+    if (!activeUser.isActive) {
       throw new UnauthorizedException('Tài khoản đã bị khóa');
     }
 
     // 4. Generate system access and refresh tokens
-    const tokens = await this.generateTokens(user);
+    const tokens = await this.generateTokens(activeUser);
     return {
-      user: this.sanitizeUser(user),
+      user: this.sanitizeUser(activeUser),
       ...tokens,
     };
   }

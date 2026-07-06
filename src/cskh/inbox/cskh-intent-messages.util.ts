@@ -1,4 +1,4 @@
-import type { TranscriptLine } from './audit-analytics.util';
+import type { TranscriptLine } from '../audit/audit-analytics.util';
 
 export type IntentMessage = { sender: string; text: string };
 

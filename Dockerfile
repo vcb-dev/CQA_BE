@@ -13,8 +13,8 @@ RUN npm ci
 # Copy the rest of the application files
 COPY . .
 
-# Build the NestJS application
-RUN npm run build
+# Build the NestJS application (xóa cache incremental — tránh chỉ emit .d.ts trong Docker)
+RUN rm -rf dist tsconfig.build.tsbuildinfo && npm run build
 
 # Remove development dependencies to keep production node_modules lightweight
 RUN npm prune --omit=dev
@@ -35,7 +35,10 @@ COPY --from=builder /usr/src/app/node_modules ./node_modules
 COPY --from=builder /usr/src/app/dist ./dist
 
 # Expose the port defined in NestJS app
+ENV NODE_ENV=production
+ENV CSKH_RUN_MODE=api
+
 EXPOSE 3000
 
-# Run the compiled NestJS main entrypoint
-CMD ["node", "dist/main"]
+# API. Worker service: Start Command = node dist/worker.js , CSKH_RUN_MODE=worker
+CMD ["node", "dist/main.js"]

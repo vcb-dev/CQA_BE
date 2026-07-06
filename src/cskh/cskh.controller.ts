@@ -23,12 +23,19 @@ import type { RawBodyRequest } from '@nestjs/common';
 import { merge, interval, map, filter, Observable } from 'rxjs';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CskhService } from './cskh.service';
-import { CskhInboxService } from './cskh-inbox.service';
-import { CskhInboxRealtimeService } from './cskh-inbox-realtime.service';
-import { verifyFacebookWebhookSignature } from './facebook-oauth.util';
-import { parseMediaProxyUrlFromRequest } from './facebook-message.util';
-import { SapoOAuthService } from './sapo-oauth.service';
-import { SapoProductService } from './sapo-product.service';
+import { CskhInsightService } from './cskh-insight.service';
+import { CskhInboxService } from './inbox/cskh-inbox.service';
+import { CskhInboxLabelsService } from './inbox/cskh-inbox-labels.service';
+import {
+  CskhInboxRealtimeService,
+  type InboxRealtimePayload,
+} from './inbox/cskh-inbox-realtime.service';
+import { RedisQueueService } from './redis/redis-queue.service';
+import { getCskhRunMode } from './cskh-run-mode';
+import { verifyFacebookWebhookSignature } from './facebook/facebook-oauth.util';
+import { parseMediaProxyUrlFromRequest } from './facebook/facebook-message.util';
+import { SapoOAuthService } from './sapo/sapo-oauth.service';
+import { SapoProductService } from './sapo/sapo-product.service';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtService } from '@nestjs/jwt';
 import { UsersService } from '../users/users.service';
@@ -42,8 +49,11 @@ import type { User } from '@prisma/client';
 export class CskhController {
   constructor(
     private readonly cskh: CskhService,
+    private readonly insights: CskhInsightService,
     private readonly inbox: CskhInboxService,
+    private readonly inboxLabels: CskhInboxLabelsService,
     private readonly inboxRealtime: CskhInboxRealtimeService,
+    private readonly redisQueue: RedisQueueService,
     private readonly sapoOAuth: SapoOAuthService,
     private readonly sapoProducts: SapoProductService,
     private readonly jwtService: JwtService,
@@ -56,25 +66,34 @@ export class CskhController {
   async oauthStart(
     @Query('returnUrl') returnUrl: string,
     @Query('token') token: string,
+    @Req() req: Request,
     @Res() res: Response,
   ) {
-    let tenantId: string | undefined;
-    if (token) {
-      try {
-        const secret = this.configService.get<string>('jwt.secret');
-        const payload = this.jwtService.verify(token, { secret });
-        if (payload && payload.sub) {
-          const user = await this.usersService.findById(payload.sub);
-          if (user && user.isActive && user.tenantId) {
-            tenantId = user.tenantId;
-          }
-        }
-      } catch (e) {
-        // ignore or log
-      }
-    }
+    const tenantId = await this.resolveOAuthTenantId(token, req);
     const url = this.cskh.getOAuthStartUrl(returnUrl, tenantId);
     return res.redirect(url);
+  }
+
+  private async resolveOAuthTenantId(
+    token: string | undefined,
+    req: Request,
+  ): Promise<string | undefined> {
+    const candidates = [token, req.cookies?.accessToken as string | undefined].filter(
+      (v): v is string => typeof v === 'string' && v.length > 0,
+    );
+    const secret = this.configService.get<string>('jwt.secret');
+    for (const authToken of candidates) {
+      try {
+        const payload = this.jwtService.verify(authToken, { secret });
+        if (payload?.sub) {
+          const user = await this.usersService.findById(payload.sub);
+          if (user?.isActive && user.tenantId) return user.tenantId;
+        }
+      } catch {
+        /* thử nguồn token tiếp theo */
+      }
+    }
+    return undefined;
   }
 
   @Get('oauth/callback')
@@ -93,7 +112,8 @@ export class CskhController {
       const result = await this.cskh.handleOAuthCallback(code, state);
       const base = result.returnUrl || this.cskh.defaultOAuthReturnUrl();
       const sep = base.includes('?') ? '&' : '?';
-      return res.redirect(`${base}${sep}fb_connected=${result.pageCount}`);
+      const fbParam = result.syncing ? 'syncing' : String(result.pageCount);
+      return res.redirect(`${base}${sep}fb_connected=${fbParam}`);
     } catch (e) {
       const msg = encodeURIComponent(e instanceof Error ? e.message : 'OAuth failed');
       return res.redirect(`${this.cskh.defaultOAuthReturnUrl()}&oauth_error=${msg}`);
@@ -102,13 +122,27 @@ export class CskhController {
 
   @Get('pages')
   @UseGuards(JwtAuthGuard)
-  listPages(@CurrentUser() user: User, @Query('month') month?: string) {
+  listPages(
+    @CurrentUser() user: User,
+    @Query('month') month?: string,
+    @Query('date') date?: string,
+    @Query('lite') lite?: string,
+  ) {
     const monthTrimmed = month?.trim();
+    const dateTrimmed = date?.trim();
     if (monthTrimmed && !/^\d{4}-\d{2}$/.test(monthTrimmed)) {
       throw new BadRequestException('Tháng không hợp lệ (YYYY-MM)');
     }
+    if (dateTrimmed && !/^\d{4}-\d{2}-\d{2}$/.test(dateTrimmed)) {
+      throw new BadRequestException('Ngày không hợp lệ (YYYY-MM-DD)');
+    }
+    if (monthTrimmed && dateTrimmed) {
+      throw new BadRequestException('Chỉ dùng một trong hai: month hoặc date');
+    }
     return this.cskh.listPages(user.tenantId || undefined, {
       month: monthTrimmed || undefined,
+      date: dateTrimmed || undefined,
+      lite: lite === '1' || lite === 'true',
     });
   }
 
@@ -118,8 +152,24 @@ export class CskhController {
   getFeatures() {
     return {
       inboundMonthStats: true,
-      buildTag: 'inbound-month-v1',
+      inboundDayStats: true,
+      pageAdSpendDaily: true,
+      buildTag: 'page-ad-spend-v1',
     };
+  }
+
+  @Post('pages/sync-ad-spend')
+  @UseGuards(JwtAuthGuard)
+  syncPagesAdSpend(
+    @CurrentUser() user: User,
+    @Query('date') date?: string,
+  ) {
+    const dateTrimmed = date?.trim();
+    const statDate =
+      dateTrimmed && /^\d{4}-\d{2}-\d{2}$/.test(dateTrimmed)
+        ? dateTrimmed
+        : this.cskh.vietnamCalendarDate(0);
+    return this.cskh.syncAllPagesAdSpend([statDate], user.tenantId || undefined);
   }
 
   @Put('pages/manual')
@@ -277,7 +327,7 @@ export class CskhController {
     }
     const maxConversations =
       body.maxConversations != null && body.maxConversations > 0
-        ? Math.min(100, Math.floor(body.maxConversations))
+        ? Math.min(5000, Math.floor(body.maxConversations))
         : undefined;
     if (body.force) {
       await this.cskh.cancelRunningJobs('audit', undefined, user.tenantId || undefined);
@@ -289,14 +339,30 @@ export class CskhController {
       return { jobId: running.id, status: 'running', alreadyRunning: true };
     }
     const job = await this.cskh.createJob('audit', user.tenantId || undefined);
-    void this.cskh.runAuditJob(job.id, {
+    const auditOptions = {
       auditDateFrom,
       auditDateTo,
       maxConversations,
       force: Boolean(body.force),
       pageId: scanAllChannels ? undefined : pageId,
-    });
-    return { jobId: job.id, status: 'running', alreadyRunning: false };
+    };
+    const queued = await this.redisQueue.enqueueAuditJob({ jobId: job.id, options: auditOptions });
+    if (!queued) {
+      if (getCskhRunMode() === 'all') {
+        void this.cskh.runAuditJob(job.id, auditOptions);
+      } else {
+        throw new BadRequestException(
+          'Không thể xếp hàng chấm CSKH (Redis). Kiểm tra REDIS_URL và worker service.',
+        );
+      }
+    }
+    const workerOnline = await this.redisQueue.isAuditWorkerAlive();
+    return {
+      jobId: job.id,
+      status: 'running',
+      alreadyRunning: false,
+      workerOnline,
+    };
   }
 
   @Post('audit/pause')
@@ -361,6 +427,24 @@ export class CskhController {
       },
       user.tenantId || undefined,
     );
+  }
+
+  @Get('insights')
+  @UseGuards(JwtAuthGuard)
+  getInsights(
+    @CurrentUser() user: User,
+    @Query('auditDateFrom') auditDateFrom?: string,
+    @Query('auditDateTo') auditDateTo?: string,
+    @Query('pageId') pageId?: string,
+  ) {
+    const from = auditDateFrom?.trim();
+    if (!from) throw new BadRequestException('Bắt buộc auditDateFrom (YYYY-MM-DD)');
+    return this.insights.getDashboard({
+      auditDateFrom: from,
+      auditDateTo: auditDateTo?.trim(),
+      pageId: pageId?.trim(),
+      tenantId: user.tenantId || undefined,
+    });
   }
 
   @Get('audits/day-stats')
@@ -448,10 +532,82 @@ export class CskhController {
     }
   }
 
+  @Get('inbox/conversation-stats')
+  @UseGuards(JwtAuthGuard)
+  inboxConversationStats(@CurrentUser() user: User, @Query('pageId') pageId?: string) {
+    return this.inbox.getConversationStats(pageId?.trim(), user.tenantId || undefined);
+  }
+
   @Get('inbox/conversations')
   @UseGuards(JwtAuthGuard)
-  listInboxConversations(@CurrentUser() user: User, @Query('pageId') pageId?: string) {
-    return this.inbox.listConversations(pageId?.trim(), user.tenantId || undefined);
+  listInboxConversations(
+    @CurrentUser() user: User,
+    @Query('pageId') pageId?: string,
+    @Query('fromAdOnly') fromAdOnly?: string,
+    @Query('unreadOnly') unreadOnly?: string,
+    @Query('organicOnly') organicOnly?: string,
+    @Query('limit') limit?: string,
+    @Query('cursor') cursor?: string,
+    @Query('search') search?: string,
+    @Query('sinceDays') sinceDays?: string,
+    @Query('labelId') labelId?: string,
+    @Query('unlabeledOnly') unlabeledOnly?: string,
+    @Query('includeLabels') includeLabels?: string,
+    @Query('legacy') legacy?: string,
+  ) {
+    const parsedLimit = limit ? Number(limit) : undefined;
+    const parsedSinceDays = sinceDays ? Number(sinceDays) : undefined;
+    const opts = {
+      fromAdOnly: fromAdOnly === '1' || fromAdOnly === 'true',
+      unreadOnly: unreadOnly === '1' || unreadOnly === 'true',
+      organicOnly: organicOnly === '1' || organicOnly === 'true',
+      limit: Number.isFinite(parsedLimit) && parsedLimit! > 0 ? parsedLimit : undefined,
+      cursor: cursor?.trim() || undefined,
+      search: search?.trim() || undefined,
+      sinceDays:
+        Number.isFinite(parsedSinceDays) && parsedSinceDays! > 0 ? parsedSinceDays : undefined,
+      labelId: labelId?.trim() || undefined,
+      unlabeledOnly: unlabeledOnly === '1' || unlabeledOnly === 'true',
+      includeLabels: includeLabels === '1' || includeLabels === 'true',
+    };
+    if (legacy === '1' || legacy === 'true') {
+      return this.inbox.listConversationsLegacy(pageId?.trim(), user.tenantId || undefined, opts);
+    }
+    return this.inbox.listConversations(pageId?.trim(), user.tenantId || undefined, opts);
+  }
+
+  /** Gắn lại tag Ads từ tin nhắn đã lưu (Việt/Anh/Thái) — chạy ngay, không chờ cooldown. */
+  @Post('inbox/backfill-ad-referrals')
+  @UseGuards(JwtAuthGuard)
+  backfillAdReferrals(@CurrentUser() user: User) {
+    return this.inbox.backfillAdReferralsFromDb(user.tenantId || undefined);
+  }
+
+  @Get('inbox/labels')
+  @UseGuards(JwtAuthGuard)
+  listInboxLabels(@CurrentUser() user: User) {
+    return this.inboxLabels.listLabels(user.tenantId || undefined);
+  }
+
+  @Get('inbox/conversations/:id/view-history')
+  @UseGuards(JwtAuthGuard)
+  getInboxViewHistory(@CurrentUser() user: User, @Param('id') id: string) {
+    return this.inboxLabels.getViewHistory(id.trim(), user.tenantId || undefined);
+  }
+
+  @Post('inbox/conversations/:id/labels/:labelId/toggle')
+  @UseGuards(JwtAuthGuard)
+  toggleInboxConversationLabel(
+    @CurrentUser() user: User,
+    @Param('id') id: string,
+    @Param('labelId') labelId: string,
+  ) {
+    return this.inboxLabels.toggleConversationLabel(
+      id.trim(),
+      labelId.trim(),
+      user.id,
+      user.tenantId || undefined,
+    );
   }
 
   /** SSE — push realtime khi webhook/send có tin mới (FE không cần bấm đồng bộ). */
@@ -462,22 +618,16 @@ export class CskhController {
   @Header('X-Accel-Buffering', 'no')
   @UseGuards(JwtAuthGuard)
   inboxStream(@CurrentUser() user: User): Observable<MessageEvent> {
+    this.inbox.touchUserActivity();
     const heartbeat = interval(25_000).pipe(
       map(() => ({ data: { type: 'ping' } }) as MessageEvent),
     );
     const tenantId = user.tenantId || undefined;
     const filteredStream = this.inboxRealtime.stream().pipe(
       filter((event) => {
-        const payload = event.data as any;
-        const eventType = payload?.type || 'unknown';
-        const eventConvId = payload?.conversationId || 'unknown';
-        if (!payload || !payload.tenantId) {
-          console.log(`[SSE Filter Match] eventType=${eventType} conv=${eventConvId} passed (no payload tenantId). User tenantId=${tenantId}`);
-          return true;
-        }
-        const isMatched = payload.tenantId === tenantId;
-        console.log(`[SSE Filter Match] eventType=${eventType} conv=${eventConvId} payloadTenantId=${payload.tenantId} userTenantId=${tenantId} -> matched=${isMatched}`);
-        return isMatched;
+        const payload = event.data as InboxRealtimePayload | undefined;
+        if (!payload?.tenantId || !tenantId) return true;
+        return payload.tenantId === tenantId;
       }),
     );
     return merge(filteredStream, heartbeat);
@@ -500,6 +650,7 @@ export class CskhController {
       forceRefresh,
       Number.isFinite(parsedLimit) ? parsedLimit : undefined,
       user.tenantId || undefined,
+      user.id,
     );
   }
 
@@ -517,6 +668,12 @@ export class CskhController {
     @Query('auditId') auditId?: string,
   ) {
     return this.inbox.getCustomerIntent(id.trim(), auditId?.trim(), user.tenantId || undefined);
+  }
+
+  @Get('inbox/conversations/:id/ad-insights')
+  @UseGuards(JwtAuthGuard)
+  getInboxAdInsights(@CurrentUser() user: User, @Param('id') id: string) {
+    return this.cskh.getConversationAdInsights(id.trim(), user.tenantId || undefined);
   }
 
   @Post('inbox/conversations/:id/send')
@@ -538,7 +695,7 @@ export class CskhController {
   @Post('inbox/conversations/:id/mark-as-read')
   @UseGuards(JwtAuthGuard)
   markInboxAsRead(@CurrentUser() user: User, @Param('id') id: string) {
-    return this.inbox.markAsRead(id, user.tenantId || undefined);
+    return this.inbox.markAsRead(id, user.tenantId || undefined, user.id);
   }
 
   @Post('inbox/sync')
@@ -549,7 +706,42 @@ export class CskhController {
   ) {
     return this.inbox.syncFromGraph(body.pageId?.trim(), user.tenantId || undefined, {
       full: body.full === true,
+      lightweight: body.full !== true,
     });
+  }
+
+  /** Bắt đầu / tiếp tục "Quét đầy đủ" chạy nền. Tự bỏ qua kênh đã quét nếu có job paused. */
+  @Post('inbox/backfill')
+  @UseGuards(JwtAuthGuard)
+  startBackfill(
+    @CurrentUser() user: User,
+    @Body() body: { scope?: 'empty' | 'all'; force?: boolean },
+  ) {
+    const scope = body.scope === 'empty' ? 'empty' : 'all';
+    return this.inbox.startBackfill(scope, user.tenantId || undefined, {
+      force: body.force === true,
+    });
+  }
+
+  /** Tạm dừng quét — lưu tiến độ kênh đã xong vào DB. */
+  @Post('inbox/backfill/pause')
+  @UseGuards(JwtAuthGuard)
+  pauseBackfill() {
+    return this.inbox.requestBackfillPause();
+  }
+
+  /** Hủy toàn bộ quét — dừng ngay, xóa hàng đợi, không chờ xong kênh. */
+  @Post('inbox/backfill/cancel')
+  @UseGuards(JwtAuthGuard)
+  cancelBackfill(@CurrentUser() user: User) {
+    return this.inbox.cancelAllBackfill(user.tenantId || undefined);
+  }
+
+  /** Tiến độ "Quét đầy đủ" để FE hiển thị thanh tiến trình. */
+  @Get('inbox/backfill')
+  @UseGuards(JwtAuthGuard)
+  getBackfillStatus(@CurrentUser() user: User) {
+    return this.inbox.getBackfillStatus(user.tenantId || undefined);
   }
 
   @Post('inbox/link-audit')
@@ -598,5 +790,11 @@ export class CskhController {
   @UseGuards(JwtAuthGuard)
   getDashboardStats(@CurrentUser() user: User) {
     return this.cskh.getDashboardStats(user.tenantId || undefined);
+  }
+
+  @Get('dashboard/heavy-stats')
+  @UseGuards(JwtAuthGuard)
+  getDashboardHeavyStats(@CurrentUser() user: User) {
+    return this.cskh.getDashboardHeavyStats(user.tenantId || undefined);
   }
 }

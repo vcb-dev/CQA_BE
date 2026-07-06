@@ -10,6 +10,7 @@ import {
   Res,
   Query,
   UnauthorizedException,
+  HttpException,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
@@ -37,20 +38,36 @@ export class AuthController {
     const isHttps = frontendUrl.startsWith('https://');
     const secure = isHttps;
     const sameSite = isHttps ? 'none' : 'lax';
-    
+
     res.cookie('accessToken', accessToken, {
       httpOnly: true,
       secure: secure,
       sameSite: sameSite,
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days (matching JWT expiration)
+      maxAge: 7 * 24 * 60 * 60 * 1000,
     });
-    
+
     res.cookie('refreshToken', refreshToken, {
       httpOnly: true,
       secure: secure,
       sameSite: sameSite,
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+      maxAge: 30 * 24 * 60 * 60 * 1000,
     });
+  }
+
+  private extractHttpErrorMessage(err: unknown): string {
+    if (err instanceof HttpException) {
+      const body = err.getResponse();
+      if (typeof body === 'string') return body;
+      if (body && typeof body === 'object' && 'message' in body) {
+        const msg = (body as { message?: string | string[] }).message;
+        if (Array.isArray(msg)) return msg.join(', ');
+        if (typeof msg === 'string') return msg;
+      }
+    }
+    if (err instanceof Error && err.message && err.message !== 'Unauthorized') {
+      return err.message;
+    }
+    return 'Đăng nhập Google thất bại';
   }
 
   private clearAuthCookies(res: Response) {
@@ -93,7 +110,7 @@ export class AuthController {
     };
   }
 
-  // POST /auth/login
+  // POST /auth/login — tài khoản + mật khẩu
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post('login')
   @HttpCode(HttpStatus.OK)
@@ -216,8 +233,8 @@ export class AuthController {
       return res.redirect(
         `${frontendUrl}/login#token=${tokens.accessToken}&refreshToken=${tokens.refreshToken}`,
       );
-    } catch (err: any) {
-      const errMsg = err.message || 'Đăng nhập Google thất bại';
+    } catch (err: unknown) {
+      const errMsg = this.extractHttpErrorMessage(err);
       return res.redirect(`${frontendUrl}/login?error=${encodeURIComponent(errMsg)}`);
     }
   }

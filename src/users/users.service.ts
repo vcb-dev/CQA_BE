@@ -42,8 +42,9 @@ export class UsersService {
 
   // ─── Find by Email ────────────────────────────────────────────────────────────
   async findByEmail(email: string): Promise<User | null> {
-    return this.prisma.user.findUnique({
-      where: { email },
+    const normalized = email.trim().toLowerCase();
+    return this.prisma.user.findFirst({
+      where: { email: { equals: normalized, mode: 'insensitive' } },
     });
   }
 

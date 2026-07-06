@@ -5,3 +5,7 @@ npm-debug.log
 .env
 Dockerfile
 .dockerignore
+backfill-inbox.ts
+check-*.js
+verify-*.js
+tsconfig.build.tsbuildinfo

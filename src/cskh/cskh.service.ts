@@ -5,14 +5,20 @@ import {
   BadRequestException,
   ServiceUnavailableException,
   OnModuleInit,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import type { Response } from 'express';
 import { PrismaService, Prisma } from '../prisma/prisma.service';
 import { AiService } from '../ai/ai.service';
-import { FacebookGraphService, type FbConversation, type FbMessage } from './facebook-graph.service';
-import { CskhInboxService } from './cskh-inbox.service';
+import { FacebookGraphService, type FbConversation, type FbMessage } from './facebook/facebook-graph.service';
+import { FacebookAdsService, type AdInsightsPayload } from './facebook/facebook-ads.service';
+import { GraphApiCoordinatorService } from './facebook/graph-api-coordinator.service';
+import { RedisQueueService } from './redis/redis-queue.service';
+import { getCskhRunMode, isCskhApiProcess, shouldAuditYieldToInbox } from './cskh-run-mode';
+import { CskhInboxService } from './inbox/cskh-inbox.service';
 import {
   buildFacebookOAuthUrl,
   getFacebookAppId,
@@ -20,10 +26,11 @@ import {
   getFacebookOAuthRedirectUri,
   verifyOAuthState,
   GRAPH_BASE,
-} from './facebook-oauth.util';
-import { isAllowedFacebookMediaUrl } from './facebook-message.util';
-import { detectAdFromFbMessages } from './facebook-referral.util';
-import { trimTranscriptForAi, type TranscriptLine } from './audit-analytics.util';
+} from './facebook/facebook-oauth.util';
+import { isAllowedFacebookMediaUrl } from './facebook/facebook-message.util';
+import { findInboxConversationById } from './inbox/cskh-inbox-conversation.util';
+import { detectAdFromFbMessages, parseWebhookReferral } from './facebook/facebook-referral.util';
+import { trimTranscriptForAi, type TranscriptLine } from './audit/audit-analytics.util';
 import { toUserFacingError } from '../common/user-facing-error.util';
 
 /** Page CSKH đang bật — trường dùng trong monitor/audit (tránh phụ thuộc export Prisma model). */
@@ -46,12 +53,21 @@ export class CskhService implements OnModuleInit {
   private readonly auditDefaultLookbackDays = Number(
     process.env.CSKH_AUDIT_LOOKBACK_DAYS || 30,
   );
-  /** Số hội thoại chấm AI song song (tăng = nhanh hơn, cẩn thận rate limit AI/Meta). */
-  private readonly auditConcurrency = Number(process.env.CSKH_AUDIT_CONCURRENCY || 4);
+  /** Số hội thoại chấm AI song song — worker process có thể cao hơn API. */
+  private readonly auditConcurrency = Number(
+    process.env.CSKH_AUDIT_CONCURRENCY ||
+      (getCskhRunMode() === 'worker' ? 1 : 1),
+  );
   /** Số hội thoại fetch tin FB song song / batch. */
-  private readonly auditFetchConcurrency = Number(process.env.CSKH_AUDIT_FETCH_CONCURRENCY || 6);
+  private readonly auditFetchConcurrency = Number(
+    process.env.CSKH_AUDIT_FETCH_CONCURRENCY ||
+      (getCskhRunMode() === 'worker' ? 2 : 6),
+  );
   /** Số Page quét FB song song (khi bật nhiều page). */
-  private readonly auditPageConcurrency = Number(process.env.CSKH_AUDIT_PAGE_CONCURRENCY || 2);
+  private readonly auditPageConcurrency = Number(
+    process.env.CSKH_AUDIT_PAGE_CONCURRENCY ||
+      (getCskhRunMode() === 'worker' ? 1 : 2),
+  );
   private readonly auditMsgLimit = Number(process.env.CSKH_AUDIT_MSG_LIMIT || 100);
   private readonly auditSource = process.env.CSKH_AUDIT_SOURCE || 'facebook';
   /** Tối đa dòng transcript gửi AI (DB vẫn lưu đủ). */
@@ -66,17 +82,90 @@ export class CskhService implements OnModuleInit {
   private readonly monitorMsgConcurrency = Number(process.env.CSKH_MONITOR_MSG_CONCURRENCY || 8);
 
   private readonly activeJobs = new Map<string, { pauseRequested: boolean }>();
+  private readonly dashboardStatsCache = new Map<
+    string,
+    {
+      at: number;
+      data: Awaited<ReturnType<CskhService['getDashboardStats']>>;
+    }
+  >();
+  private readonly dashboardHeavyCountsCache = new Map<
+    string,
+    {
+      at: number;
+      data: Awaited<ReturnType<CskhService['getDashboardHeavyStats']>>;
+    }
+  >();
+  private readonly dashboardStatsTtlMs = Number(process.env.CSKH_DASHBOARD_STATS_TTL_MS || 120_000);
+  private readonly dashboardHeavyCountsTtlMs = Number(
+    process.env.CSKH_DASHBOARD_HEAVY_TTL_MS || 600_000,
+  );
+  private readonly adInsightsConvCache = new Map<
+    string,
+    { at: number; data: AdInsightsPayload }
+  >();
+  private readonly pageListLiteCache = new Map<
+    string,
+    { at: number; data: Awaited<ReturnType<CskhService['listPages']>> }
+  >();
+  private readonly pageListLiteCacheTtlMs = Number(process.env.CSKH_PAGE_LIST_LITE_CACHE_MS || 120_000);
+  /** Tổng tin nhắn theo page — đổi chậm, cache để đổi ngày filter không quét lại 300k+ tin. */
+  private readonly pageTotalMsgStatsCache = new Map<
+    string,
+    {
+      at: number;
+      data?: Map<string, number>;
+      bundle?: {
+        convMap: Map<string, number>;
+        unreadMap: Map<string, number>;
+        messageMap: Map<string, number>;
+      };
+    }
+  >();
+  private readonly pageTotalMsgStatsCacheTtlMs = Number(
+    process.env.CSKH_PAGE_TOTAL_MSG_CACHE_MS || 300_000,
+  );
+  /** Thống kê inbound theo ngày — cache ngắn khi user đổi ngày liên tục. */
+  private readonly pageInboundDayCache = new Map<
+    string,
+    { at: number; data: Map<string, number> }
+  >();
+  private readonly pageInboundDayCacheTtlMs = Number(
+    process.env.CSKH_PAGE_INBOUND_DAY_CACHE_MS || 45_000,
+  );
+  private readonly pageAdSpendSyncScheduled = new Map<string, number>();
+  /** null = chưa kiểm tra; false = bảng chưa migrate → bỏ qua mọi sync QC. */
+  private pageAdSpendSchemaAvailable: boolean | null = null;
+
+  private readonly adInsightsConvCacheTtlMs = Number(
+    process.env.CSKH_AD_INSIGHTS_CONV_CACHE_MS || 900_000,
+  );
+  /** null = chưa kiểm tra; false = bảng chưa migrate → fallback COUNT chậm. */
+  private pageMessageTotalsTableAvailable: boolean | null = null;
+
+  private readonly oauthSyncInFlight = new Set<string>();
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiService: AiService,
     private readonly graph: FacebookGraphService,
+    private readonly ads: FacebookAdsService,
+    private readonly graphCoordinator: GraphApiCoordinatorService,
+    @Inject(forwardRef(() => RedisQueueService))
+    private readonly redisQueue: RedisQueueService,
     private readonly config: ConfigService,
+    @Inject(forwardRef(() => CskhInboxService))
     private readonly inboxService: CskhInboxService,
   ) {}
 
-  /** BE restart → job cũ không còn worker, đánh dấu failed để UI không treo. */
+  /** BE restart — hủy job kẹt + xóa hàng đợi audit (chạy trước audit worker). */
   async onModuleInit() {
+    await this.cleanupStuckJobsOnBoot();
+  }
+
+  /** Hủy job audit/monitor đang running + purge Redis queue — tránh quét lại khi restart. */
+  async cleanupStuckJobsOnBoot(): Promise<{ cancelledJobs: number; purgedQueue: number }> {
+    const mode = getCskhRunMode();
     const n = await this.prisma.cskhJobRun.updateMany({
       where: { status: 'running' },
       data: {
@@ -85,9 +174,46 @@ export class CskhService implements OnModuleInit {
         finishedAt: new Date(),
       },
     });
-    if (n.count > 0) {
-      this.logger.warn(`Đã hủy ${n.count} CSKH job kẹt do server restart`);
+    const purgedAudit = await this.redisQueue.purgeAuditQueue();
+    const purgedBackfill = await this.redisQueue.purgeBackfillQueue();
+    const purged = purgedAudit + purgedBackfill;
+    if (n.count > 0 || purged > 0) {
+      this.logger.warn(
+        `Restart (${mode}): hủy ${n.count} job running, xóa ${purgedAudit} audit + ${purgedBackfill} backfill queue item(s)`,
+      );
     }
+
+    if (isCskhApiProcess()) {
+      if (process.env.CSKH_RESUBSCRIBE_ON_BOOT === 'true') {
+        void this.resubscribeAllPagesWebhook().catch((e) => {
+          this.logger.warn(`Resubscribe webhook on boot failed: ${(e as Error).message}`);
+        });
+      }
+    }
+
+    return { cancelledJobs: n.count, purgedQueue: purged };
+  }
+
+  /** Đăng ký lại webhook (subscribed_apps) cho tất cả page đã kết nối. Idempotent. */
+  async resubscribeAllPagesWebhook() {
+    const pages = await this.prisma.facebookCskhConfig.findMany({
+      where: { pageAccessToken: { not: '' } },
+      select: { pageId: true, pageName: true, pageAccessToken: true },
+    });
+    let ok = 0;
+    for (const p of pages) {
+      if (!p.pageAccessToken) continue;
+      try {
+        await this.subscribePageToWebhook(p.pageId, p.pageAccessToken);
+        ok++;
+      } catch (e) {
+        this.logger.warn(`Resubscribe ${p.pageName || p.pageId} lỗi: ${(e as Error).message}`);
+      }
+      // Tránh burst request làm nghẽn DB/API khi server vừa khởi động.
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    this.logger.log(`Resubscribe webhook xong: ${ok}/${pages.length} page (đã bật message_echoes).`);
+    return { total: pages.length, ok };
   }
 
   async cancelRunningJobs(type: 'monitor' | 'audit', reason = 'Đã hủy bởi người dùng', tenantId?: string) {
@@ -100,6 +226,8 @@ export class CskhService implements OnModuleInit {
     for (const j of running) {
       this.activeJobs.delete(j.id);
       if (type === 'audit') {
+        await this.redisQueue.setAuditPauseRequested(j.id);
+        await this.redisQueue.purgeAuditQueueForJobIds([j.id]);
         // Delete all chat audits generated by this cancelled job run to keep DB clean
         try {
           await this.prisma.$executeRaw`
@@ -119,7 +247,7 @@ export class CskhService implements OnModuleInit {
     return result.count;
   }
 
-  /** Tạm dừng audit — chấm xong phần đã quét, lần sau audit cùng ngày sẽ tiếp tục. */
+  /** Tạm dừng audit — lưu phần đã chấm, worker dừng quét/chấm mới ngay. */
   async requestAuditPause(tenantId?: string) {
     const job = await this.findRunningJob('audit', tenantId);
     if (!job) {
@@ -131,27 +259,33 @@ export class CskhService implements OnModuleInit {
     } else {
       this.activeJobs.set(job.id, { pauseRequested: true });
     }
-    await this.updateJobProgress(job.id, { pauseRequested: true });
+    await this.redisQueue.setAuditPauseRequested(job.id);
+    await this.updateJobProgress(job.id, { pauseRequested: true, phase: 'pausing' });
     this.logger.log(`Audit pause requested job=${job.id.slice(0, 8)}`);
     return { paused: true, jobId: job.id };
   }
 
-  /** Job đã bị hủy (status không còn running). */
+  /** Job đã bị hủy hoặc kết thúc (status không còn running). */
   private async isAuditJobCancelled(jobId: string): Promise<boolean> {
-    if (!this.activeJobs.has(jobId)) {
-      const job = await this.prisma.cskhJobRun.findUnique({
-        where: { id: jobId },
-        select: { status: true },
-      });
-      return !job || job.status !== 'running';
+    const job = await this.prisma.cskhJobRun.findUnique({
+      where: { id: jobId },
+      select: { status: true },
+    });
+    if (!job || job.status !== 'running') {
+      this.activeJobs.delete(jobId);
+      await this.redisQueue.clearAuditPauseRequested(jobId);
+      return true;
     }
     return false;
   }
 
-  /** Dừng quét / chấm: tạm dừng hoặc hủy (job không còn running). */
+  /** Dừng quét / chấm: tạm dừng, hủy, hoặc nhường inbox realtime. */
   private async shouldStopAuditJob(jobId: string): Promise<boolean> {
     const mem = this.activeJobs.get(jobId);
-    if (mem && mem.pauseRequested) {
+    if (mem?.pauseRequested) return true;
+    if (await this.redisQueue.isAuditPauseRequested(jobId)) {
+      if (mem) mem.pauseRequested = true;
+      else this.activeJobs.set(jobId, { pauseRequested: true });
       return true;
     }
     const job = await this.prisma.cskhJobRun.findUnique({
@@ -166,9 +300,17 @@ export class CskhService implements OnModuleInit {
     const pauseRequested = Boolean(summary?.pauseRequested);
     if (pauseRequested) {
       if (mem) mem.pauseRequested = true;
+      await this.redisQueue.setAuditPauseRequested(jobId);
       return true;
     }
     return false;
+  }
+
+  /** Audit fetch Graph tạm dừng khi pause; chỉ API dev/all mới nhường inbox hot. */
+  private async shouldAbortAuditFetch(jobId: string): Promise<boolean> {
+    if (await this.shouldStopAuditJob(jobId)) return true;
+    if (!shouldAuditYieldToInbox()) return false;
+    return this.redisQueue.shouldYieldGraphToInbox();
   }
 
   private async loadAuditedConversationKeys(
@@ -278,6 +420,15 @@ export class CskhService implements OnModuleInit {
     const total = Number(summary.total ?? 0);
     const processed = Number(summary.processed ?? 0);
     const fetched = Number(summary.fetched ?? 0);
+    const scanned = Number(summary.scanned ?? 0);
+    const pagesProcessed = Number(summary.pagesProcessed ?? 0);
+    const currentPage = String(summary.currentPage ?? '');
+
+    // Giai đoạn quét (Graph/DB) có thể lâu trước khi fetched tăng — không hủy sớm.
+    if (phase === 'fetch') {
+      if (scanned > 0 || pagesProcessed > 0 || currentPage) return false;
+      if (ageMs < 15 * 60_000) return false;
+    }
 
     // Job audit đang gọi AI — không hủy sớm (AI ~5–8s/conv, DB lưu chậm hơn poll UI).
     if (phase === 'audit' && total > 0) {
@@ -330,7 +481,7 @@ export class CskhService implements OnModuleInit {
     return buildFacebookOAuthUrl(returnUrl?.trim() || this.defaultOAuthReturnUrl(), tenantId);
   }
 
-  async listPages(tenantId?: string, options?: { month?: string }) {
+  async listPages(tenantId?: string, options?: { month?: string; date?: string; lite?: boolean }) {
     type PageListRow = {
       pageId: string;
       pageName: string | null;
@@ -347,43 +498,64 @@ export class CskhService implements OnModuleInit {
     } as const;
 
     const month = options?.month?.trim();
-    const inboundMonth = month && /^\d{4}-\d{2}$/.test(month) ? month : undefined;
+    const date = options?.date?.trim();
+    const inboundDate = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : undefined;
+    const inboundMonth =
+      !inboundDate && month && /^\d{4}-\d{2}$/.test(month) ? month : undefined;
 
     const rows = await this.prisma.facebookCskhConfig.findMany({
       where: tenantId ? { tenantId } : undefined,
       orderBy: [{ enabled: 'desc' }, { pageName: 'asc' }],
       select: pageListSelect,
     });
+
+    const useLite = Boolean(options?.lite) && !inboundMonth && !inboundDate;
+
+    if (useLite) {
+      const cacheKey = tenantId ?? '__all__';
+      const cached = this.pageListLiteCache.get(cacheKey);
+      if (cached && Date.now() - cached.at < this.pageListLiteCacheTtlMs) {
+        return cached.data;
+      }
+      const liteResult = await this.buildLitePageListResponse(tenantId, rows);
+      this.pageListLiteCache.set(cacheKey, { at: Date.now(), data: liteResult });
+      return liteResult;
+    }
+
     const pageIds = rows.map((r) => r.pageId);
 
-    type ConvGroupRow = { pageId: string; _count: { id: number } };
-    const emptyConvGroups: ConvGroupRow[] = [];
+    const oauthPromise = this.prisma.facebookOAuthSession.findFirst({
+      where: tenantId ? { tenantId } : undefined,
+      orderBy: { updatedAt: 'desc' },
+      select: { fbUserId: true, fbUserName: true, tokenExpiresAt: true, updatedAt: true, metadata: true },
+    });
 
-    const [convCounts, unreadCounts, inboundStatsMap, totalMessageStatsMap] = await Promise.all([
+    const [pageStats, inboundStatsMap, oauth] = await Promise.all([
       pageIds.length
-        ? this.prisma.cskhInboxConversation.groupBy({
-            by: ['pageId'],
-            where: { pageId: { in: pageIds } },
-            _count: { id: true },
+        ? this.loadPageStatsBundleCached(tenantId, pageIds, {
+            allowStaleDuringBackfill: true,
           })
-        : Promise.resolve(emptyConvGroups),
-      pageIds.length
-        ? this.prisma.cskhInboxConversation.groupBy({
-            by: ['pageId'],
-            where: { pageId: { in: pageIds }, unreadCount: { gt: 0 } },
-            _count: { id: true },
-          })
-        : Promise.resolve(emptyConvGroups),
+        : Promise.resolve({
+            convMap: new Map<string, number>(),
+            unreadMap: new Map<string, number>(),
+            messageMap: new Map<string, number>(),
+          }),
       inboundMonth && pageIds.length
         ? this.loadPageInboundMessageStats(inboundMonth, pageIds)
-        : Promise.resolve(new Map<string, number>()),
-      pageIds.length
-        ? this.loadPageTotalMessageStats(pageIds)
-        : Promise.resolve(new Map<string, number>()),
+        : inboundDate && pageIds.length
+          ? this.loadPageInboundMessageStatsForRangeCached(
+              tenantId,
+              inboundDate,
+              inboundDate,
+              pageIds,
+            )
+          : Promise.resolve(new Map<string, number>()),
+      oauthPromise,
     ]);
 
-    const convCountMap = new Map(convCounts.map((c) => [c.pageId, c._count.id]));
-    const unreadCountMap = new Map(unreadCounts.map((c) => [c.pageId, c._count.id]));
+    const convCountMap = pageStats.convMap;
+    const unreadCountMap = pageStats.unreadMap;
+    const totalMessageStatsMap = pageStats.messageMap;
 
     const missingPictureIds = rows
       .filter((r) => !this.pagePictureUrl(r.metadata))
@@ -394,14 +566,80 @@ export class CskhService implements OnModuleInit {
       );
     }
 
-    const oauth = await this.prisma.facebookOAuthSession.findFirst({
-      where: tenantId ? { tenantId } : undefined,
-      orderBy: { updatedAt: 'desc' },
-      select: { fbUserId: true, fbUserName: true, tokenExpiresAt: true, updatedAt: true },
-    });
+    const oauthMeta =
+      (oauth?.metadata as {
+        syncStatus?: string;
+        syncError?: string | null;
+        adAccounts?: unknown[];
+        adAccountsCheckedAt?: string;
+        pageCount?: number;
+      } | null) ?? null;
+    const oauthSyncStatus =
+      oauthMeta?.syncStatus === 'running' ||
+      oauthMeta?.syncStatus === 'failed' ||
+      oauthMeta?.syncStatus === 'done'
+        ? oauthMeta.syncStatus
+        : null;
+    const oauthSyncError = oauthMeta?.syncError ?? null;
+
+    let adStats = { adAccountCount: 0, adsReadConnected: false };
+    if (oauth) {
+      const cachedCount = Array.isArray(oauthMeta?.adAccounts) ? oauthMeta.adAccounts.length : 0;
+      if (inboundDate || inboundMonth) {
+        adStats = { adAccountCount: cachedCount, adsReadConnected: cachedCount > 0 };
+      } else if (oauthSyncStatus !== 'running') {
+        adStats = await this.refreshOAuthAdAccountsIfNeeded(oauth.fbUserId);
+      } else {
+        adStats = { adAccountCount: cachedCount, adsReadConnected: cachedCount > 0 };
+      }
+    }
+
+    const adSpendMap =
+      inboundDate && pageIds.length
+        ? await this.loadPageAdSpendCache(inboundDate, pageIds, tenantId)
+        : new Map<string, {
+            spend: number | null;
+            currency: string | null;
+            messagingConversations: number | null;
+            costPerConversation: number | null;
+            adAccountName: string | null;
+            unavailableReason: string | null;
+            syncedAt: Date | null;
+          }>();
+
+    let adSpendSyncPending = false;
+    if (inboundDate && pageIds.length) {
+      adSpendSyncPending = await this.schedulePageAdSpendSyncIfNeeded(
+        inboundDate,
+        tenantId,
+        pageIds,
+        adSpendMap,
+      );
+    }
+
+  let totalAdSpend = 0;
+  let adSpendCurrency: string | null = null;
 
     return {
-      pages: rows.map((row) => ({
+      pages: rows.map((row) => {
+        const ad = inboundDate ? adSpendMap.get(row.pageId) : undefined;
+        const inboundCount =
+          inboundMonth || inboundDate ? inboundStatsMap.get(row.pageId) || 0 : undefined;
+        let adCostPerConversation = ad?.costPerConversation ?? null;
+        if (
+          adCostPerConversation == null &&
+          ad?.spend != null &&
+          ad.spend > 0 &&
+          inboundCount != null &&
+          inboundCount > 0
+        ) {
+          adCostPerConversation = ad.spend / inboundCount;
+        }
+        if (ad?.spend != null && ad.spend > 0) {
+          totalAdSpend += ad.spend;
+          if (!adSpendCurrency && ad.currency) adSpendCurrency = ad.currency;
+        }
+        return {
         pageId: row.pageId,
         pageName: row.pageName,
         enabled: row.enabled,
@@ -410,28 +648,1114 @@ export class CskhService implements OnModuleInit {
         conversationCount: convCountMap.get(row.pageId) || 0,
         messageCount: totalMessageStatsMap.get(row.pageId) || 0,
         unreadConversationCount: unreadCountMap.get(row.pageId) || 0,
-        inboundMessageCount: inboundMonth ? inboundStatsMap.get(row.pageId) || 0 : undefined,
-      })),
+        inboundMessageCount: inboundCount,
+        adSpend: ad?.spend ?? null,
+        adSpendCurrency: ad?.currency ?? null,
+        adMessagingConversations: ad?.messagingConversations ?? null,
+        adCostPerConversation,
+        adAccountName: ad?.adAccountName ?? null,
+        adSpendUnavailableReason: ad?.unavailableReason ?? null,
+        adSpendSyncedAt: ad?.syncedAt?.toISOString() ?? null,
+      };
+      }),
       inboundMonth: inboundMonth
         ? {
             month: inboundMonth,
             totalInbound: Array.from(inboundStatsMap.values()).reduce((sum, n) => sum + n, 0),
           }
         : undefined,
+      inboundDay: inboundDate
+        ? {
+            date: inboundDate,
+            totalInbound: Array.from(inboundStatsMap.values()).reduce((sum, n) => sum + n, 0),
+            totalAdSpend: totalAdSpend > 0 ? totalAdSpend : null,
+            adSpendCurrency,
+            adSpendSyncPending,
+          }
+        : undefined,
       statsMeta: inboundMonth
         ? { inboundMonthStats: true as const, requestedMonth: inboundMonth, buildTag: 'inbound-month-v1' }
-        : undefined,
+        : inboundDate
+          ? { inboundDayStats: true as const, requestedDate: inboundDate, buildTag: 'inbound-day-v1' }
+          : undefined,
       oauthConnected: Boolean(oauth),
       oauthUser: oauth?.fbUserName || oauth?.fbUserId || null,
       oauthUpdatedAt: oauth?.updatedAt || null,
       oauthExpiresAt: oauth?.tokenExpiresAt || null,
+      oauthSyncStatus,
+      oauthSyncError,
+      adsReadConnected: adStats.adsReadConnected,
+      adAccountCount: adStats.adAccountCount,
     };
   }
 
-  /** Số tin nhắn khách gửi đến (inbound) theo page trong tháng lịch VN (UTC+7). */
-  private async loadPageInboundMessageStats(month: string, pageIds: string[]) {
+  /** Danh sách Page nhanh cho dropdown inbox — không quét thống kê tin / OAuth Meta. */
+  private async buildLitePageListResponse(
+    tenantId: string | undefined,
+    rows: Array<{
+      pageId: string;
+      pageName: string | null;
+      enabled: boolean;
+      updatedAt: Date;
+      metadata: Prisma.JsonValue | null;
+    }>,
+  ) {
+    const oauth = await this.prisma.facebookOAuthSession.findFirst({
+      where: tenantId ? { tenantId } : undefined,
+      orderBy: { updatedAt: 'desc' },
+      select: { fbUserId: true, fbUserName: true, tokenExpiresAt: true, updatedAt: true, metadata: true },
+    });
+    const oauthMeta =
+      (oauth?.metadata as {
+        syncStatus?: string;
+        syncError?: string | null;
+        adAccounts?: unknown[];
+      } | null) ?? null;
+    const oauthSyncStatus =
+      oauthMeta?.syncStatus === 'running' ||
+      oauthMeta?.syncStatus === 'failed' ||
+      oauthMeta?.syncStatus === 'done'
+        ? oauthMeta.syncStatus
+        : null;
+    const cachedAdCount = Array.isArray(oauthMeta?.adAccounts) ? oauthMeta.adAccounts.length : 0;
+
+    return {
+      pages: rows.map((row) => ({
+        pageId: row.pageId,
+        pageName: row.pageName,
+        enabled: row.enabled,
+        updatedAt: row.updatedAt,
+        pagePictureUrl: this.pagePictureUrl(row.metadata),
+      })),
+      oauthConnected: Boolean(oauth),
+      oauthUser: oauth?.fbUserName || oauth?.fbUserId || null,
+      oauthUpdatedAt: oauth?.updatedAt || null,
+      oauthExpiresAt: oauth?.tokenExpiresAt || null,
+      oauthSyncStatus,
+      oauthSyncError: oauthMeta?.syncError ?? null,
+      adsReadConnected: cachedAdCount > 0,
+      adAccountCount: cachedAdCount,
+    };
+  }
+
+  private invalidatePageListLiteCache(tenantId?: string) {
+    if (tenantId) {
+      this.pageListLiteCache.delete(tenantId);
+      return;
+    }
+    this.pageListLiteCache.clear();
+  }
+
+  /** Xóa cache thống kê Page/Kênh — local + Redis (worker → API). */
+  async bumpPageStatsCaches(tenantId?: string, options?: { inboundOnly?: boolean }) {
+    if (tenantId) {
+      for (const key of [...this.pageInboundDayCache.keys()]) {
+        if (key.startsWith(`${tenantId}:`)) {
+          this.pageInboundDayCache.delete(key);
+        }
+      }
+    } else {
+      this.pageInboundDayCache.clear();
+    }
+    if (!options?.inboundOnly) {
+      this.pageTotalMsgStatsCache.clear();
+    }
+    await this.redisQueue.bumpPageStatsCache(tenantId);
+  }
+
+  /** @deprecated use bumpPageStatsCaches */
+  invalidatePageStatsCaches(tenantId?: string) {
+    void this.bumpPageStatsCaches(tenantId);
+  }
+
+  /** Đồng bộ chi tiêu QC 1 kênh vừa quét xong (hôm qua + hôm nay VN). */
+  async syncPageAdSpendAfterBackfillPage(pageId: string, tenantId?: string) {
+    if (!(await this.isPageAdSpendSchemaAvailable())) return;
+    const today = this.vietnamCalendarDate(0);
+    const yesterday = this.vietnamCalendarDate(-1);
+    const delayMs = Number(process.env.CSKH_PAGE_AD_SYNC_DELAY_MS || 1_200);
+    for (const statDate of [yesterday, today]) {
+      try {
+        const res = await this.syncPageAdSpendDaily(pageId, statDate, tenantId);
+        if (res.ok) {
+          this.logger.log(`[backfill] QC ${pageId} ${statDate}: spend synced`);
+        }
+      } catch (e) {
+        this.logger.warn(
+          `[backfill] QC ${pageId} ${statDate}: ${(e as Error).message}`,
+        );
+      }
+      if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+    }
+    await this.bumpPageStatsCaches(tenantId, { inboundOnly: true });
+  }
+
+  /** Kiểm tra bảng cskh_page_ad_spend_daily — cache kết quả. */
+  async isPageAdSpendSchemaAvailable(): Promise<boolean> {
+    if (this.pageAdSpendSchemaAvailable != null) return this.pageAdSpendSchemaAvailable;
+    try {
+      await this.prisma.cskhPageAdSpendDaily.findFirst({ select: { id: true } });
+      this.pageAdSpendSchemaAvailable = true;
+    } catch (e) {
+      if (this.isPageAdSpendSchemaMissing(e)) {
+        this.pageAdSpendSchemaAvailable = false;
+        this.logger.warn(
+          'cskh_page_ad_spend_daily chưa migrate — tắt đồng bộ chi phí QC (chạy prisma/manual-page-ad-spend.sql)',
+        );
+      } else {
+        throw e;
+      }
+    }
+    return this.pageAdSpendSchemaAvailable;
+  }
+
+  private async isInboxBackfillRunning(tenantId?: string): Promise<boolean> {
+    const job = await this.prisma.cskhJobRun.findFirst({
+      where: {
+        type: 'inbox-backfill',
+        status: 'running',
+        ...(tenantId ? { tenantId } : {}),
+      },
+      select: { id: true },
+    });
+    return Boolean(job);
+  }
+
+  /** Ngày lịch VN (YYYY-MM-DD), offsetDays âm = hôm qua... */
+  vietnamCalendarDate(offsetDays = 0): string {
+    const ts = Date.now() + offsetDays * 86_400_000;
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date(ts));
+  }
+
+  private async loadPageAdSpendCache(statDate: string, pageIds: string[], tenantId?: string) {
+    if (!(await this.isPageAdSpendSchemaAvailable())) {
+      return new Map();
+    }
+    if (!pageIds.length) return new Map<string, {
+      spend: number | null;
+      currency: string | null;
+      messagingConversations: number | null;
+      costPerConversation: number | null;
+      adAccountName: string | null;
+      unavailableReason: string | null;
+      syncedAt: Date | null;
+    }>();
+    try {
+      const rows = await this.prisma.cskhPageAdSpendDaily.findMany({
+        where: {
+          statDate,
+          pageId: { in: pageIds },
+          ...(tenantId ? { tenantId } : {}),
+        },
+      });
+      return new Map(
+        rows.map((r) => [
+          r.pageId,
+          {
+            spend: r.spend,
+            currency: r.currency,
+            messagingConversations: r.messagingConversations,
+            costPerConversation: r.costPerConversation,
+            adAccountName: r.adAccountName,
+            unavailableReason: r.unavailableReason,
+            syncedAt: r.syncedAt,
+          },
+        ]),
+      );
+    } catch (e) {
+      if (this.isPageAdSpendSchemaMissing(e)) {
+        this.logger.warn('cskh_page_ad_spend_daily chưa migrate — bỏ qua chi phí QC Page/Kênh');
+        return new Map();
+      }
+      throw e;
+    }
+  }
+
+  private isPageAdSpendSchemaMissing(e: unknown): boolean {
+    const code = (e as { code?: string })?.code;
+    return code === 'P2021' || /cskh_page_ad_spend_daily/i.test((e as Error).message || '');
+  }
+
+  /** Đồng bộ chi tiêu QC 1 Page / 1 ngày từ Marketing API → DB cache. */
+  async syncPageAdSpendDaily(pageId: string, statDate: string, tenantId?: string) {
+    if (!(await this.isPageAdSpendSchemaAvailable())) {
+      return { pageId, statDate, ok: false, reason: 'schema_missing' as const };
+    }
+
+    const upsertEmpty = async (unavailableReason: string) => {
+      try {
+        await this.prisma.cskhPageAdSpendDaily.upsert({
+          where: { pageId_statDate: { pageId, statDate } },
+          create: {
+            pageId,
+            statDate,
+            tenantId: tenantId ?? null,
+            unavailableReason,
+          },
+          update: {
+            spend: null,
+            currency: null,
+            messagingConversations: null,
+            costPerConversation: null,
+            adAccountId: null,
+            adAccountName: null,
+            unavailableReason,
+            syncedAt: new Date(),
+          },
+        });
+      } catch (e) {
+        if (this.isPageAdSpendSchemaMissing(e)) return;
+        throw e;
+      }
+    };
+
+    const session = await this.resolveOAuthSessionForPage(pageId, tenantId);
+    if (!session?.userAccessToken) {
+      await upsertEmpty('oauth_required');
+      return { pageId, statDate, ok: false, reason: 'oauth_required' as const };
+    }
+
+    const oauthMeta =
+      (session.metadata as { adAccounts?: Array<{ id: string; name?: string }> } | null) ?? null;
+    let activeAccounts: Array<{ id: string; name?: string }> = [];
+    if (Array.isArray(oauthMeta?.adAccounts) && oauthMeta.adAccounts.length) {
+      activeAccounts = oauthMeta.adAccounts;
+    } else {
+      try {
+        activeAccounts = await this.ads.fetchAdAccounts(session.userAccessToken);
+      } catch {
+        await upsertEmpty('ads_read_missing');
+        return { pageId, statDate, ok: false, reason: 'ads_read_missing' as const };
+      }
+    }
+    if (!activeAccounts.length) {
+      await upsertEmpty('no_ad_accounts');
+      return { pageId, statDate, ok: false, reason: 'no_ad_accounts' as const };
+    }
+
+    const pageAccounts = await this.ads.filterAdAccountsForPage(
+      pageId,
+      session.userAccessToken,
+      activeAccounts.slice(0, 3),
+    );
+    const accountsToTry = pageAccounts.length
+      ? pageAccounts
+      : activeAccounts.slice(0, 2);
+
+    let best: Awaited<ReturnType<FacebookAdsService['fetchPageMessagingInsights']>> = null;
+    for (const account of accountsToTry.slice(0, 3)) {
+      const est = await this.ads.fetchPageMessagingInsights(
+        account,
+        pageId,
+        session.userAccessToken,
+        { since: statDate, until: statDate },
+      );
+      if (!est) continue;
+      if (!best || (est.spend ?? 0) > (best.spend ?? 0)) best = est;
+      if ((est.spend ?? 0) > 0) break;
+    }
+
+    if (!best || (best.spend == null && best.messagingConversations == null)) {
+      await upsertEmpty('no_ads_for_page');
+      return { pageId, statDate, ok: false, reason: 'no_ads_for_page' as const };
+    }
+
+    try {
+      await this.prisma.cskhPageAdSpendDaily.upsert({
+        where: { pageId_statDate: { pageId, statDate } },
+        create: {
+          pageId,
+          statDate,
+          tenantId: tenantId ?? null,
+          spend: best.spend,
+          currency: best.currency,
+          messagingConversations: best.messagingConversations,
+          costPerConversation: best.costPerConversation,
+          adAccountId: best.adAccountId,
+          adAccountName: best.adAccountName,
+          unavailableReason: null,
+        },
+        update: {
+          spend: best.spend,
+          currency: best.currency,
+          messagingConversations: best.messagingConversations,
+          costPerConversation: best.costPerConversation,
+          adAccountId: best.adAccountId,
+          adAccountName: best.adAccountName,
+          unavailableReason: null,
+          syncedAt: new Date(),
+        },
+      });
+    } catch (e) {
+      if (this.isPageAdSpendSchemaMissing(e)) {
+        return { pageId, statDate, ok: false, reason: 'schema_missing' as const };
+      }
+      throw e;
+    }
+
+    return {
+      pageId,
+      statDate,
+      ok: true,
+      spend: best.spend,
+      currency: best.currency,
+    };
+  }
+
+  /** Cron / nút đồng bộ — quét chi tiêu QC cho mọi kênh bật. */
+  async syncAllPagesAdSpend(statDates: string[], tenantId?: string) {
+    if (!(await this.isPageAdSpendSchemaAvailable())) {
+      return { synced: 0, pages: 0, dates: [] as string[] };
+    }
+    if (await this.isInboxBackfillRunning(tenantId)) {
+      this.logger.log('[page-ad-spend] Bỏ qua sync — đang có quét đầy đủ inbox');
+      return { synced: 0, pages: 0, dates: statDates };
+    }
+
+    const uniqueDates = [...new Set(statDates.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)))];
+    if (!uniqueDates.length) {
+      return { synced: 0, pages: 0, dates: [] as string[] };
+    }
+
+    const pages = await this.prisma.facebookCskhConfig.findMany({
+      where: { enabled: true, ...(tenantId ? { tenantId } : {}) },
+      select: { pageId: true, pageName: true },
+      orderBy: { pageName: 'asc' },
+    });
+
+    const delayMs = Number(process.env.CSKH_PAGE_AD_SYNC_DELAY_MS || 1_200);
+    let synced = 0;
+
+    for (const statDate of uniqueDates) {
+      for (const page of pages) {
+        try {
+          const res = await this.syncPageAdSpendDaily(page.pageId, statDate, tenantId);
+          if (res.ok) synced++;
+        } catch (e) {
+          this.logger.warn(
+            `syncPageAdSpendDaily ${page.pageName || page.pageId} ${statDate}: ${(e as Error).message}`,
+          );
+        }
+        if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+
+    return { synced, pages: pages.length, dates: uniqueDates };
+  }
+
+  /** Kiểm tra / làm mới danh sách tài khoản QC từ token OAuth (dùng khi load Cài đặt). */
+  private async refreshOAuthAdAccountsIfNeeded(fbUserId: string): Promise<{
+    adAccountCount: number;
+    adsReadConnected: boolean;
+  }> {
+    const session = await this.prisma.facebookOAuthSession.findUnique({
+      where: { fbUserId },
+      select: { fbUserId: true, userAccessToken: true, metadata: true },
+    });
+    if (!session?.userAccessToken) {
+      return { adAccountCount: 0, adsReadConnected: false };
+    }
+
+    const meta =
+      (session.metadata as {
+        adAccounts?: unknown[];
+        adAccountsCheckedAt?: string;
+        pageCount?: number;
+      } | null) ?? null;
+    const cachedCount = Array.isArray(meta?.adAccounts) ? meta.adAccounts.length : 0;
+    const checkedAt = meta?.adAccountsCheckedAt ? new Date(meta.adAccountsCheckedAt).getTime() : 0;
+    const stale = !checkedAt || Date.now() - checkedAt > 3_600_000;
+    if (cachedCount > 0 && !stale) {
+      return { adAccountCount: cachedCount, adsReadConnected: true };
+    }
+
+    try {
+      const adAccounts = await this.ads.fetchAdAccounts(session.userAccessToken);
+      await this.prisma.facebookOAuthSession.update({
+        where: { fbUserId: session.fbUserId },
+        data: {
+          metadata: {
+            ...(meta ?? {}),
+            adAccounts,
+            adAccountsCheckedAt: new Date().toISOString(),
+          } as Prisma.InputJsonValue,
+        },
+      });
+      return { adAccountCount: adAccounts.length, adsReadConnected: adAccounts.length > 0 };
+    } catch (e) {
+      this.logger.warn(
+        `refreshOAuthAdAccountsIfNeeded ${fbUserId}: ${(e as Error).message}`,
+      );
+      return { adAccountCount: cachedCount, adsReadConnected: cachedCount > 0 };
+    }
+  }
+
+  /** OAuth token đúng với Page — ưu tiên session có QC gán Page. */
+  private async resolveOAuthSessionForPage(pageId: string, tenantId?: string) {
+    const config = await this.prisma.facebookCskhConfig.findFirst({
+      where: tenantId ? { pageId, tenantId } : { pageId },
+      select: { metadata: true },
+    });
+    const oauthFbUserId = (config?.metadata as { oauthFbUserId?: string } | null)?.oauthFbUserId;
+
+    const candidates = await this.prisma.facebookOAuthSession.findMany({
+      where: tenantId ? { tenantId } : undefined,
+      orderBy: { updatedAt: 'desc' },
+      take: 5,
+    });
+
+    if (oauthFbUserId) {
+      const pinned = candidates.find((s) => s.fbUserId === oauthFbUserId) ??
+        (await this.prisma.facebookOAuthSession.findUnique({ where: { fbUserId: oauthFbUserId } }));
+      if (pinned?.userAccessToken) {
+        candidates.unshift(pinned);
+      }
+    }
+
+    const seen = new Set<string>();
+    for (const session of candidates) {
+      if (!session?.userAccessToken || seen.has(session.fbUserId)) continue;
+      seen.add(session.fbUserId);
+      let accounts: Array<{ id: string; name?: string }> = [];
+      const meta =
+        (session.metadata as { adAccounts?: Array<{ id: string; name?: string }> } | null) ?? null;
+      if (Array.isArray(meta?.adAccounts) && meta.adAccounts.length) {
+        accounts = meta.adAccounts;
+      } else {
+        try {
+          accounts = await this.ads.fetchAdAccounts(session.userAccessToken);
+        } catch {
+          continue;
+        }
+      }
+      if (!accounts.length) continue;
+      const linked = await this.ads.filterAdAccountsForPage(
+        pageId,
+        session.userAccessToken,
+        accounts.slice(0, 6),
+      );
+      if (linked.length) return session;
+    }
+
+    return candidates.find((s) => s.userAccessToken) ?? null;
+  }
+
+  /** Thử lấy ad_id từ referral trên tin Graph (webhook cũ / heuristic không lưu ad_id). */
+  private async tryResolveConversationAdId(conv: {
+    id: string;
+    pageId: string;
+    adId: string | null;
+  }): Promise<string | null> {
+    if (conv.adId) return conv.adId;
+
+    const config = await this.prisma.facebookCskhConfig.findFirst({
+      where: { pageId: conv.pageId },
+      select: { pageAccessToken: true },
+    });
+    const token = config?.pageAccessToken?.trim();
+    if (!token) return null;
+
+    const messages = await this.prisma.cskhInboxMessage.findMany({
+      where: { conversationId: conv.id, fbMessageId: { not: null } },
+      orderBy: { sentAt: 'asc' },
+      take: 8,
+      select: { fbMessageId: true },
+    });
+
+    for (const msg of messages) {
+      const fbId = msg.fbMessageId?.trim();
+      if (!fbId?.startsWith('m_')) continue;
+      try {
+        const data = await this.graph.graphRequest<{
+          referral?: {
+            source?: string;
+            ad_id?: string;
+            ads_context_data?: { ad_title?: string };
+          };
+        }>(`/${fbId}`, token, { fields: 'referral{source,ad_id,ads_context_data{ad_title}}' });
+        const parsed = parseWebhookReferral(data.referral);
+        if (!parsed.adId) continue;
+        await this.prisma.cskhInboxConversation.update({
+          where: { id: conv.id },
+          data: {
+            adId: parsed.adId,
+            adTitle: parsed.adTitle ?? undefined,
+            referralSource: parsed.referralSource ?? 'ADS',
+            fromAd: true,
+            referralAt: new Date(),
+          },
+        });
+        return parsed.adId;
+      } catch (e) {
+        this.logger.debug(
+          `tryResolveConversationAdId ${conv.id} msg=${fbId}: ${(e as Error).message}`,
+        );
+      }
+    }
+    return null;
+  }
+
+  /** Chi phí QC ước tính cho hội thoại ads — cần ads_read + ad_id từ webhook. */
+  async getConversationAdInsights(conversationId: string, tenantId?: string): Promise<AdInsightsPayload> {
+    const cacheKey = `${tenantId ?? '__all__'}:${conversationId}`;
+    const cached = this.adInsightsConvCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < this.adInsightsConvCacheTtlMs) {
+      return cached.data;
+    }
+
+    const result = await this.loadConversationAdInsights(conversationId, tenantId);
+    this.adInsightsConvCache.set(cacheKey, { at: Date.now(), data: result });
+    return result;
+  }
+
+  private async loadConversationAdInsights(
+    conversationId: string,
+    tenantId?: string,
+  ): Promise<AdInsightsPayload> {
+    const conv = await findInboxConversationById(this.prisma, conversationId, tenantId);
+    if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
+
+    const empty = (reason: string): AdInsightsPayload => ({
+      adId: conv.adId ?? '',
+      adName: conv.adTitle,
+      adsetName: null,
+      campaignName: null,
+      currency: null,
+      spend: null,
+      impressions: null,
+      clicks: null,
+      messagingConversations: null,
+      costPerConversation: null,
+      dateStart: null,
+      dateStop: null,
+      estimatedForThisConversation: null,
+      localConversationCount: 0,
+      unavailableReason: reason,
+    });
+
+    if (!conv.fromAd && conv.referralSource !== 'HEURISTIC') return empty('not_from_ad');
+
+    const session = await this.resolveOAuthSessionForPage(conv.pageId, tenantId);
+    if (!session?.userAccessToken) return empty('oauth_required');
+
+    let effectiveAdId = conv.adId;
+    if (!effectiveAdId && process.env.CSKH_AD_RESOLVE_ON_READ === 'true') {
+      effectiveAdId = await this.tryResolveConversationAdId(conv);
+    }
+
+    if (effectiveAdId) {
+      const referralAt = conv.referralAt ? new Date(conv.referralAt) : null;
+      const since = referralAt ? new Date(referralAt.getTime() - 7 * 86_400_000) : undefined;
+      const until = referralAt ? new Date(referralAt.getTime() + 7 * 86_400_000) : undefined;
+
+      const localConversationCount = await this.prisma.cskhInboxConversation.count({
+        where: { adId: effectiveAdId, ...(tenantId ? { tenantId } : {}) },
+      });
+
+      try {
+        const insights = await this.ads.fetchAdInsights(effectiveAdId, session.userAccessToken, {
+          since,
+          until,
+        });
+        const estimatedForThisConversation =
+          insights.costPerConversation ??
+          (insights.spend != null && localConversationCount > 0
+            ? insights.spend / localConversationCount
+            : null);
+
+        return {
+          ...insights,
+          adId: effectiveAdId,
+          adName: insights.adName ?? conv.adTitle,
+          localConversationCount,
+          estimatedForThisConversation,
+          unavailableReason: null,
+          insightsScope: 'ad',
+        };
+      } catch (e) {
+        const msg = (e as Error).message || '';
+        const reason =
+          /ads_read|permission|OAuthException/i.test(msg) ? 'ads_read_missing' : 'api_error';
+        this.logger.warn(`getConversationAdInsights ${conversationId}: ${msg}`);
+        return {
+          ...empty(reason),
+          adId: effectiveAdId,
+          adName: conv.adTitle,
+          localConversationCount,
+        };
+      }
+    }
+
+    // Không có ad_id — chỉ ước tính theo QC của Page này (không lấy camp/chi tiêu toàn tài khoản)
+    const oauthMeta =
+      (session.metadata as { adAccounts?: Array<{ id: string; name?: string }> } | null) ?? null;
+
+    let activeAccounts: Array<{ id: string; name?: string; account_status?: number }> = [];
+    if (Array.isArray(oauthMeta?.adAccounts) && oauthMeta.adAccounts.length) {
+      activeAccounts = oauthMeta.adAccounts.map((a) => ({ id: a.id, name: a.name }));
+    } else {
+      try {
+        activeAccounts = await this.ads.fetchAdAccounts(session.userAccessToken);
+      } catch (e) {
+        const msg = (e as Error).message || '';
+        if (/ads_read|permission|OAuthException/i.test(msg)) {
+          return empty('ads_read_missing');
+        }
+      }
+    }
+
+    const pageAccounts = await this.ads.filterAdAccountsForPage(
+      conv.pageId,
+      session.userAccessToken,
+      activeAccounts.filter((a) => a.id).slice(0, 8) as Array<{
+        id: string;
+        name?: string;
+        account_status?: number;
+      }>,
+    );
+
+    let accountsToTry =
+      pageAccounts.length > 0
+        ? pageAccounts
+        : activeAccounts.filter((a) => a.id).slice(0, 10);
+
+    if (!accountsToTry.length) {
+      return {
+        ...empty('no_ad_accounts'),
+        estimateNote:
+          'Chưa thấy tài khoản QC trên OAuth. Vào Cài đặt → OAuth lại bằng admin Business Manager có quyền ads_read trên tài khoản chạy ads cho Page này.',
+      };
+    }
+
+    // Ưu tiên tài khoản đã lọc theo Page — bỏ qua countPageAds (chậm) khi đã có danh sách
+    if (pageAccounts.length > 0) {
+      accountsToTry = pageAccounts;
+    } else {
+      const scored = await Promise.all(
+        accountsToTry.slice(0, 4).map(async (account) => ({
+          account,
+          pageAdCount: account.id
+            ? await this.ads.countPageAds(account.id, conv.pageId, session.userAccessToken)
+            : 0,
+        })),
+      );
+      accountsToTry = scored
+        .sort((a, b) => b.pageAdCount - a.pageAdCount)
+        .map((s) => s.account);
+    }
+
+    const usedPageFilterFallback = pageAccounts.length === 0 && accountsToTry.length > 0;
+    const pageFallbackNote = usedPageFilterFallback
+      ? ' Meta không trả danh sách Page↔QC — đang quét từng tài khoản OAuth.'
+      : '';
+
+    type PageEst = Awaited<ReturnType<FacebookAdsService['fetchPageMessagingInsights']>>;
+    const insightResults = await Promise.all(
+      accountsToTry.slice(0, 3).map((account) =>
+        this.ads.fetchPageMessagingInsights(account, conv.pageId, session.userAccessToken),
+      ),
+    );
+    let pageEstimate: PageEst = null;
+    let bestPartial: PageEst = null;
+    for (const est of insightResults) {
+      if (!est) continue;
+      if (est.costPerConversation != null) {
+        pageEstimate = est;
+        break;
+      }
+      if (
+        est.spend != null &&
+        est.spend > 0 &&
+        (!bestPartial || (bestPartial.spend ?? 0) < est.spend)
+      ) {
+        bestPartial = est;
+      }
+    }
+
+    if (!pageEstimate?.costPerConversation && bestPartial) {
+      pageEstimate = bestPartial;
+    }
+
+    // Ưu tiên chi phí theo chiến dịch (khớp Ads Manager) thay vì TB cả Page
+    if (pageEstimate?.campaignName && pageEstimate.adAccountId) {
+      const campaignEst = await this.ads.fetchCampaignMessagingInsights(
+        {
+          id: pageEstimate.adAccountId,
+          name: pageEstimate.adAccountName ?? undefined,
+        },
+        pageEstimate.campaignName,
+        session.userAccessToken,
+      );
+      if (campaignEst?.costPerConversation != null) {
+        const displayAdName = conv.adTitle?.trim() || pageEstimate.adName || null;
+        return {
+          adId: '',
+          adName: displayAdName,
+          adsetName: campaignEst.adsetName ?? pageEstimate.adsetName,
+          campaignName: campaignEst.campaignName ?? pageEstimate.campaignName,
+          currency: campaignEst.currency,
+          spend: campaignEst.spend,
+          impressions: null,
+          clicks: null,
+          messagingConversations: campaignEst.messagingConversations,
+          costPerConversation: campaignEst.costPerConversation,
+          dateStart: campaignEst.dateStart,
+          dateStop: campaignEst.dateStop,
+          estimatedForThisConversation: campaignEst.costPerConversation,
+          localConversationCount: 0,
+          unavailableReason: null,
+          isPageLevelEstimate: false,
+          insightsScope: 'campaign',
+          connectedAdAccountId: campaignEst.adAccountId,
+          connectedAdAccountName: campaignEst.adAccountName,
+          estimateNote: null,
+        };
+      }
+    }
+
+    if (pageEstimate?.costPerConversation != null) {
+      const displayAdName = conv.adTitle?.trim() || pageEstimate.adName || null;
+      const displayCampaign = pageEstimate.campaignName || null;
+      const displayAdset = pageEstimate.adsetName || null;
+      return {
+        adId: '',
+        adName: displayAdName,
+        adsetName: displayAdset,
+        campaignName: displayCampaign,
+        currency: pageEstimate.currency,
+        spend: pageEstimate.spend,
+        impressions: null,
+        clicks: null,
+        messagingConversations: pageEstimate.messagingConversations,
+        costPerConversation: pageEstimate.costPerConversation,
+        dateStart: pageEstimate.dateStart,
+        dateStop: pageEstimate.dateStop,
+        estimatedForThisConversation: pageEstimate.costPerConversation,
+        localConversationCount: 0,
+        unavailableReason: null,
+        isPageLevelEstimate: true,
+        insightsScope: 'page',
+        connectedAdAccountId: pageEstimate.adAccountId,
+        connectedAdAccountName: pageEstimate.adAccountName,
+        estimateNote: null,
+        topCampaigns: pageEstimate.topCampaigns?.length
+          ? pageEstimate.topCampaigns
+          : displayCampaign
+            ? [{ campaignName: displayCampaign, spend: pageEstimate.spend, messagingConversations: pageEstimate.messagingConversations }]
+            : undefined,
+      };
+    }
+
+    if (pageEstimate?.spend != null && pageEstimate.spend > 0) {
+      return {
+        adId: '',
+        adName: conv.adTitle,
+        adsetName: null,
+        campaignName: null,
+        currency: pageEstimate.currency,
+        spend: null,
+        impressions: null,
+        clicks: null,
+        messagingConversations: pageEstimate.messagingConversations,
+        costPerConversation: null,
+        dateStart: pageEstimate.dateStart,
+        dateStop: pageEstimate.dateStop,
+        estimatedForThisConversation: null,
+        localConversationCount: 0,
+        unavailableReason: null,
+        isPageLevelEstimate: true,
+        insightsScope: 'page',
+        connectedAdAccountId: pageEstimate.adAccountId,
+        connectedAdAccountName: pageEstimate.adAccountName,
+        estimateNote:
+          'Page có chi tiêu QC nhưng Meta chưa trả số hội thoại messaging (30 ngày) — không tính được chi phí/tin.',
+      };
+    }
+
+    return {
+      ...empty('no_messaging_insights'),
+      connectedAdAccountId: accountsToTry[0]?.id ?? null,
+      connectedAdAccountName: accountsToTry[0]?.name ?? null,
+      estimateNote: await this.buildNoMessagingInsightsNote(
+        conv.pageId,
+        session.userAccessToken,
+        accountsToTry.slice(0, 6) as Array<{ id: string; name?: string }>,
+        pageFallbackNote,
+      ),
+    };
+  }
+
+  /** Gợi ý OAuth khi không lấy được insights — phân biệt sai tài khoản vs Meta chưa trả số. */
+  private async buildNoMessagingInsightsNote(
+    pageId: string,
+    userAccessToken: string,
+    accounts: Array<{ id: string; name?: string }>,
+    fallbackNote: string,
+  ): Promise<string> {
+    const withAds: string[] = [];
+    for (const account of accounts) {
+      if (!account.id) continue;
+      try {
+        const n = await this.ads.countPageAds(account.id, pageId, userAccessToken);
+        if (n > 0) withAds.push(account.name || account.id);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    if (!withAds.length) {
+      const names = accounts.map((a) => a.name || a.id).filter(Boolean).slice(0, 3).join(', ');
+      return (
+        `Không tìm thấy QC nào của Page này trên tài khoản OAuth${names ? ` (${names})` : ''}.` +
+        ` Cần OAuth lại bằng admin BM — chọn đúng tài khoản QC đang chạy ads cho Page.${fallbackNote}`
+      );
+    }
+
+    return (
+      `Đã thấy QC của Page trên ${withAds.join(', ')} nhưng Meta chưa trả Insights messaging (30 ngày).` +
+      ` Tin cũ không có mã QC nên không đối chiếu camp cụ thể.${fallbackNote}` +
+      ` Thử OAuth lại nếu ads chạy trên tài khoản QC khác.`
+    );
+  }
+
+  /** Số tin nhắn khách gửi đến (inbound) theo page trong khoảng ngày lịch VN (UTC+7). */
+  private async loadPageInboundMessageStatsForRangeCached(
+    tenantId: string | undefined,
+    from: string,
+    to: string,
+    pageIds: string[],
+  ) {
     if (!pageIds.length) return new Map<string, number>();
-    const { from, to } = this.monthRangeDays(month);
+    if (from === to) {
+      const cacheKey = `${tenantId ?? '__all__'}:${from}`;
+      const bustAt = await this.redisQueue.getPageStatsCacheBustAt(tenantId);
+      const cached = this.pageInboundDayCache.get(cacheKey);
+      if (
+        cached &&
+        cached.at >= bustAt &&
+        Date.now() - cached.at < this.pageInboundDayCacheTtlMs
+      ) {
+        return cached.data;
+      }
+      const data = await this.loadPageInboundMessageStatsForRange(from, to, pageIds);
+      this.pageInboundDayCache.set(cacheKey, { at: Date.now(), data });
+      return data;
+    }
+    return this.loadPageInboundMessageStatsForRange(from, to, pageIds);
+  }
+
+  private async loadPageStatsFromSummary(pageIds: string[]) {
+    type Row = {
+      pageId: string;
+      messageCount: number;
+      conversationCount: number;
+      unreadConversationCount: number;
+    };
+    const rows = await this.prisma.$queryRaw<Row[]>`
+      SELECT
+        page_id AS "pageId",
+        message_count::int AS "messageCount",
+        conversation_count::int AS "conversationCount",
+        unread_conversation_count::int AS "unreadConversationCount"
+      FROM cskh_page_message_totals
+      WHERE page_id IN (${Prisma.join(pageIds)})
+    `;
+    return {
+      convMap: new Map(rows.map((r) => [r.pageId, r.conversationCount])),
+      unreadMap: new Map(rows.map((r) => [r.pageId, r.unreadConversationCount])),
+      messageMap: new Map(rows.map((r) => [r.pageId, r.messageCount])),
+    };
+  }
+
+  private async loadPageStatsBundleCached(
+    tenantId: string | undefined,
+    pageIds: string[],
+    options?: { allowStaleDuringBackfill?: boolean },
+  ) {
+    const empty = {
+      convMap: new Map<string, number>(),
+      unreadMap: new Map<string, number>(),
+      messageMap: new Map<string, number>(),
+    };
+    if (!pageIds.length) return empty;
+
+    const cacheKey = `${tenantId ?? '__all__'}:bundle:${pageIds.length}`;
+    const bustAt = await this.redisQueue.getPageStatsCacheBustAt(tenantId);
+    const cached = this.pageTotalMsgStatsCache.get(cacheKey);
+    const fresh =
+      cached &&
+      cached.at >= bustAt &&
+      Date.now() - cached.at < this.pageTotalMsgStatsCacheTtlMs;
+    if (fresh && cached.bundle) return cached.bundle;
+
+    if (
+      options?.allowStaleDuringBackfill &&
+      cached?.bundle &&
+      (await this.isInboxBackfillRunning(tenantId))
+    ) {
+      return cached.bundle;
+    }
+
+    if (await this.isPageMessageTotalsTableAvailable()) {
+      const summary = await this.loadPageStatsFromSummary(pageIds);
+      if (summary.messageMap.size > 0) {
+        const found = new Set(summary.messageMap.keys());
+        for (const id of pageIds) {
+          if (!summary.messageMap.has(id)) summary.messageMap.set(id, 0);
+          if (!summary.convMap.has(id)) summary.convMap.set(id, 0);
+          if (!summary.unreadMap.has(id)) summary.unreadMap.set(id, 0);
+        }
+        this.pageTotalMsgStatsCache.set(cacheKey, { at: Date.now(), bundle: summary });
+        const missing = pageIds.filter((id) => !found.has(id));
+        if (missing.length) {
+          void this.refreshPageMessageTotals(missing).catch(() => undefined);
+        }
+        return summary;
+      }
+      void this.refreshPageMessageTotals().catch(() => undefined);
+    }
+
+    const [convStats, messageMap] = await Promise.all([
+      this.loadPageConversationStatsCombined(pageIds),
+      this.loadPageTotalMessageStats(pageIds),
+    ]);
+    const bundle = { ...convStats, messageMap };
+    this.pageTotalMsgStatsCache.set(cacheKey, { at: Date.now(), bundle });
+    return bundle;
+  }
+
+  /** Hội thoại + chưa đọc theo page — 1 query thay vì 2 groupBy. */
+  private async loadPageConversationStatsCombined(pageIds: string[]) {
+    type Row = { pageId: string; conversationCount: number; unreadConversationCount: number };
+    const rows = await this.prisma.$queryRaw<Row[]>`
+      SELECT
+        page_id AS "pageId",
+        COUNT(*)::int AS "conversationCount",
+        COUNT(*) FILTER (WHERE unread_count > 0)::int AS "unreadConversationCount"
+      FROM cskh_inbox_conversations
+      WHERE page_id IN (${Prisma.join(pageIds)})
+      GROUP BY page_id
+    `;
+    return {
+      convMap: new Map(rows.map((r) => [r.pageId, r.conversationCount])),
+      unreadMap: new Map(rows.map((r) => [r.pageId, r.unreadConversationCount])),
+    };
+  }
+
+  private async isPageMessageTotalsTableAvailable(): Promise<boolean> {
+    if (this.pageMessageTotalsTableAvailable != null) {
+      return this.pageMessageTotalsTableAvailable;
+    }
+    try {
+      await this.prisma.$queryRaw`SELECT 1 FROM cskh_page_message_totals LIMIT 1`;
+      this.pageMessageTotalsTableAvailable = true;
+    } catch (e) {
+      if (this.isPageMessageTotalsTableMissing(e)) {
+        this.pageMessageTotalsTableAvailable = false;
+        this.logger.warn(
+          'cskh_page_message_totals chưa migrate — Page/Kênh dùng COUNT chậm (chạy prisma/manual-page-stats.sql)',
+        );
+      } else {
+        throw e;
+      }
+    }
+    return this.pageMessageTotalsTableAvailable;
+  }
+
+  private isPageMessageTotalsTableMissing(e: unknown): boolean {
+    const code = (e as { code?: string })?.code;
+    return code === 'P2010' || code === '42P01' || /cskh_page_message_totals/i.test((e as Error).message || '');
+  }
+
+  /** Cập nhật bảng tổng hợp — gọi sau quét xong 1 kênh hoặc nền khi thiếu cache. */
+  async refreshPageMessageTotals(pageIds?: string[]): Promise<void> {
+    if (!(await this.isPageMessageTotalsTableAvailable())) return;
+    const filter =
+      pageIds?.length ?
+        Prisma.sql`WHERE c.page_id IN (${Prisma.join(pageIds)})`
+      : Prisma.empty;
+    await this.prisma.$executeRaw`
+      INSERT INTO cskh_page_message_totals (
+        page_id, message_count, conversation_count, unread_conversation_count, refreshed_at
+      )
+      SELECT
+        c.page_id,
+        COUNT(m.id)::bigint,
+        COUNT(DISTINCT c.id)::bigint,
+        COUNT(DISTINCT c.id) FILTER (WHERE c.unread_count > 0)::bigint,
+        NOW()
+      FROM cskh_inbox_conversations c
+      LEFT JOIN cskh_inbox_messages m ON m.conversation_id = c.id
+      ${filter}
+      GROUP BY c.page_id
+      ON CONFLICT (page_id) DO UPDATE SET
+        message_count = EXCLUDED.message_count,
+        conversation_count = EXCLUDED.conversation_count,
+        unread_conversation_count = EXCLUDED.unread_conversation_count,
+        refreshed_at = EXCLUDED.refreshed_at
+    `;
+    if (pageIds?.length) {
+      for (const key of [...this.pageTotalMsgStatsCache.keys()]) {
+        this.pageTotalMsgStatsCache.delete(key);
+      }
+    } else {
+      this.pageTotalMsgStatsCache.clear();
+    }
+  }
+
+  /**
+   * Thiếu cache chi tiêu QC cho ngày → đồng bộ nền từ Marketing API (không chặn response).
+   * Trả true nếu vừa lên lịch sync.
+   */
+  private async schedulePageAdSpendSyncIfNeeded(
+    statDate: string,
+    tenantId: string | undefined,
+    pageIds: string[],
+    adSpendMap: Map<
+      string,
+      {
+        spend: number | null;
+        unavailableReason: string | null;
+        syncedAt: Date | null;
+      }
+    >,
+  ): Promise<boolean> {
+    if (!(await this.isPageAdSpendSchemaAvailable())) return false;
+    if (await this.isInboxBackfillRunning(tenantId)) return false;
+
+    const scheduleKey = `${tenantId ?? '__all__'}:${statDate}`;
+    const lastScheduled = this.pageAdSpendSyncScheduled.get(scheduleKey) ?? 0;
+    const debounceMs = Number(process.env.CSKH_PAGE_AD_SYNC_DEBOUNCE_MS || 600_000);
+    if (Date.now() - lastScheduled < debounceMs) return false;
+
+    const covered = pageIds.filter((id) => {
+      const ad = adSpendMap.get(id);
+      return Boolean(ad?.syncedAt || ad?.unavailableReason);
+    }).length;
+    if (pageIds.length > 0 && covered >= pageIds.length * 0.85) return false;
+
+    this.pageAdSpendSyncScheduled.set(scheduleKey, Date.now());
+    void this.syncAllPagesAdSpend([statDate], tenantId)
+      .then((result) => {
+        this.logger.log(
+          `[page-ad-spend] Nền xong ${statDate}: ${result.synced}/${result.pages} kênh`,
+        );
+        void this.bumpPageStatsCaches(tenantId);
+      })
+      .catch((e) => {
+        this.logger.warn(
+          `[page-ad-spend] Nền lỗi ${statDate}: ${(e as Error).message}`,
+        );
+      });
+    return true;
+  }
+
+  private async loadPageInboundMessageStatsForRange(
+    from: string,
+    to: string,
+    pageIds: string[],
+  ) {
+    if (!pageIds.length) return new Map<string, number>();
     const { start, end } = this.graph.vietnamDateRange(from, to);
     type StatRow = { pageId: string; inboundCount: number };
     const rows = await this.prisma.$queryRaw<StatRow[]>`
@@ -440,8 +1764,8 @@ export class CskhService implements OnModuleInit {
         COUNT(*)::int AS "inboundCount"
       FROM cskh_inbox_messages m
       INNER JOIN cskh_inbox_conversations c ON c.id = m.conversation_id
-      WHERE c.page_id IN (${Prisma.join(pageIds)})
-        AND (
+        AND c.page_id IN (${Prisma.join(pageIds)})
+      WHERE (
           m.direction = 'inbound'
           OR m.sender_type = 'customer'
         )
@@ -450,6 +1774,13 @@ export class CskhService implements OnModuleInit {
       GROUP BY c.page_id
     `;
     return new Map(rows.map((r) => [r.pageId, r.inboundCount]));
+  }
+
+  /** Số tin nhắn khách gửi đến (inbound) theo page trong tháng lịch VN (UTC+7). */
+  private async loadPageInboundMessageStats(month: string, pageIds: string[]) {
+    if (!pageIds.length) return new Map<string, number>();
+    const { from, to } = this.monthRangeDays(month);
+    return this.loadPageInboundMessageStatsForRange(from, to, pageIds);
   }
 
   /** Tổng số tin nhắn (mọi chiều, mọi thời điểm) theo page. */
@@ -680,6 +2011,7 @@ export class CskhService implements OnModuleInit {
     }>,
     source: 'oauth' | 'refresh',
     tenantId?: string,
+    oauthFbUserId?: string,
   ) {
     const validAccounts = accounts.filter((acc) => acc.id && acc.access_token);
     
@@ -699,6 +2031,7 @@ export class CskhService implements OnModuleInit {
             connectedVia: source,
             tasks: acc.tasks || [],
             ...(pictureUrl ? { pictureUrl } : {}),
+            ...(oauthFbUserId ? { oauthFbUserId } : {}),
             refreshedAt: new Date().toISOString(),
           } as Prisma.InputJsonValue;
 
@@ -714,6 +2047,7 @@ export class CskhService implements OnModuleInit {
                 connectedVia: source,
                 tasks: acc.tasks || [],
                 ...(pictureUrl ? { pictureUrl } : {}),
+                ...(oauthFbUserId ? { oauthFbUserId } : {}),
               } as Prisma.InputJsonValue,
             },
             update: {
@@ -725,8 +2059,8 @@ export class CskhService implements OnModuleInit {
             },
           });
 
-          // Auto subscribe to webhooks
-          await this.subscribePageToWebhook(acc.id, acc.access_token).catch((e) => {
+          // Webhook subscribe chạy nền — không chặn OAuth redirect
+          void this.subscribePageToWebhook(acc.id, acc.access_token).catch((e) => {
             this.logger.error(`Auto subscribe failed for page ${acc.id} via OAuth: ${e.message}`);
           });
 
@@ -750,18 +2084,11 @@ export class CskhService implements OnModuleInit {
     const userAccessToken = await this.exchangeCodeForUserToken(code);
     const meRes = await axios.get(`${GRAPH_BASE}/me`, {
       params: { fields: 'id,name', access_token: userAccessToken },
-      timeout: 30000,
+      timeout: 15_000,
     });
     const fbUserId = String(meRes.data?.id || '');
     const fbUserName = (meRes.data?.name as string | undefined) || null;
     if (!fbUserId) throw new BadRequestException('Không lấy được Facebook user id');
-
-    const accounts = await this.fetchManagedPages(userAccessToken);
-    if (!accounts.length) {
-      throw new BadRequestException(
-        'Tài khoản Facebook không có Page nào — cần quyền quản trị Page trong Business Manager',
-      );
-    }
 
     await this.prisma.facebookOAuthSession.upsert({
       where: { fbUserId },
@@ -770,27 +2097,115 @@ export class CskhService implements OnModuleInit {
         fbUserName,
         userAccessToken,
         tenantId,
-        metadata: { pageCount: accounts.length } as Prisma.InputJsonValue,
+        metadata: {
+          syncStatus: 'running',
+          syncError: null,
+          pageCount: 0,
+          adAccounts: [],
+          syncStartedAt: new Date().toISOString(),
+        } as Prisma.InputJsonValue,
       },
       update: {
         fbUserName,
         userAccessToken,
         tenantId,
         metadata: {
-          pageCount: accounts.length,
+          syncStatus: 'running',
+          syncError: null,
+          pageCount: 0,
+          adAccounts: [],
+          syncStartedAt: new Date().toISOString(),
           reconnectedAt: new Date().toISOString(),
         } as Prisma.InputJsonValue,
       },
     });
 
-    const saved = await this.upsertPagesFromAccounts(accounts, 'oauth', tenantId);
-    this.logger.log(`Facebook OAuth: ${saved} pages for user ${fbUserName || fbUserId}`);
+    void this.finishOAuthCallbackInBackground(fbUserId, fbUserName, userAccessToken, tenantId);
 
     return {
       returnUrl: parsed.returnUrl || this.defaultOAuthReturnUrl(),
-      pageCount: saved,
+      pageCount: 0,
       fbUserName,
+      syncing: true,
     };
+  }
+
+  private finishOAuthCallbackInBackground(
+    fbUserId: string,
+    fbUserName: string | null,
+    userAccessToken: string,
+    tenantId?: string,
+  ): void {
+    if (this.oauthSyncInFlight.has(fbUserId)) return;
+    this.oauthSyncInFlight.add(fbUserId);
+
+    void (async () => {
+      try {
+        const accounts = await this.fetchManagedPages(userAccessToken);
+        if (!accounts.length) {
+          await this.prisma.facebookOAuthSession.update({
+            where: { fbUserId },
+            data: {
+              metadata: {
+                syncStatus: 'failed',
+                syncError:
+                  'Tài khoản Facebook không có Page nào — cần quyền quản trị Page trong Business Manager',
+                pageCount: 0,
+                adAccounts: [],
+                syncFinishedAt: new Date().toISOString(),
+              } as Prisma.InputJsonValue,
+            },
+          });
+          return;
+        }
+
+        let adAccounts: Array<{ id: string; name?: string; account_id?: string; currency?: string }> =
+          [];
+        try {
+          adAccounts = await this.ads.fetchAdAccounts(userAccessToken);
+        } catch (e) {
+          this.logger.warn(
+            `Không lấy được ad accounts (cần quyền ads_read + OAuth lại): ${(e as Error).message}`,
+          );
+        }
+
+        const saved = await this.upsertPagesFromAccounts(accounts, 'oauth', tenantId, fbUserId);
+
+        await this.prisma.facebookOAuthSession.update({
+          where: { fbUserId },
+          data: {
+            metadata: {
+              syncStatus: 'done',
+              syncError: null,
+              pageCount: saved,
+              adAccounts,
+              adAccountsCheckedAt: new Date().toISOString(),
+              syncFinishedAt: new Date().toISOString(),
+            } as Prisma.InputJsonValue,
+          },
+        });
+
+        this.logger.log(`Facebook OAuth background: ${saved} pages for ${fbUserName || fbUserId}`);
+        this.invalidatePageListLiteCache(tenantId);
+      } catch (e) {
+        const msg = (e as Error).message || 'OAuth sync failed';
+        this.logger.error(`finishOAuthCallbackInBackground ${fbUserId}: ${msg}`);
+        await this.prisma.facebookOAuthSession
+          .update({
+            where: { fbUserId },
+            data: {
+              metadata: {
+                syncStatus: 'failed',
+                syncError: msg,
+                syncFinishedAt: new Date().toISOString(),
+              } as Prisma.InputJsonValue,
+            },
+          })
+          .catch(() => undefined);
+      } finally {
+        this.oauthSyncInFlight.delete(fbUserId);
+      }
+    })();
   }
 
   async refreshPagesFromOAuth(tenantId?: string) {
@@ -802,8 +2217,20 @@ export class CskhService implements OnModuleInit {
       throw new NotFoundException('Chưa kết nối OAuth — bấm "Kết nối Facebook" trước');
     }
     const accounts = await this.fetchManagedPages(session.userAccessToken);
-    const saved = await this.upsertPagesFromAccounts(accounts, 'refresh', session.tenantId || tenantId);
-    return { pageCount: saved, oauthUser: session.fbUserName || session.fbUserId };
+    const saved = await this.upsertPagesFromAccounts(
+      accounts,
+      'refresh',
+      session.tenantId || tenantId,
+      session.fbUserId,
+    );
+    const adStats = await this.refreshOAuthAdAccountsIfNeeded(session.fbUserId);
+    this.invalidatePageListLiteCache(session.tenantId || tenantId);
+    return {
+      pageCount: saved,
+      oauthUser: session.fbUserName || session.fbUserId,
+      adAccountCount: adStats.adAccountCount,
+      adsReadConnected: adStats.adsReadConnected,
+    };
   }
 
   private async enabledPages(tenantId?: string): Promise<EnabledFacebookPage[]> {
@@ -904,6 +2331,14 @@ export class CskhService implements OnModuleInit {
     });
   }
 
+  /** Trạng thái job — worker kiểm tra trước khi chạy từ Redis queue. */
+  async findJobStatus(jobId: string): Promise<{ status: string } | null> {
+    return this.prisma.cskhJobRun.findUnique({
+      where: { id: jobId },
+      select: { status: true },
+    });
+  }
+
   async getRunningJob(type: 'monitor' | 'audit', tenantId?: string) {
     const running = await this.findRunningJob(type, tenantId);
     if (!running) return null;
@@ -960,17 +2395,24 @@ export class CskhService implements OnModuleInit {
 
   async finishJob(
     jobId: string,
-    status: 'done' | 'failed',
+    status: 'done' | 'failed' | 'paused',
     summary?: Record<string, unknown>,
     error?: string,
   ) {
-    this.activeJobs.delete(jobId);
     const existing = await this.prisma.cskhJobRun.findUnique({
       where: { id: jobId },
-      select: { summary: true },
+      select: { status: true, summary: true, error: true },
     });
+    if (!existing || existing.status !== 'running') {
+      this.activeJobs.delete(jobId);
+      await this.redisQueue.clearAuditPauseRequested(jobId);
+      return existing;
+    }
+
+    this.activeJobs.delete(jobId);
+    await this.redisQueue.clearAuditPauseRequested(jobId);
     const merged = {
-      ...((existing?.summary as Record<string, unknown> | null) ?? {}),
+      ...((existing.summary as Record<string, unknown> | null) ?? {}),
       ...(summary ?? {}),
     };
     return this.prisma.cskhJobRun.update({
@@ -1189,6 +2631,7 @@ export class CskhService implements OnModuleInit {
     convFilter?: (conv: FbConversation) => 'include' | 'exclude' | 'stop',
     maxNewMatches = 0,
     onMatch?: (conv: FbConversation) => void | Promise<void>,
+    shouldAbort?: () => boolean | Promise<boolean>,
   ): Promise<FbConversation[]> {
     const auditDateToResolved = auditDateTo?.trim() || auditDateFrom;
     const { start, end } = this.graph.vietnamDateRange(auditDateFrom, auditDateToResolved);
@@ -1221,6 +2664,7 @@ export class CskhService implements OnModuleInit {
     let scanned = 0;
 
     for (const dbConv of dbConversations) {
+      if (shouldAbort && (await shouldAbort())) break;
       scanned++;
 
       const participants = {
@@ -1276,6 +2720,18 @@ export class CskhService implements OnModuleInit {
     return count;
   }
 
+  /** Chờ inbox realtime nhường Graph — thoát sớm nếu audit bị pause/hủy. */
+  private async waitForInboxUnlessAuditStopped(jobId: string, maxWaitMs = 90_000): Promise<boolean> {
+    if (!shouldAuditYieldToInbox()) return true;
+    const start = Date.now();
+    while (await this.redisQueue.shouldYieldGraphToInbox()) {
+      if (await this.shouldStopAuditJob(jobId)) return false;
+      if (Date.now() - start > maxWaitMs) return true;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    return true;
+  }
+
   async runAuditJob(
     jobId: string,
     options: {
@@ -1287,6 +2743,17 @@ export class CskhService implements OnModuleInit {
       pageId?: string;
     },
   ) {
+    const jobRow = await this.prisma.cskhJobRun.findUnique({
+      where: { id: jobId },
+      select: { status: true, tenantId: true },
+    });
+    if (!jobRow || jobRow.status !== 'running') {
+      this.logger.log(
+        `Audit job ${jobId.slice(0, 8)} bỏ qua — trạng thái=${jobRow?.status ?? 'missing'}`,
+      );
+      return;
+    }
+
     this.activeJobs.set(jobId, { pauseRequested: false });
     const auditDateFrom = (options.auditDateFrom || options.auditDate || '').trim();
     const auditDateTo = (options.auditDateTo || options.auditDateFrom || options.auditDate || '')
@@ -1307,7 +2774,7 @@ export class CskhService implements OnModuleInit {
           ? this.auditMax
           : 0;
     try {
-      const job = await this.prisma.cskhJobRun.findUnique({ where: { id: jobId } });
+      const job = jobRow;
       const pageIdTrimmed = pageId?.trim() || undefined;
       let pages: EnabledFacebookPage[] = [];
 
@@ -1362,6 +2829,13 @@ export class CskhService implements OnModuleInit {
 
       const queue: AuditTask[] = [];
       let fetchCompleted = false;
+
+      const drainQueueIfPausing = async (): Promise<boolean> => {
+        if (!(await this.shouldStopAuditJob(jobId))) return false;
+        queue.length = 0;
+        fetchCompleted = true;
+        return true;
+      };
 
       const getNextTask = async (): Promise<AuditTask | null> => {
         while (queue.length === 0) {
@@ -1444,6 +2918,8 @@ export class CskhService implements OnModuleInit {
       this.aiService.resetAuditBatchCaches();
 
       const auditOne = async ({ config, conv }: AuditTask) => {
+        if (await this.shouldStopAuditJob(jobId)) return;
+        if (!(await this.waitForInboxUnlessAuditStopped(jobId))) return;
         if (await this.shouldStopAuditJob(jobId)) return;
 
         const pageName = config.pageName || 'Facebook Page';
@@ -1528,6 +3004,8 @@ export class CskhService implements OnModuleInit {
             : [{ sender: 'Customer', type: 'text', text: '(Không có tin nhắn)', timestamp: '' }];
         const aiTranscript = trimTranscriptForAi(fullTranscript, this.auditAiTranscriptMax);
 
+        if (await this.shouldStopAuditJob(jobId)) return;
+
         const result = await this.aiService.auditChat({
           transcript: fullTranscript,
           aiTranscript,
@@ -1576,13 +3054,12 @@ export class CskhService implements OnModuleInit {
             if (tu.model) tokenModel = tu.model;
           }
 
-          // Auto-link/upsert and sync messages to inbox + analyze intent (awaited to ensure
-          // customerIntent is persisted in metadata before progress reports the audit row)
-          if (participantPsid) {
+          // Auto-link chạy nền — không chặn worker; bỏ qua hẳn khi đang tạm dừng.
+          if (participantPsid && !(await this.shouldStopAuditJob(jobId))) {
             const tenantId = job?.tenantId || undefined;
             const latestMsgs = this.graph.latestMessages(conv);
-            try {
-              await this.inboxService.autoLinkAndSync(
+            void this.inboxService
+              .autoLinkAndSync(
                 (result as { id: string }).id,
                 conv,
                 latestMsgs,
@@ -1590,10 +3067,10 @@ export class CskhService implements OnModuleInit {
                 config.pageAccessToken,
                 customerName,
                 tenantId,
-              );
-            } catch (err) {
-              this.logger.warn(`Auto link and sync inbox conversation failed: ${(err as Error).message}`);
-            }
+              )
+              .catch((err) => {
+                this.logger.warn(`Auto link and sync inbox conversation failed: ${(err as Error).message}`);
+              });
           }
         }
 
@@ -1623,9 +3100,11 @@ export class CskhService implements OnModuleInit {
       const workerPromises = Array.from({ length: this.auditConcurrency }, async () => {
         while (true) {
           if (await this.shouldStopAuditJob(jobId)) break;
+          if (!(await this.waitForInboxUnlessAuditStopped(jobId))) break;
           const task = await getNextTask();
           if (!task) break;
           await auditOne(task);
+          await new Promise<void>((r) => setImmediate(r));
         }
       });
 
@@ -1636,6 +3115,7 @@ export class CskhService implements OnModuleInit {
           pages.map((config, pageIndex) => ({ config, pageIndex })),
           this.auditPageConcurrency,
           async ({ config, pageIndex }) => {
+            if (await this.shouldAbortAuditFetch(jobId)) return;
             const pageName = config.pageName || config.pageId;
             let effectiveCapForPage = cap;
             if (!force && cap > 0) {
@@ -1664,6 +3144,7 @@ export class CskhService implements OnModuleInit {
               let usingDb = false;
 
               const onMatch = async (conv: FbConversation) => {
+                if (await drainQueueIfPausing()) return;
                 pageMatchedCount++;
                 queue.push({ config, conv });
                 inMemorySummary.fetched = (inMemorySummary.fetched || 0) + 1;
@@ -1696,6 +3177,7 @@ export class CskhService implements OnModuleInit {
                   },
                   effectiveCapForPage > 0 ? effectiveCapForPage : 0,
                   onMatch,
+                  () => this.shouldAbortAuditFetch(jobId),
                 );
                 if (conversations.length > 0) {
                   usingDb = true;
@@ -1708,6 +3190,9 @@ export class CskhService implements OnModuleInit {
               }
 
               if (!usingDb) {
+                const fetchConcurrency = this.graphCoordinator.auditFetchConcurrency(
+                  this.auditFetchConcurrency,
+                );
                 conversations = await this.graph.fetchConversationsForAuditByDate(
                   config.pageId,
                   config.pageAccessToken,
@@ -1722,8 +3207,8 @@ export class CskhService implements OnModuleInit {
                       currentPage: pageName,
                     });
                   },
-                  this.auditFetchConcurrency,
-                  () => this.shouldStopAuditJob(jobId),
+                  fetchConcurrency,
+                  () => this.shouldAbortAuditFetch(jobId),
                   (conv) => {
                     if (this.isConversationAlreadyAudited(auditedKeys, config.pageId, conv)) {
                       skippedOnPage++;
@@ -1767,14 +3252,17 @@ export class CskhService implements OnModuleInit {
               );
             }
           },
-          () => this.shouldStopAuditJob(jobId),
+          () => this.shouldAbortAuditFetch(jobId),
         );
         pausedDuringFetch = pausedDuringFetchPages;
       } finally {
         fetchCompleted = true;
+        if (await this.shouldStopAuditJob(jobId)) {
+          await drainQueueIfPausing();
+        }
       }
 
-      // Wait for all workers to finish
+      // Wait for in-flight chấm điểm (tối đa auditConcurrency), không lấy thêm từ queue.
       await Promise.all(workerPromises);
 
       if (await this.isAuditJobCancelled(jobId)) {
@@ -1785,6 +3273,7 @@ export class CskhService implements OnModuleInit {
       // Fetch is done, all workers done. Check if we fetched anything.
       if (!inMemorySummary.fetched) {
         if (skippedAlready > 0) {
+          if (await this.isAuditJobCancelled(jobId)) return;
           await this.finishJob(jobId, 'done', {
             auditDate: auditDateFrom,
             auditDateFrom,
@@ -1796,13 +3285,16 @@ export class CskhService implements OnModuleInit {
           return;
         }
         if (pausedDuringFetch) {
-          await this.finishJob(jobId, 'done', {
+          if (await this.isAuditJobCancelled(jobId)) return;
+          await drainQueueIfPausing();
+          await this.finishJob(jobId, 'paused', {
             auditDate: auditDateFrom,
             auditDateFrom,
             auditDateTo,
             paused: true,
             partial: true,
             audited: 0,
+            processed: 0,
             skippedAlready,
             pageCount: pages.length,
           });
@@ -1815,11 +3307,13 @@ export class CskhService implements OnModuleInit {
 
       const pausedDuringAudit = processed < inMemorySummary.fetched && (await this.shouldStopAuditJob(jobId));
       const paused = pausedDuringFetch || pausedDuringAudit;
+      if (await this.isAuditJobCancelled(jobId)) return;
+
       const avgScore = scores.length
         ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
         : 0;
 
-      await this.finishJob(jobId, 'done', {
+      await this.finishJob(jobId, paused ? 'paused' : 'done', {
         audited,
         errors,
         avgScore,
@@ -1841,6 +3335,11 @@ export class CskhService implements OnModuleInit {
           perAuditAvg: processed > 0 ? Math.round(totalTokens / processed) : 0,
         },
       });
+      if (paused) {
+        this.logger.log(
+          `Audit job ${jobId.slice(0, 8)}: TẠM DỪNG — đã chấm ${processed}/${inMemorySummary.fetched} hội thoại`,
+        );
+      }
     } catch (e) {
       if (await this.isAuditJobCancelled(jobId)) {
         this.logger.log(`Audit job ${jobId.slice(0, 8)}: đã hủy (bỏ qua lỗi hậu kỳ)`);
@@ -2543,7 +4042,7 @@ export class CskhService implements OnModuleInit {
         null,
         {
           params: {
-            subscribed_fields: 'messages,messaging_postbacks,messaging_optins,message_deliveries,message_reads,messaging_referrals',
+            subscribed_fields: 'messages,message_echoes,messaging_postbacks,messaging_optins,message_deliveries,message_reads,messaging_referrals',
             access_token: pageAccessToken,
           },
           timeout: 10000,
@@ -2562,63 +4061,81 @@ export class CskhService implements OnModuleInit {
   }
 
   async getDashboardStats(tenantId?: string) {
+    const cacheKey = tenantId ?? '__all__';
+    const cached = this.dashboardStatsCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < this.dashboardStatsTtlMs) {
+      return cached.data;
+    }
+
     const whereTenant = tenantId ? { tenantId } : {};
 
-    const [
-      totalPages,
-      enabledPages,
-      totalAudits,
-      avgScoreResult,
-      totalConversations,
-      totalMessages,
-      recentAudits,
-      latestJobs,
-    ] = await Promise.all([
-      this.prisma.facebookCskhConfig.count({ where: whereTenant }),
-      this.prisma.facebookCskhConfig.count({ where: { ...whereTenant, enabled: true } }),
-      this.prisma.chatAudit.count({ where: whereTenant }),
-      this.prisma.chatAudit.aggregate({
-        where: whereTenant,
-        _avg: { score: true },
-      }),
-      this.prisma.cskhInboxConversation.count({ where: whereTenant }),
-      this.prisma.cskhInboxMessage.count({ where: whereTenant }),
-      this.prisma.chatAudit.findMany({
-        where: whereTenant,
-        orderBy: { createdAt: 'desc' },
-        take: 5,
-      }),
-      this.prisma.cskhJobRun.findMany({
-        where: whereTenant,
-        orderBy: { startedAt: 'desc' },
-        take: 5,
-      }),
-    ]);
+    const [totalPages, enabledPages, totalAudits, avgScoreResult, recentAudits, latestJobs] =
+      await Promise.all([
+        this.prisma.facebookCskhConfig.count({ where: whereTenant }),
+        this.prisma.facebookCskhConfig.count({ where: { ...whereTenant, enabled: true } }),
+        this.prisma.chatAudit.count({ where: whereTenant }),
+        this.prisma.chatAudit.aggregate({
+          where: whereTenant,
+          _avg: { score: true },
+        }),
+        this.prisma.chatAudit.findMany({
+          where: whereTenant,
+          orderBy: { createdAt: 'desc' },
+          take: 5,
+          select: {
+            id: true,
+            agentName: true,
+            customerName: true,
+            channel: true,
+            score: true,
+            createdAt: true,
+          },
+        }),
+        this.prisma.cskhJobRun.findMany({
+          where: whereTenant,
+          orderBy: { startedAt: 'desc' },
+          take: 5,
+          select: {
+            id: true,
+            type: true,
+            status: true,
+            startedAt: true,
+            finishedAt: true,
+          },
+        }),
+      ]);
 
     const avgScore = avgScoreResult._avg.score ? Math.round(avgScoreResult._avg.score) : 0;
 
-    return {
+    const result = {
       totalPages,
       enabledPages,
       totalAudits,
       avgScore,
-      totalConversations,
-      totalMessages,
-      recentAudits: recentAudits.map((a) => ({
-        id: a.id,
-        agentName: a.agentName,
-        customerName: a.customerName,
-        channel: a.channel,
-        score: a.score,
-        createdAt: a.createdAt,
-      })),
-      latestJobs: latestJobs.map((j) => ({
-        id: j.id,
-        type: j.type,
-        status: j.status,
-        startedAt: j.startedAt,
-        finishedAt: j.finishedAt,
-      })),
+      recentAudits,
+      latestJobs,
     };
+
+    this.dashboardStatsCache.set(cacheKey, { at: Date.now(), data: result });
+    return result;
+  }
+
+  /** COUNT hội thoại/tin nhắn — cache lâu, tách khỏi stats nhanh để Tổng quan load ngay. */
+  async getDashboardHeavyStats(tenantId?: string) {
+    const cacheKey = tenantId ?? '__all__';
+    const cached = this.dashboardHeavyCountsCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < this.dashboardHeavyCountsTtlMs) {
+      return cached.data;
+    }
+
+    const whereTenant = tenantId ? { tenantId } : {};
+    const [totalConversations, totalMessages] = await Promise.all([
+      this.prisma.cskhInboxConversation.count({ where: whereTenant }),
+      this.prisma.cskhInboxMessage.count({ where: whereTenant }),
+    ]);
+
+    const result = { totalConversations, totalMessages };
+    this.dashboardHeavyCountsCache.set(cacheKey, { at: Date.now(), data: result });
+    return result;
   }
 }

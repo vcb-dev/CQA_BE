@@ -1,0 +1,4874 @@
+[
+  {
+    "product_id": "523",
+    "name": "Nhẫn tàng hình đính Moissanite V10K - HK86355",
+    "sapo_id": null,
+    "variant_id": "750",
+    "sku": "SP-213434349",
+    "price": "24710000.00"
+  },
+  {
+    "product_id": "524",
+    "name": "Dây chuyền trái tim S925 -  HK86322",
+    "sapo_id": null,
+    "variant_id": "751",
+    "sku": "SP-213430891",
+    "price": "4200000.00"
+  },
+  {
+    "product_id": "525",
+    "name": "Mặt dây chuyền lá phong V14K - HK86155",
+    "sapo_id": null,
+    "variant_id": "752",
+    "sku": "SP-213422870",
+    "price": "22000000.00"
+  },
+  {
+    "product_id": "526",
+    "name": "Dây chuyền lá phong chế tác S925 đính CZ - HK86779",
+    "sapo_id": null,
+    "variant_id": "758",
+    "sku": "SP-213409609",
+    "price": "6400000.00"
+  },
+  {
+    "product_id": "529",
+    "name": "Mặt dây chuyền chế tác S925 - HK82765",
+    "sapo_id": null,
+    "variant_id": "761",
+    "sku": "SP-213240363",
+    "price": "5000000.00"
+  },
+  {
+    "product_id": "530",
+    "name": "Nhẫn bạc S925 đính đá Moissanite -  HK82874",
+    "sapo_id": null,
+    "variant_id": "763",
+    "sku": "SP-213162298",
+    "price": "6500000.00"
+  },
+  {
+    "product_id": "531",
+    "name": "Bông tai giọt trăng S925 đính đá Moissanite 6.5li",
+    "sapo_id": null,
+    "variant_id": "765",
+    "sku": "SP-213162225",
+    "price": "2100000.00"
+  },
+  {
+    "product_id": "532",
+    "name": "Charm Mèo Da Bò",
+    "sapo_id": null,
+    "variant_id": "766",
+    "sku": "SP-213022379",
+    "price": "950000.00"
+  },
+  {
+    "product_id": "535",
+    "name": "Xách Mộc Vân Da Bò Màu Cam",
+    "sapo_id": null,
+    "variant_id": "771",
+    "sku": "SP-213000467",
+    "price": "25000000.00"
+  },
+  {
+    "product_id": "539",
+    "name": "Nhẫn nam chế tác S925 đính Moissanite -  HK84814",
+    "sapo_id": null,
+    "variant_id": "777",
+    "sku": "SP-212960783",
+    "price": "5700000.00"
+  },
+  {
+    "product_id": "545",
+    "name": "Nhẫn chế tác S925 đính đá moissanite xanh lá  -  HK85615",
+    "sapo_id": null,
+    "variant_id": "784",
+    "sku": "SP-212891617",
+    "price": "3500000.00"
+  },
+  {
+    "product_id": "546",
+    "name": "Nhẫn tàng hình S925 đính đá moissanite - HK86527",
+    "sapo_id": null,
+    "variant_id": "788",
+    "sku": "SP-212783814",
+    "price": "3800000.00"
+  },
+  {
+    "product_id": "548",
+    "name": "Lắc tay lưu quang S925 đính Moissanite - HK85979",
+    "sapo_id": null,
+    "variant_id": "790",
+    "sku": "SP-212750351",
+    "price": "6500000.00"
+  },
+  {
+    "product_id": "549",
+    "name": "Lắc tay lưu quang S925 đính Moissanite - HK82844",
+    "sapo_id": null,
+    "variant_id": "791",
+    "sku": "SP-212743955",
+    "price": "6500000.00"
+  },
+  {
+    "product_id": "552",
+    "name": "Lắc tay lá phong chế tác  S925 - HK86577",
+    "sapo_id": null,
+    "variant_id": "795",
+    "sku": "SP-212711651",
+    "price": "7000000.00"
+  },
+  {
+    "product_id": "553",
+    "name": "Dây chuyền Lá Phong bản 1 lá S925 - HK86794",
+    "sapo_id": null,
+    "variant_id": "798",
+    "sku": "SP-212703884",
+    "price": "3800000.00"
+  },
+  {
+    "product_id": "561",
+    "name": "Dây chuyền Ngân Lan bạc",
+    "sapo_id": null,
+    "variant_id": "810",
+    "sku": "SP-212684507",
+    "price": "1925000.00"
+  },
+  {
+    "product_id": "566",
+    "name": "Túi Đeo Chéo Nam Da Bò Togo BGD-2026.0391",
+    "sapo_id": null,
+    "variant_id": "818",
+    "sku": "SP-212579485",
+    "price": "26500000.00"
+  },
+  {
+    "product_id": "568",
+    "name": "Thìa kỳ lân S999",
+    "sapo_id": null,
+    "variant_id": "820",
+    "sku": "SP-212570522",
+    "price": "1365000.00"
+  },
+  {
+    "product_id": "569",
+    "name": "Thìa bạc chữ Phúc S999",
+    "sapo_id": null,
+    "variant_id": "822",
+    "sku": "SP-212569398",
+    "price": "1144000.00"
+  },
+  {
+    "product_id": "571",
+    "name": "Túi Xách Mộc Vũ Da Bò QT",
+    "sapo_id": null,
+    "variant_id": "828",
+    "sku": "SP-212461466",
+    "price": "3900000.00"
+  },
+  {
+    "product_id": "573",
+    "name": "Nhẫn kết tình  s925 đính Moissanite - HK83986",
+    "sapo_id": null,
+    "variant_id": "829",
+    "sku": "SP-212359621",
+    "price": "3600000.00"
+  },
+  {
+    "product_id": "574",
+    "name": "Nhẫn chế tác nữ S925  đính  MOissanite 9li -  HK84970",
+    "sapo_id": null,
+    "variant_id": "832",
+    "sku": "SP-212358784",
+    "price": "3500000.00"
+  },
+  {
+    "product_id": "576",
+    "name": "Mặt trái tim bạch kim - 3D005",
+    "sapo_id": null,
+    "variant_id": "836",
+    "sku": "SP-212347039",
+    "price": "31000000.00"
+  },
+  {
+    "product_id": "575",
+    "name": "Nhẫn chế tác S925 đính full moissanite chủ 9li - HK85455",
+    "sapo_id": null,
+    "variant_id": "835",
+    "sku": "SP-212347135",
+    "price": "6500000.00"
+  },
+  {
+    "product_id": "579",
+    "name": "Kiềng tay Kim Diệu S925 đính Mois - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "839",
+    "sku": "SP-212343419",
+    "price": "3200000.00"
+  },
+  {
+    "product_id": "581",
+    "name": "Nhẫn tàng hình S925 đính Moissanite - HK83483",
+    "sapo_id": null,
+    "variant_id": "848",
+    "sku": "SP-212338785",
+    "price": "3700000.00"
+  },
+  {
+    "product_id": "583",
+    "name": "Nhẫn nữ V10K - HK83655",
+    "sapo_id": null,
+    "variant_id": "850",
+    "sku": "SP-212337595",
+    "price": "11000000.00"
+  },
+  {
+    "product_id": "522",
+    "name": "Dây chuyền lá phong V18K - HK85582",
+    "sapo_id": null,
+    "variant_id": "753",
+    "sku": "SP-213431637",
+    "price": "60160000.00"
+  },
+  {
+    "product_id": "527",
+    "name": "Dây chuyền lá phong bạc S925 đính CZ - HK85823",
+    "sapo_id": null,
+    "variant_id": "757",
+    "sku": "SP-213422714",
+    "price": "6000000.00"
+  },
+  {
+    "product_id": "528",
+    "name": "Bông tai cầu vồng S925 - 2728",
+    "sapo_id": null,
+    "variant_id": "760",
+    "sku": "SP-213396334",
+    "price": "12375000.00"
+  },
+  {
+    "product_id": "537",
+    "name": "Nhẫn nữ chế tác V18K đính đá moissanite viên chủ 12li -  HK85866",
+    "sapo_id": null,
+    "variant_id": "773",
+    "sku": "SP-212970293",
+    "price": "29920000.00"
+  },
+  {
+    "product_id": "540",
+    "name": "Đá Moissanite HK82585",
+    "sapo_id": null,
+    "variant_id": "778",
+    "sku": "SP-212960525",
+    "price": "2800000.00"
+  },
+  {
+    "product_id": "550",
+    "name": "Nhẫn chế tác đính đá Topaz S925 - HK83571",
+    "sapo_id": null,
+    "variant_id": "794",
+    "sku": "SP-212742454",
+    "price": "4800000.00"
+  },
+  {
+    "product_id": "554",
+    "name": "Dây chuyền Phong tâm bản 5 lá xi kim S925 - HK87578",
+    "sapo_id": null,
+    "variant_id": "800",
+    "sku": "SP-212703570",
+    "price": "6000000.00"
+  },
+  {
+    "product_id": "556",
+    "name": "Đá Moissanite HK80199",
+    "sapo_id": null,
+    "variant_id": "802",
+    "sku": "SP-212688619",
+    "price": "2000000.00"
+  },
+  {
+    "product_id": "558",
+    "name": "Bông tai chế tác S925 - HK85481",
+    "sapo_id": null,
+    "variant_id": "807",
+    "sku": "SP-212687281",
+    "price": "4800000.00"
+  },
+  {
+    "product_id": "560",
+    "name": "Dây chuyền đậu bạc Mặt Nón",
+    "sapo_id": null,
+    "variant_id": "808",
+    "sku": "SP-212685697",
+    "price": "2475000.00"
+  },
+  {
+    "product_id": "563",
+    "name": "Đậu bạc Kẹp Chim Lạc",
+    "sapo_id": null,
+    "variant_id": "812",
+    "sku": "SP-212683677",
+    "price": "3300000.00"
+  },
+  {
+    "product_id": "567",
+    "name": "Bình sữa S999",
+    "sapo_id": null,
+    "variant_id": "819",
+    "sku": "SP-212573022",
+    "price": "970000.00"
+  },
+  {
+    "product_id": "571",
+    "name": "Túi Xách Mộc Vũ Da Bò QT",
+    "sapo_id": null,
+    "variant_id": "825",
+    "sku": "SP-212461465",
+    "price": "3900000.00"
+  },
+  {
+    "product_id": "571",
+    "name": "Túi Xách Mộc Vũ Da Bò QT",
+    "sapo_id": null,
+    "variant_id": "831",
+    "sku": "SP-212461467",
+    "price": "3900000.00"
+  },
+  {
+    "product_id": "571",
+    "name": "Túi Xách Mộc Vũ Da Bò QT",
+    "sapo_id": null,
+    "variant_id": "833",
+    "sku": "SP-212461468",
+    "price": "3900000.00"
+  },
+  {
+    "product_id": "579",
+    "name": "Kiềng tay Kim Diệu S925 đính Mois - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "847",
+    "sku": "SP-213319816",
+    "price": "3200000.00"
+  },
+  {
+    "product_id": "582",
+    "name": "Nhẫn thiên mã nhãn S925 đính Moissanite - HK83552",
+    "sapo_id": null,
+    "variant_id": "849",
+    "sku": "SP-212337741",
+    "price": "3500000.00"
+  },
+  {
+    "product_id": "534",
+    "name": "Bông tai 6 chấu V10K - HK86842",
+    "sapo_id": null,
+    "variant_id": "770",
+    "sku": "SP-213003446",
+    "price": "12430000.00"
+  },
+  {
+    "product_id": "536",
+    "name": "Dây chuyền đá nhảy V10k -  HK86645",
+    "sapo_id": null,
+    "variant_id": "772",
+    "sku": "SP-212984423",
+    "price": "18000000.00"
+  },
+  {
+    "product_id": "538",
+    "name": "Bông tai khoen tròn S925 đính full Moissanite - HK86558",
+    "sapo_id": null,
+    "variant_id": "776",
+    "sku": "SP-212965326",
+    "price": "3800000.00"
+  },
+  {
+    "product_id": "542",
+    "name": "đôi bông tai s925 Chế tác 6 chấu đính đá moissanite 8ly - HK86951",
+    "sapo_id": null,
+    "variant_id": "782",
+    "sku": "SP-212897452",
+    "price": "2500000.00"
+  },
+  {
+    "product_id": "541",
+    "name": "Nhẫn đôi  S925 đính đá moissanite chế tác - HK81654",
+    "sapo_id": null,
+    "variant_id": "779",
+    "sku": "SP-212898141",
+    "price": "6400000.00"
+  },
+  {
+    "product_id": "543",
+    "name": "Nhẫn chế tác S925 Nam Đính Full Đá Moiss viên chủ 7li - HK87477",
+    "sapo_id": null,
+    "variant_id": "783",
+    "sku": "SP-212896379",
+    "price": "5500000.00"
+  },
+  {
+    "product_id": "544",
+    "name": "Nhẫn xoay răng cưa S925 - 1581",
+    "sapo_id": null,
+    "variant_id": "785",
+    "sku": "SP-212891476",
+    "price": "7303000.00"
+  },
+  {
+    "product_id": "547",
+    "name": "Nhẫn xoay cỏ 4 lá V18K chế tác - HK86216",
+    "sapo_id": null,
+    "variant_id": "789",
+    "sku": "SP-212755850",
+    "price": "34490000.00"
+  },
+  {
+    "product_id": "551",
+    "name": "Túi Xách Nữ Da Bò BGD-2026.0707",
+    "sapo_id": null,
+    "variant_id": "796",
+    "sku": "SP-212712892",
+    "price": "26000000.00"
+  },
+  {
+    "product_id": "555",
+    "name": "Nhẫn nữ chế tác S925 đính đá moissanite - HK86293",
+    "sapo_id": null,
+    "variant_id": "801",
+    "sku": "SP-212688805",
+    "price": "1800000.00"
+  },
+  {
+    "product_id": "557",
+    "name": "Đậu bạc Hộp Card",
+    "sapo_id": null,
+    "variant_id": "804",
+    "sku": "SP-212688402",
+    "price": "34925000.00"
+  },
+  {
+    "product_id": "559",
+    "name": "Dây chuyền đậu bạc giọt nước",
+    "sapo_id": null,
+    "variant_id": "806",
+    "sku": "SP-212686786",
+    "price": "1100000.00"
+  },
+  {
+    "product_id": "562",
+    "name": "Dây chuyền đậu bạc Lục Hoa",
+    "sapo_id": null,
+    "variant_id": "813",
+    "sku": "SP-212684350",
+    "price": "1650000.00"
+  },
+  {
+    "product_id": "564",
+    "name": "Đậu bạc đĩnh bạc mạ vàng",
+    "sapo_id": null,
+    "variant_id": "814",
+    "sku": "SP-212623746",
+    "price": "0.00"
+  },
+  {
+    "product_id": "565",
+    "name": "Muỗng Long Vân S999",
+    "sapo_id": null,
+    "variant_id": "816",
+    "sku": "SP-212581634",
+    "price": "3250000.00"
+  },
+  {
+    "product_id": "570",
+    "name": "Ví Nữ Khoá H Da Bò BGD-2026.0718",
+    "sapo_id": null,
+    "variant_id": "824",
+    "sku": "SP-212463889",
+    "price": "7200000.00"
+  },
+  {
+    "product_id": "572",
+    "name": "Bông tai chế tác S925 - HK84552",
+    "sapo_id": null,
+    "variant_id": "827",
+    "sku": "SP-212360763",
+    "price": "3000000.00"
+  },
+  {
+    "product_id": "577",
+    "name": "Bông tai chế tác S925 đính Moissanite -  HK83808",
+    "sapo_id": null,
+    "variant_id": "838",
+    "sku": "SP-212344965",
+    "price": "3000000.00"
+  },
+  {
+    "product_id": "578",
+    "name": "Nhẫn nữ V18K - HK84232",
+    "sapo_id": null,
+    "variant_id": "843",
+    "sku": "SP-212339436",
+    "price": "51160000.00"
+  },
+  {
+    "product_id": "579",
+    "name": "Kiềng tay Kim Diệu S925 đính Mois - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "845",
+    "sku": "SP-213319815",
+    "price": "3200000.00"
+  },
+  {
+    "product_id": "580",
+    "name": "Nhẫn mắt thần Horus V18K - HK86298",
+    "sapo_id": null,
+    "variant_id": "846",
+    "sku": "SP-212338984",
+    "price": "44500000.00"
+  },
+  {
+    "product_id": "584",
+    "name": "Dây chuyền Ngân Vũ S925 đính Mois- Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "851",
+    "sku": "SP-212322990",
+    "price": "1550000.00"
+  },
+  {
+    "product_id": "585",
+    "name": "Lắc chân đốt trúc V10K - HK85128",
+    "sapo_id": null,
+    "variant_id": "852",
+    "sku": "SP-212309997",
+    "price": "21570000.00"
+  },
+  {
+    "product_id": "588",
+    "name": "Nhẫn Hoàng Quang S925 đính Moissanite 9li -  HK86149",
+    "sapo_id": null,
+    "variant_id": "855",
+    "sku": "SP-212297516",
+    "price": "3800000.00"
+  },
+  {
+    "product_id": "589",
+    "name": "Lắc tay Cuban chế tác S925 - HK85867",
+    "sapo_id": null,
+    "variant_id": "856",
+    "sku": "SP-212259200",
+    "price": "16000000.00"
+  },
+  {
+    "product_id": "590",
+    "name": "Mặt dây chuyền V18K - HK85980",
+    "sapo_id": null,
+    "variant_id": "857",
+    "sku": "SP-212255304",
+    "price": "17000000.00"
+  },
+  {
+    "product_id": "591",
+    "name": "Dây chuyền chế tác S925 đính moissanite - HK83642",
+    "sapo_id": null,
+    "variant_id": "858",
+    "sku": "SP-212254617",
+    "price": "22000000.00"
+  },
+  {
+    "product_id": "592",
+    "name": "Nhẫn horus s925 đính đá đỏ - HK83532",
+    "sapo_id": null,
+    "variant_id": "859",
+    "sku": "SP-212247338",
+    "price": "3800000.00"
+  },
+  {
+    "product_id": "593",
+    "name": "Nhẫn xoay răng cưa S925 đính đá CZ tím - #1813",
+    "sapo_id": null,
+    "variant_id": "860",
+    "sku": "SP-212247337",
+    "price": "7200000.00"
+  },
+  {
+    "product_id": "594",
+    "name": "Dây chuyền pháo hoa phát sáng V10K - HK84954",
+    "sapo_id": null,
+    "variant_id": "861",
+    "sku": "SP-212246648",
+    "price": "15000000.00"
+  },
+  {
+    "product_id": "595",
+    "name": "Dây chuyền cỏ 4 lá ghép 2 dáng V10K - HK86357",
+    "sapo_id": null,
+    "variant_id": "862",
+    "sku": "SP-212246415",
+    "price": "17500000.00"
+  },
+  {
+    "product_id": "596",
+    "name": "Lắc tay trái tim S925 đính Moissannite - HK82585",
+    "sapo_id": null,
+    "variant_id": "863",
+    "sku": "SP-212245738",
+    "price": "4650000.00"
+  },
+  {
+    "product_id": "597",
+    "name": "Túi Xách Mặc Phong Da Bò QT",
+    "sapo_id": null,
+    "variant_id": "864",
+    "sku": "SP-212244925",
+    "price": "3290000.00"
+  },
+  {
+    "product_id": "598",
+    "name": "Nhẫn kim hoa đai trơn đính Mois S925 - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "865",
+    "sku": "SP-212208979",
+    "price": "1300000.00"
+  },
+  {
+    "product_id": "598",
+    "name": "Nhẫn kim hoa đai trơn đính Mois S925 - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "867",
+    "sku": "SP-212246874",
+    "price": "1300000.00"
+  },
+  {
+    "product_id": "598",
+    "name": "Nhẫn kim hoa đai trơn đính Mois S925 - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "869",
+    "sku": "SP-212246875",
+    "price": "1300000.00"
+  },
+  {
+    "product_id": "598",
+    "name": "Nhẫn kim hoa đai trơn đính Mois S925 - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "871",
+    "sku": "SP-212246876",
+    "price": "1300000.00"
+  },
+  {
+    "product_id": "600",
+    "name": "Túi Xách Mộc Thanh Da Bò",
+    "sapo_id": null,
+    "variant_id": "868",
+    "sku": "SP-212166448",
+    "price": "0.00"
+  },
+  {
+    "product_id": "598",
+    "name": "Nhẫn kim hoa đai trơn đính Mois S925 - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "873",
+    "sku": "SP-212246877",
+    "price": "1300000.00"
+  },
+  {
+    "product_id": "601",
+    "name": "Túi Xách Ngọc Vân Da Bò",
+    "sapo_id": null,
+    "variant_id": "870",
+    "sku": "SP-212166187",
+    "price": "0.00"
+  },
+  {
+    "product_id": "602",
+    "name": "Dây chuyền Kim Phong bạc S925 đính CZ - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "872",
+    "sku": "SP-212148832",
+    "price": "2450000.00"
+  },
+  {
+    "product_id": "603",
+    "name": "Túi Xách Nam Da Cá Sấu Thiết Kế BGD-2026.0699",
+    "sapo_id": null,
+    "variant_id": "874",
+    "sku": "SP-212116783",
+    "price": "0.00"
+  },
+  {
+    "product_id": "602",
+    "name": "Dây chuyền Kim Phong bạc S925 đính CZ - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "875",
+    "sku": "SP-212583559",
+    "price": "2450000.00"
+  },
+  {
+    "product_id": "604",
+    "name": "Lắc tay hoa tử đằng S925 đính đá S925",
+    "sapo_id": null,
+    "variant_id": "876",
+    "sku": "SP-212113341",
+    "price": "1450000.00"
+  },
+  {
+    "product_id": "605",
+    "name": "Bông tai S925 6 chấu Moissanite 7.2mm",
+    "sapo_id": null,
+    "variant_id": "877",
+    "sku": "SP-212052593",
+    "price": "2500000.00"
+  },
+  {
+    "product_id": "606",
+    "name": "Bông tai 3 chấu đính Moiss bạc S925",
+    "sapo_id": null,
+    "variant_id": "878",
+    "sku": "SP-212042247",
+    "price": "530000.00"
+  },
+  {
+    "product_id": "607",
+    "name": "Túi Xách Mộc Vân Da Bò Epsom QT (Mới)",
+    "sapo_id": null,
+    "variant_id": "879",
+    "sku": "SP-211990942",
+    "price": "8960000.00"
+  },
+  {
+    "product_id": "607",
+    "name": "Túi Xách Mộc Vân Da Bò Epsom QT (Mới)",
+    "sapo_id": null,
+    "variant_id": "881",
+    "sku": "SP-211990943",
+    "price": "8960000.00"
+  },
+  {
+    "product_id": "608",
+    "name": "Túi Xách Nữ Da Bò Thiết Kế BGD-2026.0679",
+    "sapo_id": null,
+    "variant_id": "880",
+    "sku": "SP-211975991",
+    "price": "28640000.00"
+  },
+  {
+    "product_id": "607",
+    "name": "Túi Xách Mộc Vân Da Bò Epsom QT (Mới)",
+    "sapo_id": null,
+    "variant_id": "883",
+    "sku": "SP-211990944",
+    "price": "8960000.00"
+  },
+  {
+    "product_id": "609",
+    "name": "Mặt dây chuyền V10K - HK85315",
+    "sapo_id": null,
+    "variant_id": "882",
+    "sku": "SP-211963062",
+    "price": "21600000.00"
+  },
+  {
+    "product_id": "610",
+    "name": "Nhẫn nữ V18K - HK83811",
+    "sapo_id": null,
+    "variant_id": "884",
+    "sku": "SP-211962467",
+    "price": "21370000.00"
+  },
+  {
+    "product_id": "612",
+    "name": "Kim cương nhân tạo HK80531",
+    "sapo_id": null,
+    "variant_id": "886",
+    "sku": "SP-211960217",
+    "price": "16000000.00"
+  },
+  {
+    "product_id": "611",
+    "name": "Đôi bông tai nữ 6 chấu S925 - HK84888",
+    "sapo_id": null,
+    "variant_id": "885",
+    "sku": "SP-211961462",
+    "price": "2500000.00"
+  },
+  {
+    "product_id": "613",
+    "name": "Kim cương nhân tạo - HK84232",
+    "sapo_id": null,
+    "variant_id": "887",
+    "sku": "SP-211946123",
+    "price": "15000000.00"
+  },
+  {
+    "product_id": "615",
+    "name": "Bông tai 6 chấu S925 đính đá moissanite - HK85249",
+    "sapo_id": null,
+    "variant_id": "888",
+    "sku": "SP-211916856",
+    "price": "2000000.00"
+  },
+  {
+    "product_id": "616",
+    "name": "Nhẫn mắt thần S925 đính CZ - HK78920",
+    "sapo_id": null,
+    "variant_id": "891",
+    "sku": "SP-211914357",
+    "price": "3500000.00"
+  },
+  {
+    "product_id": "617",
+    "name": "Nhẫn chế tác S925 đính đá Moissanite - HK79016",
+    "sapo_id": null,
+    "variant_id": "890",
+    "sku": "SP-211902975",
+    "price": "4500000.00"
+  },
+  {
+    "product_id": "618",
+    "name": "Nhẫn nữ đính Moissanite V18K - HK85405",
+    "sapo_id": null,
+    "variant_id": "892",
+    "sku": "SP-211903447",
+    "price": "31808000.00"
+  },
+  {
+    "product_id": "619",
+    "name": "Nhẫn nữ đính đá Topaz V14K - HK84790",
+    "sapo_id": null,
+    "variant_id": "893",
+    "sku": "SP-211902912",
+    "price": "24580000.00"
+  },
+  {
+    "product_id": "620",
+    "name": "Nhẫn nam đính Moissanite V18K - HK84924",
+    "sapo_id": null,
+    "variant_id": "894",
+    "sku": "SP-211902500",
+    "price": "44000000.00"
+  },
+  {
+    "product_id": "624",
+    "name": "Đá thạch anh tim vàng chanh HK59695",
+    "sapo_id": null,
+    "variant_id": "900",
+    "sku": "SP-211782264",
+    "price": "2200000.00"
+  },
+  {
+    "product_id": "627",
+    "name": "Đá sapphire Blue HK64404",
+    "sapo_id": null,
+    "variant_id": "905",
+    "sku": "SP-211779244",
+    "price": "2600000.00"
+  },
+  {
+    "product_id": "639",
+    "name": "Nhẫn chế tác S925 đính Moissanite - HK84905",
+    "sapo_id": null,
+    "variant_id": "918",
+    "sku": "SP-211710849",
+    "price": "5000000.00"
+  },
+  {
+    "product_id": "647",
+    "name": "Nhẫn Hợp Bích Tâm S925 - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "927",
+    "sku": "SP-211667966",
+    "price": "1950000.00"
+  },
+  {
+    "product_id": "647",
+    "name": "Nhẫn Hợp Bích Tâm S925 - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "931",
+    "sku": "SP-211667968",
+    "price": "1950000.00"
+  },
+  {
+    "product_id": "653",
+    "name": "Nhẫn bàn tay chế tác S925 - HK83929",
+    "sapo_id": null,
+    "variant_id": "934",
+    "sku": "SP-211427556",
+    "price": "4000000.00"
+  },
+  {
+    "product_id": "654",
+    "name": "Túi Xách Diễm Ngọc Da Thật",
+    "sapo_id": null,
+    "variant_id": "935",
+    "sku": "SP-211426709",
+    "price": "23450000.00"
+  },
+  {
+    "product_id": "657",
+    "name": "Túi Xách Vân Ý Da Cá Sấu",
+    "sapo_id": null,
+    "variant_id": "940",
+    "sku": "SP-211364857",
+    "price": "0.00"
+  },
+  {
+    "product_id": "662",
+    "name": "Túi Xách Tịch Lâm Da Bò",
+    "sapo_id": null,
+    "variant_id": "945",
+    "sku": "SP-211364240",
+    "price": "0.00"
+  },
+  {
+    "product_id": "664",
+    "name": "Túi Xách Lạc Nhiên Da Bò",
+    "sapo_id": null,
+    "variant_id": "947",
+    "sku": "SP-211363973",
+    "price": "0.00"
+  },
+  {
+    "product_id": "667",
+    "name": "Túi Xách An Lam Da Bò",
+    "sapo_id": null,
+    "variant_id": "950",
+    "sku": "SP-211363326",
+    "price": "18530000.00"
+  },
+  {
+    "product_id": "669",
+    "name": "Túi Xách Mộc Liên Da Bò",
+    "sapo_id": null,
+    "variant_id": "952",
+    "sku": "SP-211362826",
+    "price": "0.00"
+  },
+  {
+    "product_id": "671",
+    "name": "Túi Xách Mộng Huyền Da Cá Sấu",
+    "sapo_id": null,
+    "variant_id": "954",
+    "sku": "SP-211362712",
+    "price": "0.00"
+  },
+  {
+    "product_id": "672",
+    "name": "Túi Xách Linh Sương Da Bò",
+    "sapo_id": null,
+    "variant_id": "956",
+    "sku": "SP-211362652",
+    "price": "0.00"
+  },
+  {
+    "product_id": "621",
+    "name": "Nhẫn Lá Phong S925 xi Vàng - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "895",
+    "sku": "SP-211807603",
+    "price": "1240000.00"
+  },
+  {
+    "product_id": "621",
+    "name": "Nhẫn Lá Phong S925 xi Vàng - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "899",
+    "sku": "SP-211807699",
+    "price": "1240000.00"
+  },
+  {
+    "product_id": "621",
+    "name": "Nhẫn Lá Phong S925 xi Vàng - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "901",
+    "sku": "SP-211807700",
+    "price": "1240000.00"
+  },
+  {
+    "product_id": "623",
+    "name": "Nhẫn mắt thần Horus đính Moissanite - 1938",
+    "sapo_id": null,
+    "variant_id": "898",
+    "sku": "SP-211788161",
+    "price": "4700000.00"
+  },
+  {
+    "product_id": "626",
+    "name": "Nhẫn nữ xoắn V18K đính Moissanite - HK83180",
+    "sapo_id": null,
+    "variant_id": "904",
+    "sku": "SP-211779684",
+    "price": "38000000.00"
+  },
+  {
+    "product_id": "629",
+    "name": "Nhẫn nữ chế tác S925 đính Moisanite - HK85440",
+    "sapo_id": null,
+    "variant_id": "907",
+    "sku": "SP-211769225",
+    "price": "5000000.00"
+  },
+  {
+    "product_id": "630",
+    "name": "Nhẫn nữ chế tác s925 đính Moissanite - HK85088",
+    "sapo_id": null,
+    "variant_id": "908",
+    "sku": "SP-211768721",
+    "price": "5500000.00"
+  },
+  {
+    "product_id": "634",
+    "name": "Bông tai 6 chấu V14K - HK84373",
+    "sapo_id": null,
+    "variant_id": "912",
+    "sku": "SP-211713238",
+    "price": "15460000.00"
+  },
+  {
+    "product_id": "637",
+    "name": "Nhẫn tàng hình Moissanite V14K - HK85091",
+    "sapo_id": null,
+    "variant_id": "915",
+    "sku": "SP-211712120",
+    "price": "25650000.00"
+  },
+  {
+    "product_id": "638",
+    "name": "Set nhẫn 3 chiếc S925 đính Moissanite - HK85796",
+    "sapo_id": null,
+    "variant_id": "916",
+    "sku": "SP-211711814",
+    "price": "6150000.00"
+  },
+  {
+    "product_id": "645",
+    "name": "Nhẫn nữ chế tác S925 đính  Moissanite - HK84923",
+    "sapo_id": null,
+    "variant_id": "923",
+    "sku": "SP-211606144",
+    "price": "5850000.00"
+  },
+  {
+    "product_id": "648",
+    "name": "Đôi bông tai V18k - HK82621",
+    "sapo_id": null,
+    "variant_id": "926",
+    "sku": "SP-211601876",
+    "price": "22000000.00"
+  },
+  {
+    "product_id": "650",
+    "name": "Thắt Lưng Nam Chữ H BGD-2026.0681",
+    "sapo_id": null,
+    "variant_id": "929",
+    "sku": "SP-211545583",
+    "price": "3560000.00"
+  },
+  {
+    "product_id": "651",
+    "name": "Nhẫn nữ chế tác S925 đính đá Moissanite - HK83943",
+    "sapo_id": null,
+    "variant_id": "932",
+    "sku": "SP-211437099",
+    "price": "4300000.00"
+  },
+  {
+    "product_id": "654",
+    "name": "Túi Xách Diễm Ngọc Da Thật",
+    "sapo_id": null,
+    "variant_id": "939",
+    "sku": "SP-211426711",
+    "price": "0.00"
+  },
+  {
+    "product_id": "656",
+    "name": "Túi Xách Sơ Vũ Da Đà Điểu",
+    "sapo_id": null,
+    "variant_id": "938",
+    "sku": "SP-211365021",
+    "price": "0.00"
+  },
+  {
+    "product_id": "658",
+    "name": "Túi Xách Uyển Nhu Da Bò",
+    "sapo_id": null,
+    "variant_id": "941",
+    "sku": "SP-211364712",
+    "price": "0.00"
+  },
+  {
+    "product_id": "663",
+    "name": "Túi Xách Vân Sa Da Bò",
+    "sapo_id": null,
+    "variant_id": "946",
+    "sku": "SP-211364127",
+    "price": "0.00"
+  },
+  {
+    "product_id": "665",
+    "name": "Túi Xách Trúc Lam Da Bò",
+    "sapo_id": null,
+    "variant_id": "948",
+    "sku": "SP-211363940",
+    "price": "0.00"
+  },
+  {
+    "product_id": "666",
+    "name": "Túi Xách Hạ Thảo Da Bò",
+    "sapo_id": null,
+    "variant_id": "949",
+    "sku": "SP-211363697",
+    "price": "0.00"
+  },
+  {
+    "product_id": "668",
+    "name": "Túi Xách Hắc Linh Da Bò",
+    "sapo_id": null,
+    "variant_id": "951",
+    "sku": "SP-211362903",
+    "price": "0.00"
+  },
+  {
+    "product_id": "622",
+    "name": "Dây chuyền đá nhảy V10K đính đá Moissanite - HK85178",
+    "sapo_id": null,
+    "variant_id": "896",
+    "sku": "SP-211796482",
+    "price": "18400000.00"
+  },
+  {
+    "product_id": "621",
+    "name": "Nhẫn Lá Phong S925 xi Vàng - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "903",
+    "sku": "SP-211807701",
+    "price": "1240000.00"
+  },
+  {
+    "product_id": "625",
+    "name": "Nhẫn nữ S925 đính Moissanite 10li",
+    "sapo_id": null,
+    "variant_id": "902",
+    "sku": "SP-211779961",
+    "price": "4300000.00"
+  },
+  {
+    "product_id": "631",
+    "name": "Nhẫn kim vương chi hoa S925 đính Moissanite - HK85403",
+    "sapo_id": null,
+    "variant_id": "909",
+    "sku": "SP-211768458",
+    "price": "5500000.00"
+  },
+  {
+    "product_id": "632",
+    "name": "Nhẫn nữ chế tác S925 đính moissanite - HK84782",
+    "sapo_id": null,
+    "variant_id": "910",
+    "sku": "SP-211720224",
+    "price": "5500000.00"
+  },
+  {
+    "product_id": "635",
+    "name": "Nhẫn tàng hình V14K - HK84879",
+    "sapo_id": null,
+    "variant_id": "913",
+    "sku": "SP-211713216",
+    "price": "22500000.00"
+  },
+  {
+    "product_id": "641",
+    "name": "Lắc tay trái tim S925 đính Moissanite - HK80027",
+    "sapo_id": null,
+    "variant_id": "919",
+    "sku": "SP-211710010",
+    "price": "4650000.00"
+  },
+  {
+    "product_id": "642",
+    "name": "Ổ nhẫn chế tác S925 - HK78964",
+    "sapo_id": null,
+    "variant_id": "920",
+    "sku": "SP-211683799",
+    "price": "4500000.00"
+  },
+  {
+    "product_id": "644",
+    "name": "Dây chuyền đá nhảy V18K đính Moissanite - HK85471",
+    "sapo_id": null,
+    "variant_id": "922",
+    "sku": "SP-211606910",
+    "price": "34000000.00"
+  },
+  {
+    "product_id": "646",
+    "name": "Mặt dây chuyền chế tác V18K - HK84931",
+    "sapo_id": null,
+    "variant_id": "924",
+    "sku": "SP-211603495",
+    "price": "18500000.00"
+  },
+  {
+    "product_id": "647",
+    "name": "Nhẫn Hợp Bích Tâm S925 - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "925",
+    "sku": "SP-211603012",
+    "price": "1950000.00"
+  },
+  {
+    "product_id": "647",
+    "name": "Nhẫn Hợp Bích Tâm S925 - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "930",
+    "sku": "SP-211667967",
+    "price": "1950000.00"
+  },
+  {
+    "product_id": "649",
+    "name": "Túi Xách Da Bò Thiết Kế BGD-2026.0691",
+    "sapo_id": null,
+    "variant_id": "928",
+    "sku": "SP-211589546",
+    "price": "33088000.00"
+  },
+  {
+    "product_id": "652",
+    "name": "Nhẫn nữ chế tác V10K - HK84497",
+    "sapo_id": null,
+    "variant_id": "933",
+    "sku": "SP-211430816",
+    "price": "9500000.00"
+  },
+  {
+    "product_id": "654",
+    "name": "Túi Xách Diễm Ngọc Da Thật",
+    "sapo_id": null,
+    "variant_id": "937",
+    "sku": "SP-211426710",
+    "price": "0.00"
+  },
+  {
+    "product_id": "660",
+    "name": "Túi Xách Phù Vân Da Bò",
+    "sapo_id": null,
+    "variant_id": "943",
+    "sku": "SP-211364397",
+    "price": "0.00"
+  },
+  {
+    "product_id": "533",
+    "name": "Dây chuyền V14K đính Moissanite xanh lá - HK85832",
+    "sapo_id": null,
+    "variant_id": "767",
+    "sku": "SP-213004646",
+    "price": "26000000.00"
+  },
+  {
+    "product_id": "586",
+    "name": "Lắc tay ngân quang S925 đính Moissanite - HK80199",
+    "sapo_id": null,
+    "variant_id": "853",
+    "sku": "SP-212306892",
+    "price": "5500000.00"
+  },
+  {
+    "product_id": "587",
+    "name": "Nhẫn bạc chế tác S925 đính đá Moissanite - HK84144",
+    "sapo_id": null,
+    "variant_id": "854",
+    "sku": "SP-212301672",
+    "price": "5000000.00"
+  },
+  {
+    "product_id": "599",
+    "name": "Clutch Nam Phong Ưng Da Bò",
+    "sapo_id": null,
+    "variant_id": "866",
+    "sku": "SP-212207116",
+    "price": "19800000.00"
+  },
+  {
+    "product_id": "614",
+    "name": "Kiềng tàng hình S925 đính Moissanite - HK85089",
+    "sapo_id": null,
+    "variant_id": "889",
+    "sku": "SP-211916360",
+    "price": "13000000.00"
+  },
+  {
+    "product_id": "621",
+    "name": "Nhẫn Lá Phong S925 xi Vàng - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "897",
+    "sku": "SP-211807698",
+    "price": "1450000.00"
+  },
+  {
+    "product_id": "628",
+    "name": "Nhẫn nam thiết kế V18K - HK85050",
+    "sapo_id": null,
+    "variant_id": "906",
+    "sku": "SP-211778090",
+    "price": "30000000.00"
+  },
+  {
+    "product_id": "633",
+    "name": "Nhẫn đoá hoa S925 ĐÍNH Moissanite - HK85470",
+    "sapo_id": null,
+    "variant_id": "911",
+    "sku": "SP-211713338",
+    "price": "2600000.00"
+  },
+  {
+    "product_id": "636",
+    "name": "Nhẫn chấu hình trái tim V14K - HK82682",
+    "sapo_id": null,
+    "variant_id": "914",
+    "sku": "SP-211712666",
+    "price": "30110000.00"
+  },
+  {
+    "product_id": "640",
+    "name": "Nhẫn nữ V14K - HK85412",
+    "sapo_id": null,
+    "variant_id": "917",
+    "sku": "SP-211711303",
+    "price": "23560000.00"
+  },
+  {
+    "product_id": "643",
+    "name": "Hộp Giấy Vân Phong Các",
+    "sapo_id": null,
+    "variant_id": "921",
+    "sku": "SP-211648800",
+    "price": "0.00"
+  },
+  {
+    "product_id": "655",
+    "name": "Bông tai 6 chấu đính đá Moissanite PT900 HK85231",
+    "sapo_id": null,
+    "variant_id": "936",
+    "sku": "SP-211377277",
+    "price": "10300000.00"
+  },
+  {
+    "product_id": "659",
+    "name": "Túi Xách Hắc Sơn Da Bò",
+    "sapo_id": null,
+    "variant_id": "942",
+    "sku": "SP-211364519",
+    "price": "0.00"
+  },
+  {
+    "product_id": "661",
+    "name": "Túi Xách Lạc Sơn Da Bò",
+    "sapo_id": null,
+    "variant_id": "944",
+    "sku": "SP-211364322",
+    "price": "0.00"
+  },
+  {
+    "product_id": "670",
+    "name": "Túi Xách Phong Thảo Da Bò",
+    "sapo_id": null,
+    "variant_id": "953",
+    "sku": "SP-211362748",
+    "price": "0.00"
+  },
+  {
+    "product_id": "673",
+    "name": "Túi xách da bò BGD-2026.0611",
+    "sapo_id": null,
+    "variant_id": "955",
+    "sku": "SP-211310738",
+    "price": "37200000.00"
+  },
+  {
+    "product_id": "674",
+    "name": "Dây Lưng Nam Da Bò",
+    "sapo_id": null,
+    "variant_id": "957",
+    "sku": "SP-211303607",
+    "price": "2000000.00"
+  },
+  {
+    "product_id": "675",
+    "name": "Mặt dây chuyền chế tác V18K - HK83153",
+    "sapo_id": null,
+    "variant_id": "958",
+    "sku": "SP-211278986",
+    "price": "23000000.00"
+  },
+  {
+    "product_id": "676",
+    "name": "Thắt Lưng Nữ Da Bò",
+    "sapo_id": null,
+    "variant_id": "959",
+    "sku": "SP-211276465",
+    "price": "2800000.00"
+  },
+  {
+    "product_id": "677",
+    "name": "Túi Xách Trầm Vũ Da Bò",
+    "sapo_id": null,
+    "variant_id": "960",
+    "sku": "SP-211274365",
+    "price": "4500000.00"
+  },
+  {
+    "product_id": "678",
+    "name": "Túi Xách Thiên An Da Bò",
+    "sapo_id": null,
+    "variant_id": "963",
+    "sku": "SP-211268324",
+    "price": "0.00"
+  },
+  {
+    "product_id": "677",
+    "name": "Túi Xách Trầm Vũ Da Bò",
+    "sapo_id": null,
+    "variant_id": "961",
+    "sku": "SP-211274366",
+    "price": "4500000.00"
+  },
+  {
+    "product_id": "679",
+    "name": "Túi Xách Diễm Ngọc Da Cá Đuối",
+    "sapo_id": null,
+    "variant_id": "962",
+    "sku": "SP-211266811",
+    "price": "13900000.00"
+  },
+  {
+    "product_id": "677",
+    "name": "Túi Xách Trầm Vũ Da Bò",
+    "sapo_id": null,
+    "variant_id": "964",
+    "sku": "SP-211274367",
+    "price": "4500000.00"
+  },
+  {
+    "product_id": "679",
+    "name": "Túi Xách Diễm Ngọc Da Cá Đuối",
+    "sapo_id": null,
+    "variant_id": "965",
+    "sku": "SP-211266812",
+    "price": "13900000.00"
+  },
+  {
+    "product_id": "677",
+    "name": "Túi Xách Trầm Vũ Da Bò",
+    "sapo_id": null,
+    "variant_id": "966",
+    "sku": "SP-211274368",
+    "price": "4500000.00"
+  },
+  {
+    "product_id": "679",
+    "name": "Túi Xách Diễm Ngọc Da Cá Đuối",
+    "sapo_id": null,
+    "variant_id": "968",
+    "sku": "SP-211266813",
+    "price": "13900000.00"
+  },
+  {
+    "product_id": "677",
+    "name": "Túi Xách Trầm Vũ Da Bò",
+    "sapo_id": null,
+    "variant_id": "969",
+    "sku": "SP-211274369",
+    "price": "4500000.00"
+  },
+  {
+    "product_id": "680",
+    "name": "Túi Xách Xích Châu Da Trăn",
+    "sapo_id": null,
+    "variant_id": "967",
+    "sku": "SP-211266540",
+    "price": "0.00"
+  },
+  {
+    "product_id": "679",
+    "name": "Túi Xách Diễm Ngọc Da Cá Đuối",
+    "sapo_id": null,
+    "variant_id": "971",
+    "sku": "SP-211266814",
+    "price": "13900000.00"
+  },
+  {
+    "product_id": "680",
+    "name": "Túi Xách Xích Châu Da Trăn",
+    "sapo_id": null,
+    "variant_id": "970",
+    "sku": "SP-211266541",
+    "price": "0.00"
+  },
+  {
+    "product_id": "679",
+    "name": "Túi Xách Diễm Ngọc Da Cá Đuối",
+    "sapo_id": null,
+    "variant_id": "973",
+    "sku": "SP-211266815",
+    "price": "13900000.00"
+  },
+  {
+    "product_id": "679",
+    "name": "Túi Xách Diễm Ngọc Da Cá Đuối",
+    "sapo_id": null,
+    "variant_id": "974",
+    "sku": "SP-211266816",
+    "price": "13900000.00"
+  },
+  {
+    "product_id": "681",
+    "name": "Túi Xách Dao Linh Da Bò",
+    "sapo_id": null,
+    "variant_id": "972",
+    "sku": "SP-211256455",
+    "price": "0.00"
+  },
+  {
+    "product_id": "682",
+    "name": "Túi Xách Quang Diệu Da Cá Đuối",
+    "sapo_id": null,
+    "variant_id": "975",
+    "sku": "SP-211255856",
+    "price": "11500000.00"
+  },
+  {
+    "product_id": "682",
+    "name": "Túi Xách Quang Diệu Da Cá Đuối",
+    "sapo_id": null,
+    "variant_id": "1169",
+    "sku": "SP-211255857",
+    "price": "11500000.00"
+  },
+  {
+    "product_id": "683",
+    "name": "Túi Xách Phong Nhiên Da Bò",
+    "sapo_id": null,
+    "variant_id": "1170",
+    "sku": "SP-211255337",
+    "price": "20600000.00"
+  },
+  {
+    "product_id": "682",
+    "name": "Túi Xách Quang Diệu Da Cá Đuối",
+    "sapo_id": null,
+    "variant_id": "1171",
+    "sku": "SP-211255858",
+    "price": "11500000.00"
+  },
+  {
+    "product_id": "684",
+    "name": "Túi Xách Phong Uyên Da Bò",
+    "sapo_id": null,
+    "variant_id": "1172",
+    "sku": "SP-211254655",
+    "price": "26800000.00"
+  },
+  {
+    "product_id": "684",
+    "name": "Túi Xách Phong Uyên Da Bò",
+    "sapo_id": null,
+    "variant_id": "1173",
+    "sku": "SP-211254656",
+    "price": "29800000.00"
+  },
+  {
+    "product_id": "686",
+    "name": "Túi Xách Hoa Uyển Da Bò",
+    "sapo_id": null,
+    "variant_id": "1175",
+    "sku": "SP-211252419",
+    "price": "17200000.00"
+  },
+  {
+    "product_id": "686",
+    "name": "Túi Xách Hoa Uyển Da Bò",
+    "sapo_id": null,
+    "variant_id": "1176",
+    "sku": "SP-211252420",
+    "price": "19000000.00"
+  },
+  {
+    "product_id": "688",
+    "name": "Túi Xách Tịch Quang Da Bò",
+    "sapo_id": null,
+    "variant_id": "1178",
+    "sku": "SP-211249502",
+    "price": "0.00"
+  },
+  {
+    "product_id": "689",
+    "name": "Túi Xách Hắc Vân Da Cá Sấu",
+    "sapo_id": null,
+    "variant_id": "1179",
+    "sku": "SP-211249150",
+    "price": "21600000.00"
+  },
+  {
+    "product_id": "696",
+    "name": "Túi Xách Thảo Nghi Da Bò",
+    "sapo_id": null,
+    "variant_id": "1186",
+    "sku": "SP-211247561",
+    "price": "16600000.00"
+  },
+  {
+    "product_id": "699",
+    "name": "Túi Xách Nhã An Da Bò",
+    "sapo_id": null,
+    "variant_id": "1189",
+    "sku": "SP-211188142",
+    "price": "0.00"
+  },
+  {
+    "product_id": "701",
+    "name": "Túi Xách Ngọc Khanh Da Bò",
+    "sapo_id": null,
+    "variant_id": "1191",
+    "sku": "SP-211187672",
+    "price": "18680000.00"
+  },
+  {
+    "product_id": "701",
+    "name": "Túi Xách Ngọc Khanh Da Bò",
+    "sapo_id": null,
+    "variant_id": "1193",
+    "sku": "SP-211187673",
+    "price": "21580000.00"
+  },
+  {
+    "product_id": "703",
+    "name": "Túi Xách Diệp Vũ Da Cá Sấu",
+    "sapo_id": null,
+    "variant_id": "1194",
+    "sku": "SP-211187212",
+    "price": "27500000.00"
+  },
+  {
+    "product_id": "704",
+    "name": "Túi Xách Sơ Tịnh Da Bò",
+    "sapo_id": null,
+    "variant_id": "1195",
+    "sku": "SP-211187042",
+    "price": "0.00"
+  },
+  {
+    "product_id": "708",
+    "name": "Túi Xách Huyền Vũ Da Cá Sấu",
+    "sapo_id": null,
+    "variant_id": "1199",
+    "sku": "SP-211182753",
+    "price": "0.00"
+  },
+  {
+    "product_id": "710",
+    "name": "Túi Xách Mộc Dao Da Bò",
+    "sapo_id": null,
+    "variant_id": "1203",
+    "sku": "SP-211182579",
+    "price": "21600000.00"
+  },
+  {
+    "product_id": "712",
+    "name": "Túi Xách Uyển Thanh Da Bò",
+    "sapo_id": null,
+    "variant_id": "1205",
+    "sku": "SP-211182258",
+    "price": "16960000.00"
+  },
+  {
+    "product_id": "712",
+    "name": "Túi Xách Uyển Thanh Da Bò",
+    "sapo_id": null,
+    "variant_id": "1206",
+    "sku": "SP-211182259",
+    "price": "19860000.00"
+  },
+  {
+    "product_id": "712",
+    "name": "Túi Xách Uyển Thanh Da Bò",
+    "sapo_id": null,
+    "variant_id": "1207",
+    "sku": "SP-211182260",
+    "price": "16960000.00"
+  },
+  {
+    "product_id": "712",
+    "name": "Túi Xách Uyển Thanh Da Bò",
+    "sapo_id": null,
+    "variant_id": "1209",
+    "sku": "SP-211182261",
+    "price": "19860000.00"
+  },
+  {
+    "product_id": "717",
+    "name": "Túi Xách Mộc Yên Da Bò",
+    "sapo_id": null,
+    "variant_id": "1216",
+    "sku": "SP-211181093",
+    "price": "19230000.00"
+  },
+  {
+    "product_id": "718",
+    "name": "Túi Xách Trúc Vân Da Đà Điểu",
+    "sapo_id": null,
+    "variant_id": "1217",
+    "sku": "SP-211180059",
+    "price": "20900000.00"
+  },
+  {
+    "product_id": "719",
+    "name": "Túi Xách Mộc Phong Da Bò",
+    "sapo_id": null,
+    "variant_id": "1218",
+    "sku": "SP-211177694",
+    "price": "20800000.00"
+  },
+  {
+    "product_id": "718",
+    "name": "Túi Xách Trúc Vân Da Đà Điểu",
+    "sapo_id": null,
+    "variant_id": "1220",
+    "sku": "SP-211180060",
+    "price": "20900000.00"
+  },
+  {
+    "product_id": "722",
+    "name": "Nhẫn nam S925 đính Kim cương Lab - HK80531",
+    "sapo_id": null,
+    "variant_id": "1225",
+    "sku": "SP-211073200",
+    "price": "19800000.00"
+  },
+  {
+    "product_id": "724",
+    "name": "Bộ nhẫn Tam Miện Ánh Kim S925 đính Moissanite - HK84283",
+    "sapo_id": null,
+    "variant_id": "1227",
+    "sku": "SP-211071834",
+    "price": "5500000.00"
+  },
+  {
+    "product_id": "725",
+    "name": "Bộ nhẫn Tam Miện Ánh Kim S925 đính Moissanite - HK84214",
+    "sapo_id": null,
+    "variant_id": "1228",
+    "sku": "SP-211071552",
+    "price": "6200000.00"
+  },
+  {
+    "product_id": "728",
+    "name": "Nhẫn chế tác mặt hình chữ T S925 đính Moissanite - HK82695-B",
+    "sapo_id": null,
+    "variant_id": "1231",
+    "sku": "SP-211060709",
+    "price": "3800000.00"
+  },
+  {
+    "product_id": "730",
+    "name": "Đá Moissanite vàng - HK84664",
+    "sapo_id": null,
+    "variant_id": "1233",
+    "sku": "SP-211060379",
+    "price": "450000.00"
+  },
+  {
+    "product_id": "731",
+    "name": "Nhẫn nam S925 đính Moissanite - HK83984",
+    "sapo_id": null,
+    "variant_id": "1234",
+    "sku": "SP-211060051",
+    "price": "8000000.00"
+  },
+  {
+    "product_id": "733",
+    "name": "Dây chuyền cỏ 4 lá đeo 2 dáng V10K - HK83189",
+    "sapo_id": null,
+    "variant_id": "1236",
+    "sku": "SP-210826892",
+    "price": "20790000.00"
+  },
+  {
+    "product_id": "734",
+    "name": "Dây chuyền trái tim xanh V10K - HK82691",
+    "sapo_id": null,
+    "variant_id": "1238",
+    "sku": "SP-210824333",
+    "price": "15630000.00"
+  },
+  {
+    "product_id": "685",
+    "name": "Túi Xách Thiên Diệp Da Bò",
+    "sapo_id": null,
+    "variant_id": "1174",
+    "sku": "SP-211254371",
+    "price": "0.00"
+  },
+  {
+    "product_id": "692",
+    "name": "Túi Xách Thanh Uyển Da Bò",
+    "sapo_id": null,
+    "variant_id": "1182",
+    "sku": "SP-211248924",
+    "price": "29650000.00"
+  },
+  {
+    "product_id": "693",
+    "name": "Túi Xách Tùng Vũ Da Bò",
+    "sapo_id": null,
+    "variant_id": "1183",
+    "sku": "SP-211248713",
+    "price": "0.00"
+  },
+  {
+    "product_id": "695",
+    "name": "Túi Xách Thanh Vân Da Bò",
+    "sapo_id": null,
+    "variant_id": "1185",
+    "sku": "SP-211247629",
+    "price": "16200000.00"
+  },
+  {
+    "product_id": "705",
+    "name": "Túi Xách Nhã Vân Da Bò",
+    "sapo_id": null,
+    "variant_id": "1196",
+    "sku": "SP-211185526",
+    "price": "16800000.00"
+  },
+  {
+    "product_id": "707",
+    "name": "Túi Xách Quỳnh Dao Da Bò",
+    "sapo_id": null,
+    "variant_id": "1200",
+    "sku": "SP-211182877",
+    "price": "4600000.00"
+  },
+  {
+    "product_id": "707",
+    "name": "Túi Xách Quỳnh Dao Da Bò",
+    "sapo_id": null,
+    "variant_id": "1202",
+    "sku": "SP-211182878",
+    "price": "4600000.00"
+  },
+  {
+    "product_id": "713",
+    "name": "Túi Xách Vân Nguyệt Da Bò",
+    "sapo_id": null,
+    "variant_id": "1208",
+    "sku": "SP-211182059",
+    "price": "18220000.00"
+  },
+  {
+    "product_id": "714",
+    "name": "Balo Da Bò Thiết Kế BGD-2026.0682",
+    "sapo_id": null,
+    "variant_id": "1211",
+    "sku": "SP-211181717",
+    "price": "0.00"
+  },
+  {
+    "product_id": "718",
+    "name": "Túi Xách Trúc Vân Da Đà Điểu",
+    "sapo_id": null,
+    "variant_id": "1222",
+    "sku": "SP-211180061",
+    "price": "23600000.00"
+  },
+  {
+    "product_id": "721",
+    "name": "Lắc tay áo giáp 2 hàng S925 đính đá Moissanite",
+    "sapo_id": null,
+    "variant_id": "1224",
+    "sku": "SP-211125554",
+    "price": "7750000.00"
+  },
+  {
+    "product_id": "723",
+    "name": "Bộ nhẫn Tam Miện Ánh Kim S925 đính Moissanite - HK84273",
+    "sapo_id": null,
+    "variant_id": "1226",
+    "sku": "SP-211072642",
+    "price": "6500000.00"
+  },
+  {
+    "product_id": "726",
+    "name": "Nhẫn nam chế tác S925 đính đá tổng hợp xanh dương - HK84813",
+    "sapo_id": null,
+    "variant_id": "1229",
+    "sku": "SP-211071512",
+    "price": "5500000.00"
+  },
+  {
+    "product_id": "727",
+    "name": "LẮC tay chế tác S925 đính CZ - HK82168",
+    "sapo_id": null,
+    "variant_id": "1230",
+    "sku": "SP-211064031",
+    "price": "8000000.00"
+  },
+  {
+    "product_id": "729",
+    "name": "Dây chuyền đá nhảy V18K đính Moissanite - HK83006",
+    "sapo_id": null,
+    "variant_id": "1232",
+    "sku": "SP-211060612",
+    "price": "42700000.00"
+  },
+  {
+    "product_id": "732",
+    "name": "Túi Xách Thanh Liễu Da Bò QT",
+    "sapo_id": null,
+    "variant_id": "1235",
+    "sku": "SP-210858799",
+    "price": "3500000.00"
+  },
+  {
+    "product_id": "732",
+    "name": "Túi Xách Thanh Liễu Da Bò QT",
+    "sapo_id": null,
+    "variant_id": "1237",
+    "sku": "SP-210858800",
+    "price": "3500000.00"
+  },
+  {
+    "product_id": "687",
+    "name": "Túi Xách Mộc Nghi Da Bò",
+    "sapo_id": null,
+    "variant_id": "1177",
+    "sku": "SP-211249585",
+    "price": "16800000.00"
+  },
+  {
+    "product_id": "690",
+    "name": "Túi Xách Tố Uyên Da Cá Sấu",
+    "sapo_id": null,
+    "variant_id": "1180",
+    "sku": "SP-211249042",
+    "price": "0.00"
+  },
+  {
+    "product_id": "691",
+    "name": "Túi Xách Thanh Hợp  Da Bò",
+    "sapo_id": null,
+    "variant_id": "1181",
+    "sku": "SP-211248986",
+    "price": "15680000.00"
+  },
+  {
+    "product_id": "694",
+    "name": "Túi Xách Thảo Nhiên Da Bò",
+    "sapo_id": null,
+    "variant_id": "1184",
+    "sku": "SP-211247694",
+    "price": "17800000.00"
+  },
+  {
+    "product_id": "697",
+    "name": "Túi Xách Phong Linh Da Bò",
+    "sapo_id": null,
+    "variant_id": "1187",
+    "sku": "SP-211246352",
+    "price": "19860000.00"
+  },
+  {
+    "product_id": "698",
+    "name": "Túi Xách Phong Vận Da Bò",
+    "sapo_id": null,
+    "variant_id": "1188",
+    "sku": "SP-211244247",
+    "price": "22890000.00"
+  },
+  {
+    "product_id": "700",
+    "name": "Túi Xách Trường Phong Da Bò",
+    "sapo_id": null,
+    "variant_id": "1190",
+    "sku": "SP-211187809",
+    "price": "22862000.00"
+  },
+  {
+    "product_id": "702",
+    "name": "Túi Xách Non Sông Một Dải Da Bò",
+    "sapo_id": null,
+    "variant_id": "1192",
+    "sku": "SP-211187519",
+    "price": "27000000.00"
+  },
+  {
+    "product_id": "706",
+    "name": "Túi Xách Tịch Lam Da Bò",
+    "sapo_id": null,
+    "variant_id": "1197",
+    "sku": "SP-211183043",
+    "price": "23300000.00"
+  },
+  {
+    "product_id": "707",
+    "name": "Túi Xách Quỳnh Dao Da Bò",
+    "sapo_id": null,
+    "variant_id": "1198",
+    "sku": "SP-211182876",
+    "price": "4600000.00"
+  },
+  {
+    "product_id": "709",
+    "name": "Túi Xách Nhã Linh Da Bò",
+    "sapo_id": null,
+    "variant_id": "1201",
+    "sku": "SP-211182686",
+    "price": "0.00"
+  },
+  {
+    "product_id": "711",
+    "name": "Túi Xách Trầm Phong Da Bò",
+    "sapo_id": null,
+    "variant_id": "1204",
+    "sku": "SP-211182352",
+    "price": "19800000.00"
+  },
+  {
+    "product_id": "713",
+    "name": "Túi Xách Vân Nguyệt Da Bò",
+    "sapo_id": null,
+    "variant_id": "1210",
+    "sku": "SP-211182060",
+    "price": "21000000.00"
+  },
+  {
+    "product_id": "713",
+    "name": "Túi Xách Vân Nguyệt Da Bò",
+    "sapo_id": null,
+    "variant_id": "1212",
+    "sku": "SP-211182061",
+    "price": "23500000.00"
+  },
+  {
+    "product_id": "715",
+    "name": "Túi Xách Vân Hợp Da Bò",
+    "sapo_id": null,
+    "variant_id": "1213",
+    "sku": "SP-211181658",
+    "price": "13500000.00"
+  },
+  {
+    "product_id": "716",
+    "name": "Túi Xách Nữ 2D Da Bò",
+    "sapo_id": null,
+    "variant_id": "1214",
+    "sku": "SP-211181335",
+    "price": "12800000.00"
+  },
+  {
+    "product_id": "715",
+    "name": "Túi Xách Vân Hợp Da Bò",
+    "sapo_id": null,
+    "variant_id": "1215",
+    "sku": "SP-211181659",
+    "price": "14800000.00"
+  },
+  {
+    "product_id": "720",
+    "name": "Nhẫn nữ chế tác S925 đính moissanite - HK82012",
+    "sapo_id": null,
+    "variant_id": "1219",
+    "sku": "SP-211166693",
+    "price": "6000000.00"
+  },
+  {
+    "product_id": "719",
+    "name": "Túi Xách Mộc Phong Da Bò",
+    "sapo_id": null,
+    "variant_id": "1221",
+    "sku": "SP-211177695",
+    "price": "20800000.00"
+  },
+  {
+    "product_id": "718",
+    "name": "Túi Xách Trúc Vân Da Đà Điểu",
+    "sapo_id": null,
+    "variant_id": "1223",
+    "sku": "SP-211180062",
+    "price": "23600000.00"
+  },
+  {
+    "product_id": "735",
+    "name": "Dây chuyền trái tim xanh V10K - HK82829",
+    "sapo_id": null,
+    "variant_id": "1239",
+    "sku": "SP-210815611",
+    "price": "20490000.00"
+  },
+  {
+    "product_id": "736",
+    "name": "Nhẫn chế tác S925 đính Moissanite - HK83428",
+    "sapo_id": null,
+    "variant_id": "1240",
+    "sku": "SP-210797978",
+    "price": "4500000.00"
+  },
+  {
+    "product_id": "737",
+    "name": "Dây chuyền bó hoa S925 - HK79532",
+    "sapo_id": null,
+    "variant_id": "1241",
+    "sku": "SP-210791930",
+    "price": "4950000.00"
+  },
+  {
+    "product_id": "739",
+    "name": "Nhẫn nam chế tác S925 đính Moissanite - HK83280",
+    "sapo_id": null,
+    "variant_id": "1242",
+    "sku": "SP-210791464",
+    "price": "4650000.00"
+  },
+  {
+    "product_id": "738",
+    "name": "Set nhẫn nữ chế tác S925 đính Moissanite - HK84056",
+    "sapo_id": null,
+    "variant_id": "1243",
+    "sku": "SP-210791910",
+    "price": "6200000.00"
+  },
+  {
+    "product_id": "740",
+    "name": "Dây chuyền bó hoa S925 - HK82284",
+    "sapo_id": null,
+    "variant_id": "1244",
+    "sku": "SP-210791395",
+    "price": "4500000.00"
+  },
+  {
+    "product_id": "742",
+    "name": "Nhẫn chế tác S925 đính Moissanite - HK82695-A",
+    "sapo_id": null,
+    "variant_id": "1245",
+    "sku": "SP-210791117",
+    "price": "3800000.00"
+  },
+  {
+    "product_id": "741",
+    "name": "Nhẫn nữ chế tác S925 đính Moissanite - HK84202",
+    "sapo_id": null,
+    "variant_id": "1246",
+    "sku": "SP-210790348",
+    "price": "4000000.00"
+  },
+  {
+    "product_id": "743",
+    "name": "Kiềng tay chế tác S925 - HK81384",
+    "sapo_id": null,
+    "variant_id": "1247",
+    "sku": "SP-210776897",
+    "price": "8500000.00"
+  },
+  {
+    "product_id": "744",
+    "name": "Kiềng tay S999 - HK82247",
+    "sapo_id": null,
+    "variant_id": "1248",
+    "sku": "SP-210776593",
+    "price": "9000000.00"
+  },
+  {
+    "product_id": "745",
+    "name": "Nhẫn nữ S925 đính kim Lab - HK78391",
+    "sapo_id": null,
+    "variant_id": "1249",
+    "sku": "SP-210769029",
+    "price": "10500000.00"
+  },
+  {
+    "product_id": "746",
+    "name": "Nhẫn xoắn đá oval S925 đính đá CZ",
+    "sapo_id": null,
+    "variant_id": "1250",
+    "sku": "SP-210765237",
+    "price": "720000.00"
+  },
+  {
+    "product_id": "746",
+    "name": "Nhẫn xoắn đá oval S925 đính đá CZ",
+    "sapo_id": null,
+    "variant_id": "1251",
+    "sku": "SP-210765238",
+    "price": "720000.00"
+  },
+  {
+    "product_id": "747",
+    "name": "Bông tai Phong Tâm S925 xi Vàng - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1252",
+    "sku": "SP-210750308",
+    "price": "1450000.00"
+  },
+  {
+    "product_id": "748",
+    "name": "Nhẫn nữ Eternity 1 hàng S925 đính Moissanite 1.2mm - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1253",
+    "sku": "SP-210752959",
+    "price": "560000.00"
+  },
+  {
+    "product_id": "748",
+    "name": "Nhẫn nữ Eternity 1 hàng S925 đính Moissanite 1.2mm - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1254",
+    "sku": "SP-210752960",
+    "price": "560000.00"
+  },
+  {
+    "product_id": "749",
+    "name": "Lắc tay Phong Tâm S925 xi Vàng - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1255",
+    "sku": "SP-210750111",
+    "price": "2050000.00"
+  },
+  {
+    "product_id": "748",
+    "name": "Nhẫn nữ Eternity 1 hàng S925 đính Moissanite 1.2mm - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1256",
+    "sku": "SP-210752961",
+    "price": "560000.00"
+  },
+  {
+    "product_id": "751",
+    "name": "Dây chuyền đá vuông V18K - HK83705",
+    "sapo_id": null,
+    "variant_id": "1260",
+    "sku": "SP-210750055",
+    "price": "34410000.00"
+  },
+  {
+    "product_id": "755",
+    "name": "Đôi bông tai 6 chấu V14K - HK84471",
+    "sapo_id": null,
+    "variant_id": "1265",
+    "sku": "SP-210747544",
+    "price": "20030000.00"
+  },
+  {
+    "product_id": "757",
+    "name": "Túi Xách Triêu Dương Da Bò",
+    "sapo_id": null,
+    "variant_id": "1267",
+    "sku": "SP-210744900",
+    "price": "0.00"
+  },
+  {
+    "product_id": "762",
+    "name": "Nhẫn nữ Chùm hoa S925 Chủ Moissanite 6,3mm - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1272",
+    "sku": "SP-210584463",
+    "price": "2760000.00"
+  },
+  {
+    "product_id": "762",
+    "name": "Nhẫn nữ Chùm hoa S925 Chủ Moissanite 6,3mm - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1274",
+    "sku": "SP-210584464",
+    "price": "2760000.00"
+  },
+  {
+    "product_id": "766",
+    "name": "Nhẫn chế tác S925 đính Moissanite đỏ - 1625",
+    "sapo_id": null,
+    "variant_id": "1280",
+    "sku": "SP-210567251",
+    "price": "3600000.00"
+  },
+  {
+    "product_id": "767",
+    "name": "Thắt Lưng Nam Da Bò BGD-2026.0669",
+    "sapo_id": null,
+    "variant_id": "1281",
+    "sku": "SP-210566281",
+    "price": "2700000.00"
+  },
+  {
+    "product_id": "769",
+    "name": "Nhẫn tàng hình đá CZ hồng S925 - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1283",
+    "sku": "SP-210562863",
+    "price": "2550000.00"
+  },
+  {
+    "product_id": "769",
+    "name": "Nhẫn tàng hình đá CZ hồng S925 - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1284",
+    "sku": "SP-210563204",
+    "price": "2550000.00"
+  },
+  {
+    "product_id": "772",
+    "name": "Bông tai nữ S925 đính Moissanite - HK82560",
+    "sapo_id": null,
+    "variant_id": "1290",
+    "sku": "SP-210534073",
+    "price": "3800000.00"
+  },
+  {
+    "product_id": "777",
+    "name": "Nhẫn nữ S925 đính moi Moissanite - HK83101",
+    "sapo_id": null,
+    "variant_id": "1295",
+    "sku": "SP-210532893",
+    "price": "6250000.00"
+  },
+  {
+    "product_id": "783",
+    "name": "Túi Xách Mộc Linh Da Bò Epsom",
+    "sapo_id": null,
+    "variant_id": "1301",
+    "sku": "SP-210400984",
+    "price": "21450000.00"
+  },
+  {
+    "product_id": "784",
+    "name": "Nhẫn nữ chế tác V10K đính Moissanite - HK83735",
+    "sapo_id": null,
+    "variant_id": "1302",
+    "sku": "SP-210389947",
+    "price": "20420000.00"
+  },
+  {
+    "product_id": "785",
+    "name": "Bông tai nữ PT900 - HK82156",
+    "sapo_id": null,
+    "variant_id": "1303",
+    "sku": "SP-210389852",
+    "price": "18000000.00"
+  },
+  {
+    "product_id": "786",
+    "name": "Mặt dây chuyền V10K đính moissanite - HK83737",
+    "sapo_id": null,
+    "variant_id": "1304",
+    "sku": "SP-210389706",
+    "price": "12800000.00"
+  },
+  {
+    "product_id": "790",
+    "name": "Nhẫn nữ S925 đính Moissanite - HK82690",
+    "sapo_id": null,
+    "variant_id": "1308",
+    "sku": "SP-210387634",
+    "price": "5650000.00"
+  },
+  {
+    "product_id": "793",
+    "name": "Nhẫn nam S925 đính đá Moissanite - HK84439",
+    "sapo_id": null,
+    "variant_id": "1312",
+    "sku": "SP-210384672",
+    "price": "4650000.00"
+  },
+  {
+    "product_id": "794",
+    "name": "Đôi bông tai 6 chấu S925 đính đá 8li - HK84819",
+    "sapo_id": null,
+    "variant_id": "1313",
+    "sku": "SP-210376338",
+    "price": "3000000.00"
+  },
+  {
+    "product_id": "796",
+    "name": "TÚI XÁCH DA CÁ SẤU BGD-2026.0606",
+    "sapo_id": null,
+    "variant_id": "1315",
+    "sku": "SP-210368151",
+    "price": "60000000.00"
+  },
+  {
+    "product_id": "797",
+    "name": "Nhẫn tàng hình đá CZ Đỏ",
+    "sapo_id": null,
+    "variant_id": "1317",
+    "sku": "SP-210362495",
+    "price": "4450000.00"
+  },
+  {
+    "product_id": "800",
+    "name": "Bộ cỏ 4 lá S925 - HK80586",
+    "sapo_id": null,
+    "variant_id": "1322",
+    "sku": "SP-210356996",
+    "price": "12500000.00"
+  },
+  {
+    "product_id": "803",
+    "name": "Lắc Tennis Hoa Cúc S925 chủ Moissanite 6.3mm",
+    "sapo_id": null,
+    "variant_id": "1325",
+    "sku": "SP-210304453",
+    "price": "5250000.00"
+  },
+  {
+    "product_id": "804",
+    "name": "Nhẫn nữ chế tác S925 đính đá Moissanite Oval - HK82942",
+    "sapo_id": null,
+    "variant_id": "1327",
+    "sku": "SP-210304426",
+    "price": "4500000.00"
+  },
+  {
+    "product_id": "806",
+    "name": "Túi Xách Ngọc Vũ Da Bò QT",
+    "sapo_id": null,
+    "variant_id": "1329",
+    "sku": "SP-210267956",
+    "price": "3930000.00"
+  },
+  {
+    "product_id": "806",
+    "name": "Túi Xách Ngọc Vũ Da Bò QT",
+    "sapo_id": null,
+    "variant_id": "1330",
+    "sku": "SP-210267957",
+    "price": "3930000.00"
+  },
+  {
+    "product_id": "809",
+    "name": "Lắc tay đôi cỏ 4 lá V10K - HK83082",
+    "sapo_id": null,
+    "variant_id": "1337",
+    "sku": "SP-210250243",
+    "price": "34000000.00"
+  },
+  {
+    "product_id": "810",
+    "name": "Ổ nhẫn chế tác S925 - HK78959",
+    "sapo_id": null,
+    "variant_id": "1338",
+    "sku": "SP-210249514",
+    "price": "4500000.00"
+  },
+  {
+    "product_id": "815",
+    "name": "Nhẫn xoay răng cưa S925 - #1557",
+    "sapo_id": null,
+    "variant_id": "1343",
+    "sku": "SP-210239189",
+    "price": "7300000.00"
+  },
+  {
+    "product_id": "818",
+    "name": "Dây chuyền nam V10K - HK81410",
+    "sapo_id": null,
+    "variant_id": "1346",
+    "sku": "SP-210236430",
+    "price": "41920000.00"
+  },
+  {
+    "product_id": "820",
+    "name": "Charm Da Chạm Khắc Hoạ Tiết Thuyền Buồm",
+    "sapo_id": null,
+    "variant_id": "1348",
+    "sku": "SP-210228899",
+    "price": "4000000.00"
+  },
+  {
+    "product_id": "824",
+    "name": "Nhẫn nữ V14K đính đá Moissanite - HK81075",
+    "sapo_id": null,
+    "variant_id": "1352",
+    "sku": "SP-210176797",
+    "price": "17600000.00"
+  },
+  {
+    "product_id": "826",
+    "name": "Clutch Cầm Tay Hoạ Tiết Đan Da Bò",
+    "sapo_id": null,
+    "variant_id": "1354",
+    "sku": "SP-210155760",
+    "price": "25320000.00"
+  },
+  {
+    "product_id": "830",
+    "name": "Đôi bông tai chế tác V10K - HK83218",
+    "sapo_id": null,
+    "variant_id": "1358",
+    "sku": "SP-210127869",
+    "price": "10000000.00"
+  },
+  {
+    "product_id": "832",
+    "name": "Nhẫn nữ chế tác S925 đính Moissanite - HK81927",
+    "sapo_id": null,
+    "variant_id": "1360",
+    "sku": "SP-210126992",
+    "price": "3200000.00"
+  },
+  {
+    "product_id": "833",
+    "name": "Dây chuyền Kim Diệp bạc S925 đính Moissanite",
+    "sapo_id": null,
+    "variant_id": "1362",
+    "sku": "SP-211221270",
+    "price": "1250000.00"
+  },
+  {
+    "product_id": "838",
+    "name": "Ốp Lưng Điện Thoại Da Bò Vegtan/Nappa",
+    "sapo_id": null,
+    "variant_id": "1368",
+    "sku": "SP-210007947",
+    "price": "1800000.00"
+  },
+  {
+    "product_id": "838",
+    "name": "Ốp Lưng Điện Thoại Da Bò Vegtan/Nappa",
+    "sapo_id": null,
+    "variant_id": "1370",
+    "sku": "SP-211702489",
+    "price": "1800000.00"
+  },
+  {
+    "product_id": "843",
+    "name": "Nhẫn vĩnh ái lưu quang đính đá S925 - HK78368",
+    "sapo_id": null,
+    "variant_id": "1377",
+    "sku": "SP-210000355",
+    "price": "5500000.00"
+  },
+  {
+    "product_id": "846",
+    "name": "Charm Ngựa Cánh Da Cá Sấu Himalaya",
+    "sapo_id": null,
+    "variant_id": "1380",
+    "sku": "SP-209934255",
+    "price": "1500000.00"
+  },
+  {
+    "product_id": "748",
+    "name": "Nhẫn nữ Eternity 1 hàng S925 đính Moissanite 1.2mm - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1257",
+    "sku": "SP-210752962",
+    "price": "560000.00"
+  },
+  {
+    "product_id": "748",
+    "name": "Nhẫn nữ Eternity 1 hàng S925 đính Moissanite 1.2mm - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1259",
+    "sku": "SP-210752963",
+    "price": "560000.00"
+  },
+  {
+    "product_id": "752",
+    "name": "Dây chuyền Phong Tâm S925 xi Vàng - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1261",
+    "sku": "SP-210749696",
+    "price": "1250000.00"
+  },
+  {
+    "product_id": "752",
+    "name": "Dây chuyền Phong Tâm S925 xi Vàng - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1263",
+    "sku": "SP-210840918",
+    "price": "1250000.00"
+  },
+  {
+    "product_id": "758",
+    "name": "Túi Xách Mặc Niên Da Bò",
+    "sapo_id": null,
+    "variant_id": "1268",
+    "sku": "SP-210744564",
+    "price": "0.00"
+  },
+  {
+    "product_id": "759",
+    "name": "Túi Xách Mặc Vân Da Bò",
+    "sapo_id": null,
+    "variant_id": "1269",
+    "sku": "SP-210744390",
+    "price": "0.00"
+  },
+  {
+    "product_id": "761",
+    "name": "Ốp Lưng Điện Thoại Da Bò Sáp",
+    "sapo_id": null,
+    "variant_id": "1271",
+    "sku": "SP-210585496",
+    "price": "2100000.00"
+  },
+  {
+    "product_id": "763",
+    "name": "Nhẫn thiên thần S925 đính Moissanite - #2738",
+    "sapo_id": null,
+    "variant_id": "1273",
+    "sku": "SP-210578240",
+    "price": "8250000.00"
+  },
+  {
+    "product_id": "764",
+    "name": "Mặt dây chuyền S925 đính Moissanite - HK79244",
+    "sapo_id": null,
+    "variant_id": "1276",
+    "sku": "SP-210573772",
+    "price": "3000000.00"
+  },
+  {
+    "product_id": "765",
+    "name": "Mặt dây chuyền S925 đính Moissanite - HK81655",
+    "sapo_id": null,
+    "variant_id": "1279",
+    "sku": "SP-210569010",
+    "price": "5000000.00"
+  },
+  {
+    "product_id": "770",
+    "name": "Bông tai nữ bạc hoa tuyết S925 đính Moissanite - HK82899",
+    "sapo_id": null,
+    "variant_id": "1285",
+    "sku": "SP-210535153",
+    "price": "3500000.00"
+  },
+  {
+    "product_id": "769",
+    "name": "Nhẫn tàng hình đá CZ hồng S925 - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1287",
+    "sku": "SP-210563205",
+    "price": "2550000.00"
+  },
+  {
+    "product_id": "769",
+    "name": "Nhẫn tàng hình đá CZ hồng S925 - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1288",
+    "sku": "SP-210563206",
+    "price": "2550000.00"
+  },
+  {
+    "product_id": "769",
+    "name": "Nhẫn tàng hình đá CZ hồng S925 - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1289",
+    "sku": "SP-210563207",
+    "price": "2550000.00"
+  },
+  {
+    "product_id": "774",
+    "name": "Nhẫn nữ S925 đính Moissanite - HK80188",
+    "sapo_id": null,
+    "variant_id": "1292",
+    "sku": "SP-210533658",
+    "price": "4500000.00"
+  },
+  {
+    "product_id": "775",
+    "name": "Nhẫn nữ V18K - 3D006",
+    "sapo_id": null,
+    "variant_id": "1293",
+    "sku": "SP-210533639",
+    "price": "20000000.00"
+  },
+  {
+    "product_id": "776",
+    "name": "Lắc chân mix charm V18K - HK79307",
+    "sapo_id": null,
+    "variant_id": "1294",
+    "sku": "SP-210533211",
+    "price": "28000000.00"
+  },
+  {
+    "product_id": "778",
+    "name": "Túi xách da bò BGD-2026.0665",
+    "sapo_id": null,
+    "variant_id": "1296",
+    "sku": "SP-210525256",
+    "price": "40500000.00"
+  },
+  {
+    "product_id": "779",
+    "name": "Dây chuyền trái tim S925 đính Moissanite - HK78651",
+    "sapo_id": null,
+    "variant_id": "1297",
+    "sku": "SP-210437973",
+    "price": "8000000.00"
+  },
+  {
+    "product_id": "787",
+    "name": "Nhẫn kim hoa V10K - HK83650",
+    "sapo_id": null,
+    "variant_id": "1305",
+    "sku": "SP-210389556",
+    "price": "12000000.00"
+  },
+  {
+    "product_id": "791",
+    "name": "TÚI XÁCH DA BÒ BGD-2026.0644",
+    "sapo_id": null,
+    "variant_id": "1309",
+    "sku": "SP-210386089",
+    "price": "28900000.00"
+  },
+  {
+    "product_id": "792",
+    "name": "Nhẫn chữ H S925 đính Moissanite - HK80116",
+    "sapo_id": null,
+    "variant_id": "1311",
+    "sku": "SP-210385724",
+    "price": "5500000.00"
+  },
+  {
+    "product_id": "798",
+    "name": "Nhẫn cỏ 4 lá xoay moissanite V10K - HK84135",
+    "sapo_id": null,
+    "variant_id": "1316",
+    "sku": "SP-210359370",
+    "price": "19400000.00"
+  },
+  {
+    "product_id": "799",
+    "name": "Kiềng tay khổng tước bản kín - bạc trắng 990",
+    "sapo_id": null,
+    "variant_id": "1319",
+    "sku": "SP-210357937",
+    "price": "7990000.00"
+  },
+  {
+    "product_id": "797",
+    "name": "Nhẫn tàng hình đá CZ Đỏ",
+    "sapo_id": null,
+    "variant_id": "1320",
+    "sku": "SP-210363023",
+    "price": "4450000.00"
+  },
+  {
+    "product_id": "801",
+    "name": "Nhẫn nam V18K - HK78567",
+    "sapo_id": null,
+    "variant_id": "1324",
+    "sku": "SP-210356600",
+    "price": "52300000.00"
+  },
+  {
+    "product_id": "806",
+    "name": "Túi Xách Ngọc Vũ Da Bò QT",
+    "sapo_id": null,
+    "variant_id": "1332",
+    "sku": "SP-210267975",
+    "price": "3930000.00"
+  },
+  {
+    "product_id": "807",
+    "name": "Ốp Gập Điện Thoại Da Bò Epsom",
+    "sapo_id": null,
+    "variant_id": "1333",
+    "sku": "SP-210267664",
+    "price": "2100000.00"
+  },
+  {
+    "product_id": "811",
+    "name": "Bông tai chế tác S925 đính đá Moissanite - HK81326",
+    "sapo_id": null,
+    "variant_id": "1339",
+    "sku": "SP-210248622",
+    "price": "4000000.00"
+  },
+  {
+    "product_id": "813",
+    "name": "Nhẫn thiên thần S925 đính đá Moissanite - #2757",
+    "sapo_id": null,
+    "variant_id": "1341",
+    "sku": "SP-210243823",
+    "price": "4125000.00"
+  },
+  {
+    "product_id": "816",
+    "name": "Dây chuyền bó hoa đính CZ S925 - HK80478",
+    "sapo_id": null,
+    "variant_id": "1344",
+    "sku": "SP-210239119",
+    "price": "4800000.00"
+  },
+  {
+    "product_id": "823",
+    "name": "Dây chuyền liên hoa S990 - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1351",
+    "sku": "SP-210186827",
+    "price": "1450000.00"
+  },
+  {
+    "product_id": "825",
+    "name": "Dây chuyền tinh nguyệt bạc S925 đính Moiss 6.5mm",
+    "sapo_id": null,
+    "variant_id": "1353",
+    "sku": "SP-210171466",
+    "price": "1150000.00"
+  },
+  {
+    "product_id": "828",
+    "name": "Nhẫn mắt thần Horus V18K - HK82557",
+    "sapo_id": null,
+    "variant_id": "1356",
+    "sku": "SP-210129653",
+    "price": "37200000.00"
+  },
+  {
+    "product_id": "831",
+    "name": "Nhẫn Nguyệt quang kiều S925 đính Moissanite - HK82565",
+    "sapo_id": null,
+    "variant_id": "1359",
+    "sku": "SP-210127518",
+    "price": "3500000.00"
+  },
+  {
+    "product_id": "834",
+    "name": "Ví Nam Da Cá Sấu",
+    "sapo_id": null,
+    "variant_id": "1363",
+    "sku": "SP-210042348",
+    "price": "9500000.00"
+  },
+  {
+    "product_id": "837",
+    "name": "Túi Xách Uyển Nhu Da Lộn QT",
+    "sapo_id": null,
+    "variant_id": "1366",
+    "sku": "SP-210016106",
+    "price": "3950000.00"
+  },
+  {
+    "product_id": "840",
+    "name": "Đá moissanite 3 li - HK84882",
+    "sapo_id": null,
+    "variant_id": "1371",
+    "sku": "SP-210003041",
+    "price": "150000.00"
+  },
+  {
+    "product_id": "842",
+    "name": "Nhẫn nữ đính đá S925 - HK83454",
+    "sapo_id": null,
+    "variant_id": "1376",
+    "sku": "SP-210001145",
+    "price": "3500000.00"
+  },
+  {
+    "product_id": "844",
+    "name": "Dây chuyền nữ đính đá S925 - HK79052",
+    "sapo_id": null,
+    "variant_id": "1378",
+    "sku": "SP-209986725",
+    "price": "5000000.00"
+  },
+  {
+    "product_id": "846",
+    "name": "Charm Ngựa Cánh Da Cá Sấu Himalaya",
+    "sapo_id": null,
+    "variant_id": "1381",
+    "sku": "SP-209934256",
+    "price": "2950000.00"
+  },
+  {
+    "product_id": "750",
+    "name": "Nhẫn kim vũ S925 đính đá garnet đỏ - HK83039",
+    "sapo_id": null,
+    "variant_id": "1258",
+    "sku": "SP-210750102",
+    "price": "4000000.00"
+  },
+  {
+    "product_id": "753",
+    "name": "Dây chuyền trái tim đá nhảy S925 đính đá Moissanite - HK84380",
+    "sapo_id": null,
+    "variant_id": "1262",
+    "sku": "SP-210748057",
+    "price": "4000000.00"
+  },
+  {
+    "product_id": "754",
+    "name": "Nhẫn nữ chế tác S925 - HK84553",
+    "sapo_id": null,
+    "variant_id": "1264",
+    "sku": "SP-210748051",
+    "price": "3000000.00"
+  },
+  {
+    "product_id": "756",
+    "name": "Túi Xách Dạ Ảnh Da Bò",
+    "sapo_id": null,
+    "variant_id": "1266",
+    "sku": "SP-210745082",
+    "price": "0.00"
+  },
+  {
+    "product_id": "760",
+    "name": "Lắc Tay Luân Quang bạc S925 đính đá CZ",
+    "sapo_id": null,
+    "variant_id": "1270",
+    "sku": "SP-210650148",
+    "price": "2250000.00"
+  },
+  {
+    "product_id": "762",
+    "name": "Nhẫn nữ Chùm hoa S925 Chủ Moissanite 6,3mm - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1275",
+    "sku": "SP-210584465",
+    "price": "2760000.00"
+  },
+  {
+    "product_id": "762",
+    "name": "Nhẫn nữ Chùm hoa S925 Chủ Moissanite 6,3mm - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1277",
+    "sku": "SP-210584466",
+    "price": "2760000.00"
+  },
+  {
+    "product_id": "762",
+    "name": "Nhẫn nữ Chùm hoa S925 Chủ Moissanite 6,3mm - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1278",
+    "sku": "SP-210584467",
+    "price": "2760000.00"
+  },
+  {
+    "product_id": "768",
+    "name": "Dây chuyền chế tác S925 - HK79646",
+    "sapo_id": null,
+    "variant_id": "1282",
+    "sku": "SP-210562963",
+    "price": "10000000.00"
+  },
+  {
+    "product_id": "771",
+    "name": "Nhẫn nữ S925 đính đá Moissanite - HK80822",
+    "sapo_id": null,
+    "variant_id": "1286",
+    "sku": "SP-210534814",
+    "price": "3600000.00"
+  },
+  {
+    "product_id": "773",
+    "name": "Nhẫn S925 đính đá Moissanite - HK83136",
+    "sapo_id": null,
+    "variant_id": "1291",
+    "sku": "SP-210533674",
+    "price": "4000000.00"
+  },
+  {
+    "product_id": "780",
+    "name": "Nhẫn nữ V10K - HK83560",
+    "sapo_id": null,
+    "variant_id": "1298",
+    "sku": "SP-210419268",
+    "price": "15000000.00"
+  },
+  {
+    "product_id": "781",
+    "name": "Nhẫn kim hoa V18K - HK82858",
+    "sapo_id": null,
+    "variant_id": "1299",
+    "sku": "SP-210416920",
+    "price": "18500000.00"
+  },
+  {
+    "product_id": "782",
+    "name": "Bông tai móc treo kiểu tòng teng V10K - HK82599",
+    "sapo_id": null,
+    "variant_id": "1300",
+    "sku": "SP-210416821",
+    "price": "9000000.00"
+  },
+  {
+    "product_id": "788",
+    "name": "Bộ nhẫn Tam Miện Ánh Kim S925 đính Moissanite - HK83133",
+    "sapo_id": null,
+    "variant_id": "1306",
+    "sku": "SP-210388462",
+    "price": "6150000.00"
+  },
+  {
+    "product_id": "789",
+    "name": "Lắc tay lưu quang V18K - HK82571",
+    "sapo_id": null,
+    "variant_id": "1307",
+    "sku": "SP-210388195",
+    "price": "72240000.00"
+  },
+  {
+    "product_id": "791",
+    "name": "TÚI XÁCH DA BÒ BGD-2026.0644",
+    "sapo_id": null,
+    "variant_id": "1310",
+    "sku": "SP-210386090",
+    "price": "0.00"
+  },
+  {
+    "product_id": "795",
+    "name": "Nhẫn nữ S925 đính Mossanite- HK83645",
+    "sapo_id": null,
+    "variant_id": "1314",
+    "sku": "SP-210375630",
+    "price": "6800000.00"
+  },
+  {
+    "product_id": "797",
+    "name": "Nhẫn tàng hình đá CZ Đỏ",
+    "sapo_id": null,
+    "variant_id": "1318",
+    "sku": "SP-210363022",
+    "price": "4450000.00"
+  },
+  {
+    "product_id": "797",
+    "name": "Nhẫn tàng hình đá CZ Đỏ",
+    "sapo_id": null,
+    "variant_id": "1321",
+    "sku": "SP-210363024",
+    "price": "4450000.00"
+  },
+  {
+    "product_id": "797",
+    "name": "Nhẫn tàng hình đá CZ Đỏ",
+    "sapo_id": null,
+    "variant_id": "1323",
+    "sku": "SP-210363025",
+    "price": "4450000.00"
+  },
+  {
+    "product_id": "802",
+    "name": "Nhẫn nữ chùm hoa đai Baguette V14K - HK83753",
+    "sapo_id": null,
+    "variant_id": "1326",
+    "sku": "SP-210306378",
+    "price": "23500000.00"
+  },
+  {
+    "product_id": "805",
+    "name": "Dây chuyền ánh mặt trời V10K - HK81409",
+    "sapo_id": null,
+    "variant_id": "1328",
+    "sku": "SP-210296549",
+    "price": "16970000.00"
+  },
+  {
+    "product_id": "807",
+    "name": "Ốp Gập Điện Thoại Da Bò Epsom",
+    "sapo_id": null,
+    "variant_id": "1331",
+    "sku": "SP-210267663",
+    "price": "2100000.00"
+  },
+  {
+    "product_id": "807",
+    "name": "Ốp Gập Điện Thoại Da Bò Epsom",
+    "sapo_id": null,
+    "variant_id": "1334",
+    "sku": "SP-210267665",
+    "price": "2100000.00"
+  },
+  {
+    "product_id": "808",
+    "name": "Thắt Lưng Nam Da Bò",
+    "sapo_id": null,
+    "variant_id": "1335",
+    "sku": "SP-210267640",
+    "price": "2500000.00"
+  },
+  {
+    "product_id": "807",
+    "name": "Ốp Gập Điện Thoại Da Bò Epsom",
+    "sapo_id": null,
+    "variant_id": "1336",
+    "sku": "SP-210267676",
+    "price": "2100000.00"
+  },
+  {
+    "product_id": "812",
+    "name": "Bông tai Hoa 5 cánh chốt ren Bạc S925 Chủ Mois 5.0mm",
+    "sapo_id": null,
+    "variant_id": "1340",
+    "sku": "SP-210245843",
+    "price": "1800000.00"
+  },
+  {
+    "product_id": "814",
+    "name": "Mặt dây chuyền S925 - HK81898",
+    "sapo_id": null,
+    "variant_id": "1342",
+    "sku": "SP-210243755",
+    "price": "4600000.00"
+  },
+  {
+    "product_id": "817",
+    "name": "Nhẫn nam S925 - HK80789",
+    "sapo_id": null,
+    "variant_id": "1345",
+    "sku": "SP-210237789",
+    "price": "3800000.00"
+  },
+  {
+    "product_id": "819",
+    "name": "Bông tai móc tròn V18K - HK82612",
+    "sapo_id": null,
+    "variant_id": "1347",
+    "sku": "SP-210234647",
+    "price": "23000000.00"
+  },
+  {
+    "product_id": "821",
+    "name": "Mặt dây chuyền V18K - HK82630",
+    "sapo_id": null,
+    "variant_id": "1349",
+    "sku": "SP-210188911",
+    "price": "11800000.00"
+  },
+  {
+    "product_id": "822",
+    "name": "Dây chuyền hoa anh đào đeo 2 dáng S925 - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": "1350",
+    "sku": "SP-210188332",
+    "price": "990000.00"
+  },
+  {
+    "product_id": "827",
+    "name": "Lắc tay lục giác S925 đính Sapphire - HK71159",
+    "sapo_id": null,
+    "variant_id": "1355",
+    "sku": "SP-210144421",
+    "price": "17000000.00"
+  },
+  {
+    "product_id": "829",
+    "name": "Nhẫn nữ chế tác S925 đính Moissanite - HK82707",
+    "sapo_id": null,
+    "variant_id": "1357",
+    "sku": "SP-210128452",
+    "price": "4000000.00"
+  },
+  {
+    "product_id": "833",
+    "name": "Dây chuyền Kim Diệp bạc S925 đính Moissanite",
+    "sapo_id": null,
+    "variant_id": "1361",
+    "sku": "SP-210076831",
+    "price": "1250000.00"
+  },
+  {
+    "product_id": "835",
+    "name": "Kim cương thiên nhiên tấm NB0002",
+    "sapo_id": null,
+    "variant_id": "1364",
+    "sku": "SP-210019080",
+    "price": "67000000.00"
+  },
+  {
+    "product_id": "836",
+    "name": "Kim cương thiên nhiên tấm NB0001",
+    "sapo_id": null,
+    "variant_id": "1365",
+    "sku": "SP-210019052",
+    "price": "23300000.00"
+  },
+  {
+    "product_id": "838",
+    "name": "Ốp Lưng Điện Thoại Da Bò Vegtan/Nappa",
+    "sapo_id": null,
+    "variant_id": "1367",
+    "sku": "SP-210007946",
+    "price": "1800000.00"
+  },
+  {
+    "product_id": "841",
+    "name": "Nhẫn nữ đính đá S925 - HK78039",
+    "sapo_id": null,
+    "variant_id": "1375",
+    "sku": "SP-210001402",
+    "price": "4000000.00"
+  },
+  {
+    "product_id": "845",
+    "name": "Nhẫn nam đính đá Moissanite 18K HK82589",
+    "sapo_id": null,
+    "variant_id": "1379",
+    "sku": "SP-209981897",
+    "price": "48000000.00"
+  },
+  {
+    "product_id": "847",
+    "name": "Túi Xách Mộng Linh Da Cá Sấu Màu (Mới)",
+    "sapo_id": null,
+    "variant_id": "1382",
+    "sku": "SP-209932018",
+    "price": "26860000.00"
+  },
+  {
+    "product_id": "847",
+    "name": "Túi Xách Mộng Linh Da Cá Sấu Màu (Mới)",
+    "sapo_id": null,
+    "variant_id": "1384",
+    "sku": "SP-209932019",
+    "price": "29950000.00"
+  },
+  {
+    "product_id": "847",
+    "name": "Túi Xách Mộng Linh Da Cá Sấu Màu (Mới)",
+    "sapo_id": null,
+    "variant_id": "1386",
+    "sku": "SP-209932020",
+    "price": "29950000.00"
+  },
+  {
+    "product_id": "847",
+    "name": "Túi Xách Mộng Linh Da Cá Sấu Màu (Mới)",
+    "sapo_id": null,
+    "variant_id": "1387",
+    "sku": "SP-209932021",
+    "price": "33000000.00"
+  },
+  {
+    "product_id": "848",
+    "name": "Túi Xách Lưu Vân Da Bò (Mới)",
+    "sapo_id": null,
+    "variant_id": "1390",
+    "sku": "SP-209930306",
+    "price": "25400000.00"
+  },
+  {
+    "product_id": "848",
+    "name": "Túi Xách Lưu Vân Da Bò (Mới)",
+    "sapo_id": null,
+    "variant_id": "1383",
+    "sku": "SP-209930303",
+    "price": "23960000.00"
+  },
+  {
+    "product_id": "849",
+    "name": "Balo Da Bò Thiết kế Chạm BGD-2026.0632",
+    "sapo_id": null,
+    "variant_id": "1389",
+    "sku": "SP-209915493",
+    "price": "43500000.00"
+  },
+  {
+    "product_id": "848",
+    "name": "Túi Xách Lưu Vân Da Bò (Mới)",
+    "sapo_id": null,
+    "variant_id": "1385",
+    "sku": "SP-209930304",
+    "price": "23960000.00"
+  },
+  {
+    "product_id": "848",
+    "name": "Túi Xách Lưu Vân Da Bò (Mới)",
+    "sapo_id": null,
+    "variant_id": "1388",
+    "sku": "SP-209930305",
+    "price": "23960000.00"
+  },
+  {
+    "product_id": "848",
+    "name": "Túi Xách Lưu Vân Da Bò (Mới)",
+    "sapo_id": null,
+    "variant_id": "1391",
+    "sku": "SP-209930307",
+    "price": "25400000.00"
+  },
+  {
+    "product_id": "848",
+    "name": "Túi Xách Lưu Vân Da Bò (Mới)",
+    "sapo_id": null,
+    "variant_id": "1392",
+    "sku": "SP-209930308",
+    "price": "25400000.00"
+  },
+  {
+    "product_id": "848",
+    "name": "Túi Xách Lưu Vân Da Bò (Mới)",
+    "sapo_id": null,
+    "variant_id": "1393",
+    "sku": "SP-209930309",
+    "price": "28200000.00"
+  },
+  {
+    "product_id": "850",
+    "name": "Lắc tay áo giáp 2 hàng S925 đính moissanite - HK79181",
+    "sapo_id": null,
+    "variant_id": "1394",
+    "sku": "SP-209895432",
+    "price": "7500000.00"
+  },
+  {
+    "product_id": "851",
+    "name": "Dây Đồng Hồ Da Mông Ngựa Cordovan (Mới)",
+    "sapo_id": null,
+    "variant_id": "1395",
+    "sku": "SP-209878714",
+    "price": "1990000.00"
+  },
+  {
+    "product_id": "848",
+    "name": "Túi Xách Lưu Vân Da Bò (Mới)",
+    "sapo_id": null,
+    "variant_id": "1396",
+    "sku": "SP-209930310",
+    "price": "0.00"
+  },
+  {
+    "product_id": "851",
+    "name": "Dây Đồng Hồ Da Mông Ngựa Cordovan (Mới)",
+    "sapo_id": null,
+    "variant_id": "1397",
+    "sku": "SP-209878715",
+    "price": "1990000.00"
+  },
+  {
+    "product_id": "851",
+    "name": "Dây Đồng Hồ Da Mông Ngựa Cordovan (Mới)",
+    "sapo_id": null,
+    "variant_id": "1398",
+    "sku": "SP-209878716",
+    "price": "1990000.00"
+  },
+  {
+    "product_id": "848",
+    "name": "Túi Xách Lưu Vân Da Bò (Mới)",
+    "sapo_id": null,
+    "variant_id": "1399",
+    "sku": "SP-209930311",
+    "price": "28200000.00"
+  },
+  {
+    "product_id": "852",
+    "name": "Nhẫn nữ chế tác S925 đính moissanite - HK83468",
+    "sapo_id": null,
+    "variant_id": "1400",
+    "sku": "SP-209878696",
+    "price": "3900000.00"
+  },
+  {
+    "product_id": "853",
+    "name": "Clutch Nam Da Cá Sấu BGD-2026.0561",
+    "sapo_id": null,
+    "variant_id": "1401",
+    "sku": "SP-209878319",
+    "price": "25850000.00"
+  },
+  {
+    "product_id": "854",
+    "name": "Nhẫn tàng hình V10K đính Moissanite - HK83107",
+    "sapo_id": null,
+    "variant_id": "1402",
+    "sku": "SP-209878297",
+    "price": "14300000.00"
+  },
+  {
+    "product_id": "855",
+    "name": "Kim cương thiên nhiên HK77232",
+    "sapo_id": null,
+    "variant_id": "1403",
+    "sku": "SP-209876195",
+    "price": "25000000.00"
+  },
+  {
+    "product_id": "856",
+    "name": "Đôi bông tai S925 đính Moissanite - HK82645",
+    "sapo_id": null,
+    "variant_id": "1404",
+    "sku": "SP-209872025",
+    "price": "1500000.00"
+  },
+  {
+    "product_id": "857",
+    "name": "Nhẫn công chúa chế tác V18K - HK80540",
+    "sapo_id": null,
+    "variant_id": "1405",
+    "sku": "SP-209871102",
+    "price": "29390000.00"
+  },
+  {
+    "product_id": "858",
+    "name": "Nhẫn chế tác V18K đính đá Garnet - HK77232",
+    "sapo_id": null,
+    "variant_id": "1406",
+    "sku": "SP-209869284",
+    "price": "55000000.00"
+  },
+  {
+    "product_id": "859",
+    "name": "Đôi bông tai chế tác S925 đính Moissanite - HK83075B",
+    "sapo_id": null,
+    "variant_id": "1407",
+    "sku": "SP-209865935",
+    "price": "2500000.00"
+  },
+  {
+    "product_id": "860",
+    "name": "Dây chuyền chế tác S925 đính Moissanite - HK83075D",
+    "sapo_id": null,
+    "variant_id": "1408",
+    "sku": "SP-209865689",
+    "price": "4200000.00"
+  },
+  {
+    "product_id": "861",
+    "name": "Nhẫn nữ chế tác S925 đính Moissanite - HK81876",
+    "sapo_id": null,
+    "variant_id": "1409",
+    "sku": "SP-209864446",
+    "price": "3500000.00"
+  },
+  {
+    "product_id": "862",
+    "name": "Túi Xách Khải Vân Da Bò",
+    "sapo_id": null,
+    "variant_id": "1410",
+    "sku": "SP-209864240",
+    "price": "0.00"
+  },
+  {
+    "product_id": "863",
+    "name": "Túi Xách Tùng Linh Da Bò",
+    "sapo_id": null,
+    "variant_id": "1411",
+    "sku": "SP-209864088",
+    "price": "0.00"
+  },
+  {
+    "product_id": "864",
+    "name": "Túi Xách Thanh Trúc Da Cá Sấu",
+    "sapo_id": null,
+    "variant_id": "1412",
+    "sku": "SP-209864003",
+    "price": "0.00"
+  },
+  {
+    "product_id": "865",
+    "name": "Túi Xách Ngọc Trâm Da Bò",
+    "sapo_id": null,
+    "variant_id": "1413",
+    "sku": "SP-209863963",
+    "price": "0.00"
+  },
+  {
+    "product_id": "866",
+    "name": "Nhẫn nữ chế tác S925 đính Moissanite - HK82669",
+    "sapo_id": null,
+    "variant_id": "1414",
+    "sku": "SP-209863954",
+    "price": "5200000.00"
+  },
+  {
+    "product_id": "867",
+    "name": "Túi Xách Tú Linh Da Bò",
+    "sapo_id": null,
+    "variant_id": "1415",
+    "sku": "SP-209863877",
+    "price": "0.00"
+  },
+  {
+    "product_id": "868",
+    "name": "Nhẫn kim hoa viền trơn S925 đính Moissanite - HK80648",
+    "sapo_id": null,
+    "variant_id": "1416",
+    "sku": "SP-209863800",
+    "price": "3800000.00"
+  },
+  {
+    "product_id": "869",
+    "name": "Nhẫn nữ chế tác S925 đính Moissanite - HK82327",
+    "sapo_id": null,
+    "variant_id": "1417",
+    "sku": "SP-209861666",
+    "price": "5800000.00"
+  },
+  {
+    "product_id": "870",
+    "name": "Nhẫn nữ chế tác S925 đính Moissanite - HK81580",
+    "sapo_id": null,
+    "variant_id": "1418",
+    "sku": "SP-209861392",
+    "price": "4500000.00"
+  },
+  {
+    "product_id": "871",
+    "name": "Kiềng tay chế tác S925 - HK80291",
+    "sapo_id": null,
+    "variant_id": "1419",
+    "sku": "SP-209859139",
+    "price": "6500000.00"
+  },
+  {
+    "product_id": "872",
+    "name": "Kiềng tay chế tác S925 đính Moissanite - HK79206",
+    "sapo_id": null,
+    "variant_id": "1420",
+    "sku": "SP-209858947",
+    "price": "8000000.00"
+  },
+  {
+    "product_id": "873",
+    "name": "Nhẫn hoa tâm S925 đính Moissanite - HK79175",
+    "sapo_id": null,
+    "variant_id": "1421",
+    "sku": "SP-209825134",
+    "price": "4730000.00"
+  },
+  {
+    "product_id": "874",
+    "name": "Túi Xách Trúc Hạnh Da Bò",
+    "sapo_id": null,
+    "variant_id": "1422",
+    "sku": "SP-209825020",
+    "price": "0.00"
+  },
+  {
+    "product_id": "875",
+    "name": "Túi Xách Vân Hạnh Da Bò",
+    "sapo_id": null,
+    "variant_id": "1423",
+    "sku": "SP-209817282",
+    "price": "0.00"
+  },
+  {
+    "product_id": "876",
+    "name": "Túi Xách Nữ Da Bò BGD-2026.0631",
+    "sapo_id": null,
+    "variant_id": "1424",
+    "sku": "SP-209804000",
+    "price": "16000000.00"
+  },
+  {
+    "product_id": "878",
+    "name": "Thắt Lưng Nam Da Bò BGD-2026.0628",
+    "sapo_id": null,
+    "variant_id": "1426",
+    "sku": "SP-209783044",
+    "price": "3000000.00"
+  },
+  {
+    "product_id": "497",
+    "name": "Túi Xách Phù Vân Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "452",
+    "name": "Kiềng tàng hình S925 đính Moissanite - HK85089",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "496",
+    "name": "Túi Xách Hắc Sơn Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "455",
+    "name": "Nhẫn nữ đính Moissanite V18K - HK85405",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "437",
+    "name": "Túi Xách Mộc Thanh Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "518",
+    "name": "Túi Xách Dao Linh Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "397",
+    "name": "Bình sữa S999",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "339",
+    "name": "Mặt dây chuyền chế tác S925 - HK82765",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "486",
+    "name": "Túi Xách Da Bò Thiết Kế BGD-2026.0691",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "330",
+    "name": "Dây chuyền trái tim S925 -  HK86322",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "359",
+    "name": "đôi bông tai s925 Chế tác 6 chấu đính đá moissanite 8ly - HK86951",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "379",
+    "name": "Nhẫn nữ chế tác S925 đính đá moissanite - HK86293",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "373",
+    "name": "Lắc tay lá phong chế tác  S925 - HK86577",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "414",
+    "name": "Kiềng tay Kim Diệu S925 đính Mois - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "449",
+    "name": "Kim cương nhân tạo HK80531",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "335",
+    "name": "Dây chuyền lá phong bạc S925 đính CZ - HK85823",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "508",
+    "name": "Túi Xách Phong Thảo Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "489",
+    "name": "Nhẫn nữ chế tác V10K - HK84497",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "471",
+    "name": "Bông tai 6 chấu V14K - HK84373",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "357",
+    "name": "Đá Moissanite HK82585",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "465",
+    "name": "Nhẫn nam thiết kế V18K - HK85050",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "479",
+    "name": "Ổ nhẫn chế tác S925 - HK78964",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "504",
+    "name": "Túi Xách An Lam Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "512",
+    "name": "Mặt dây chuyền chế tác V18K - HK83153",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "442",
+    "name": "Bông tai S925 6 chấu Moissanite 7.2mm",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "505",
+    "name": "Túi Xách Hắc Linh Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "428",
+    "name": "Dây chuyền chế tác S925 đính moissanite - HK83642",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "424",
+    "name": "Nhẫn bạc chế tác S925 đính đá Moissanite - HK84144",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "381",
+    "name": "Đậu bạc Hộp Card",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "408",
+    "name": "Nhẫn chế tác nữ S925  đính  MOissanite 9li -  HK84970",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "466",
+    "name": "Nhẫn nữ chế tác S925 đính Moisanite - HK85440",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "478",
+    "name": "Lắc tay trái tim S925 đính Moissanite - HK80027",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "458",
+    "name": "Nhẫn Lá Phong S925 xi Vàng - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "413",
+    "name": "Bông tai chế tác S925 đính Moissanite -  HK83808",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "343",
+    "name": "Charm Mèo Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "480",
+    "name": "Hộp Giấy Vân Phong Các",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "337",
+    "name": "Bông tai cầu vồng S925 - 2728",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "459",
+    "name": "Dây chuyền đá nhảy V10K đính đá Moissanite - HK85178",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "419",
+    "name": "Nhẫn thiên mã nhãn S925 đính Moissanite - HK83552",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "444",
+    "name": "Túi Xách Mộc Vân Da Bò Epsom QT (Mới)",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "391",
+    "name": "Dây chuyền đậu bạc Lục Hoa",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "400",
+    "name": "Thìa bạc chữ Phúc S999",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "473",
+    "name": "Nhẫn chấu hình trái tim V14K - HK82682",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "426",
+    "name": "Lắc tay Cuban chế tác S925 - HK85867",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "361",
+    "name": "Nhẫn chế tác S925 đính đá moissanite xanh lá  -  HK85615",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "474",
+    "name": "Nhẫn tàng hình Moissanite V14K - HK85091",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "348",
+    "name": "Xách Mộc Vân Da Bò Màu Cam",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "332",
+    "name": "Mặt dây chuyền lá phong V14K - HK86155",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "468",
+    "name": "Nhẫn kim vương chi hoa S925 đính Moissanite - HK85403",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "484",
+    "name": "Nhẫn Hợp Bích Tâm S925 - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "404",
+    "name": "Bông tai chế tác S925 - HK84552",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "507",
+    "name": "Túi Xách Mộng Huyền Da Cá Sấu",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "485",
+    "name": "Đôi bông tai V18k - HK82621",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "500",
+    "name": "Túi Xách Vân Sa Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "515",
+    "name": "Túi Xách Thiên An Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "433",
+    "name": "Lắc tay trái tim S925 đính Moissannite - HK82585",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "365",
+    "name": "Nhẫn tàng hình S925 đính đá moissanite - HK86527",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "475",
+    "name": "Set nhẫn 3 chiếc S925 đính Moissanite - HK85796",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "462",
+    "name": "Nhẫn nữ S925 đính Moissanite 10li",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "461",
+    "name": "Đá thạch anh tim vàng chanh HK59695",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "499",
+    "name": "Túi Xách Tịch Lâm Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "498",
+    "name": "Túi Xách Lạc Sơn Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "367",
+    "name": "Lắc tay lưu quang S925 đính Moissanite - HK85979",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "392",
+    "name": "Đậu bạc đĩnh bạc mạ vàng",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "429",
+    "name": "Nhẫn horus s925 đính đá đỏ - HK83532",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "519",
+    "name": "Túi Xách Quang Diệu Da Cá Đuối",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "432",
+    "name": "Dây chuyền cỏ 4 lá ghép 2 dáng V10K - HK86357",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "396",
+    "name": "Túi Đeo Chéo Nam Da Bò Togo BGD-2026.0391",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "493",
+    "name": "Túi Xách Sơ Vũ Da Đà Điểu",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "319",
+    "name": "Ốp Lưng Điện Thoại Da Cá Sấu",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "435",
+    "name": "Nhẫn kim hoa đai trơn đính Mois S925 - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "398",
+    "name": "Thìa kỳ lân S999",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "366",
+    "name": "Nhẫn xoay cỏ 4 lá V18K chế tác - HK86216",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "440",
+    "name": "Túi Xách Nam Da Cá Sấu Thiết Kế BGD-2026.0699",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "421",
+    "name": "Dây chuyền Ngân Vũ S925 đính Mois- Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "443",
+    "name": "Bông tai 3 chấu đính Moiss bạc S925",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "492",
+    "name": "Bông tai 6 chấu đính đá Moissanite PT900 HK85231",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "427",
+    "name": "Mặt dây chuyền V18K - HK85980",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "377",
+    "name": "Dây chuyền Phong tâm bản 5 lá xi kim S925 - HK87578",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "403",
+    "name": "Túi Xách Mộc Vũ Da Bò QT",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "494",
+    "name": "Túi Xách Vân Ý Da Cá Sấu",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "456",
+    "name": "Nhẫn nữ đính đá Topaz V14K - HK84790",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "353",
+    "name": "Bông tai khoen tròn S925 đính full Moissanite - HK86558",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "483",
+    "name": "Mặt dây chuyền chế tác V18K - HK84931",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "470",
+    "name": "Nhẫn đoá hoa S925 ĐÍNH Moissanite - HK85470",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "356",
+    "name": "Nhẫn đôi  S925 đính đá moissanite chế tác - HK81654",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "514",
+    "name": "Túi Xách Trầm Vũ Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "329",
+    "name": "Nhẫn tàng hình đính Moissanite V10K - HK86355",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "454",
+    "name": "Nhẫn chế tác S925 đính đá Moissanite - HK79016",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "390",
+    "name": "Đậu bạc Kẹp Chim Lạc",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "439",
+    "name": "Dây chuyền Kim Phong bạc S925 đính CZ - Viễn Chí Bảo",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "438",
+    "name": "Túi Xách Ngọc Vân Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "487",
+    "name": "Thắt Lưng Nam Chữ H BGD-2026.0681",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "349",
+    "name": "Dây chuyền đá nhảy V10k -  HK86645",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "363",
+    "name": "Nhẫn xoay răng cưa S925 - 1581",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "341",
+    "name": "Nhẫn bạc S925 đính đá Moissanite -  HK82874",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "409",
+    "name": "Nhẫn chế tác S925 đính full moissanite chủ 9li - HK85455",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "446",
+    "name": "Mặt dây chuyền V10K - HK85315",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "434",
+    "name": "Túi Xách Mặc Phong Da Bò QT",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "417",
+    "name": "Nhẫn mắt thần Horus V18K - HK86298",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "447",
+    "name": "Nhẫn nữ V18K - HK83811",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "386",
+    "name": "Dây chuyền đậu bạc Mặt Nón",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "511",
+    "name": "Dây Lưng Nam Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "430",
+    "name": "Nhẫn xoay răng cưa S925 đính đá CZ tím - #1813",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "506",
+    "name": "Túi Xách Mộc Liên Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "520",
+    "name": "Túi Xách Phong Nhiên Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "336",
+    "name": "Dây chuyền lá phong chế tác S925 đính CZ - HK86779",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "369",
+    "name": "Lắc tay lưu quang S925 đính Moissanite - HK82844",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "457",
+    "name": "Nhẫn nam đính Moissanite V18K - HK84924",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "464",
+    "name": "Đá sapphire Blue HK64404",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "477",
+    "name": "Nhẫn chế tác S925 đính Moissanite - HK84905",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "513",
+    "name": "Thắt Lưng Nữ Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "406",
+    "name": "Nhẫn kết tình  s925 đính Moissanite - HK83986",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "460",
+    "name": "Nhẫn mắt thần Horus đính Moissanite - 1938",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "441",
+    "name": "Lắc tay hoa tử đằng S925 đính đá S925",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "385",
+    "name": "Dây chuyền đậu bạc giọt nước",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "521",
+    "name": "Túi Xách Phong Uyên Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "502",
+    "name": "Túi Xách Trúc Lam Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "450",
+    "name": "Kim cương nhân tạo - HK84232",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "481",
+    "name": "Dây chuyền đá nhảy V18K đính Moissanite - HK85471",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "350",
+    "name": "Nhẫn nữ chế tác V18K đính đá moissanite viên chủ 12li -  HK85866",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "394",
+    "name": "Muỗng Long Vân S999",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "387",
+    "name": "Dây chuyền Ngân Lan bạc",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "501",
+    "name": "Túi Xách Lạc Nhiên Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "418",
+    "name": "Nhẫn tàng hình S925 đính Moissanite - HK83483",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "509",
+    "name": "Túi Xách Linh Sương Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "463",
+    "name": "Nhẫn nữ xoắn V18K đính Moissanite - HK83180",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "488",
+    "name": "Nhẫn nữ chế tác S925 đính đá Moissanite - HK83943",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "354",
+    "name": "Nhẫn nam chế tác S925 đính Moissanite -  HK84814",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "516",
+    "name": "Túi Xách Diễm Ngọc Da Cá Đuối",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "467",
+    "name": "Nhẫn nữ chế tác s925 đính Moissanite - HK85088",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "402",
+    "name": "Ví Nữ Khoá H Da Bò BGD-2026.0718",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "380",
+    "name": "Đá Moissanite HK80199",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "347",
+    "name": "Bông tai 6 chấu V10K - HK86842",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "517",
+    "name": "Túi Xách Xích Châu Da Trăn",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "342",
+    "name": "Bông tai giọt trăng S925 đính đá Moissanite 6.5li",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "451",
+    "name": "Bông tai 6 chấu S925 đính đá moissanite - HK85249",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "371",
+    "name": "Nhẫn chế tác đính đá Topaz S925 - HK83571",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "372",
+    "name": "Túi Xách Nữ Da Bò BGD-2026.0707",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "360",
+    "name": "Nhẫn chế tác S925 Nam Đính Full Đá Moiss viên chủ 7li - HK87477",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "495",
+    "name": "Túi Xách Uyển Nhu Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "422",
+    "name": "Lắc chân đốt trúc V10K - HK85128",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "469",
+    "name": "Nhẫn nữ chế tác S925 đính moissanite - HK84782",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "510",
+    "name": "Túi xách da bò BGD-2026.0611",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "415",
+    "name": "Nhẫn nữ V18K - HK84232",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "425",
+    "name": "Nhẫn Hoàng Quang S925 đính Moissanite 9li -  HK86149",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "482",
+    "name": "Nhẫn nữ chế tác S925 đính  Moissanite - HK84923",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "423",
+    "name": "Lắc tay ngân quang S925 đính Moissanite - HK80199",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "431",
+    "name": "Dây chuyền pháo hoa phát sáng V10K - HK84954",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "344",
+    "name": "Dây chuyền V14K đính Moissanite xanh lá - HK85832",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "476",
+    "name": "Nhẫn nữ V14K - HK85412",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "472",
+    "name": "Nhẫn tàng hình V14K - HK84879",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "503",
+    "name": "Túi Xách Hạ Thảo Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "375",
+    "name": "Dây chuyền Lá Phong bản 1 lá S925 - HK86794",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "448",
+    "name": "Đôi bông tai nữ 6 chấu S925 - HK84888",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "491",
+    "name": "Túi Xách Diễm Ngọc Da Thật",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "436",
+    "name": "Clutch Nam Phong Ưng Da Bò",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "420",
+    "name": "Nhẫn nữ V10K - HK83655",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "490",
+    "name": "Nhẫn bàn tay chế tác S925 - HK83929",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "331",
+    "name": "Dây chuyền lá phong V18K - HK85582",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "445",
+    "name": "Túi Xách Nữ Da Bò Thiết Kế BGD-2026.0679",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "411",
+    "name": "Mặt trái tim bạch kim - 3D005",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "383",
+    "name": "Bông tai chế tác S925 - HK85481",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  },
+  {
+    "product_id": "453",
+    "name": "Nhẫn mắt thần S925 đính CZ - HK78920",
+    "sapo_id": null,
+    "variant_id": null,
+    "sku": null,
+    "price": null
+  }
+]

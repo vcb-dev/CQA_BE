@@ -72,21 +72,41 @@ type WebhookMessagingEvent = {
   };
 };
 
-const INBOX_MESSAGE_SELECT = {
+const INBOX_MESSAGE_SELECT_LEGACY = {
   id: true,
   conversationId: true,
   fbMessageId: true,
   direction: true,
   senderType: true,
   text: true,
-  originalText: true,
-  translatedText: true,
-  sourceLang: true,
   messageType: true,
   attachmentUrl: true,
   sentAt: true,
   status: true,
 } as const;
+
+const INBOX_MESSAGE_SELECT = {
+  ...INBOX_MESSAGE_SELECT_LEGACY,
+  originalText: true,
+  translatedText: true,
+  sourceLang: true,
+} as const;
+
+type InboxMessageRow = {
+  id: string;
+  conversationId: string;
+  fbMessageId: string | null;
+  direction: string;
+  senderType: string;
+  text: string;
+  originalText?: string | null;
+  translatedText?: string | null;
+  sourceLang?: string | null;
+  messageType: string;
+  attachmentUrl: string | null;
+  sentAt: Date;
+  status: string;
+};
 
 @Injectable()
 export class CskhInboxService {
@@ -499,7 +519,7 @@ export class CskhInboxService {
     }
   }
 
-  private formatMessageRow(row: CskhInboxMessage): InboxMessagePayload {
+  private formatMessageRow(row: CskhInboxMessage | InboxMessageRow): InboxMessagePayload {
     return {
       id: row.id,
       conversationId: row.conversationId,
@@ -1902,23 +1922,67 @@ export class CskhInboxService {
     conversationId: string,
     sinceDate: Date | undefined,
     fetchLimit: number,
-  ) {
+  ): Promise<InboxMessageRow[]> {
     const hasSince = sinceDate && !Number.isNaN(sinceDate.getTime());
-    if (hasSince) {
-      return this.prisma.cskhInboxMessage.findMany({
-        where: { conversationId, sentAt: { gt: sinceDate! } },
-        orderBy: { sentAt: 'asc' },
-        take: 100,
+    const withLegacyNulls = (
+      rows: Array<{
+        id: string;
+        conversationId: string;
+        fbMessageId: string | null;
+        direction: string;
+        senderType: string;
+        text: string;
+        messageType: string;
+        attachmentUrl: string | null;
+        sentAt: Date;
+        status: string;
+      }>,
+    ): InboxMessageRow[] =>
+      rows.map((r) => ({
+        ...r,
+        originalText: null,
+        translatedText: null,
+        sourceLang: null,
+      }));
+
+    try {
+      if (hasSince) {
+        return await this.prisma.cskhInboxMessage.findMany({
+          where: { conversationId, sentAt: { gt: sinceDate! } },
+          orderBy: { sentAt: 'asc' },
+          take: 100,
+          select: INBOX_MESSAGE_SELECT,
+        });
+      }
+      const rows = await this.prisma.cskhInboxMessage.findMany({
+        where: { conversationId },
+        orderBy: { sentAt: 'desc' },
+        take: fetchLimit,
         select: INBOX_MESSAGE_SELECT,
       });
+      return rows.reverse();
+    } catch (e) {
+      if (!isInboxSchemaMigrationError(e)) throw e;
+      this.logger.warn(
+        `loadConversationMessages fallback legacy select (chạy manual-inbox-translate.sql): ${(e as Error).message}`,
+      );
+      if (hasSince) {
+        const rows = await this.prisma.cskhInboxMessage.findMany({
+          where: { conversationId, sentAt: { gt: sinceDate! } },
+          orderBy: { sentAt: 'asc' },
+          take: 100,
+          select: INBOX_MESSAGE_SELECT_LEGACY,
+        });
+        return withLegacyNulls(rows);
+      }
+      const rows = await this.prisma.cskhInboxMessage.findMany({
+        where: { conversationId },
+        orderBy: { sentAt: 'desc' },
+        take: fetchLimit,
+        select: INBOX_MESSAGE_SELECT_LEGACY,
+      });
+      return withLegacyNulls(rows.reverse());
     }
-    const rows = await this.prisma.cskhInboxMessage.findMany({
-      where: { conversationId },
-      orderBy: { sentAt: 'desc' },
-      take: fetchLimit,
-      select: INBOX_MESSAGE_SELECT,
-    });
-    return rows.reverse();
   }
 
   private async enrichCustomerPictures(conversationIds: string[]) {
@@ -3112,7 +3176,11 @@ export class CskhInboxService {
   /** Dịch inbound thiếu translatedText → lưu BE DB, publish SSE. Không chặn response. */
   private ensureInboundTranslations(
     conv: CskhInboxConversation | InboxConversationAccess,
-    messages: Array<Pick<CskhInboxMessage, 'id' | 'direction' | 'messageType' | 'text' | 'translatedText'>>,
+    messages: Array<
+      Pick<CskhInboxMessage, 'id' | 'direction' | 'messageType' | 'text'> & {
+        translatedText?: string | null;
+      }
+    >,
     tenantId?: string,
   ): void {
     const need = messages.filter((m) => {

@@ -133,7 +133,7 @@ export class CskhInboxService {
   /** Tắt mặc định — tránh quét inbox nền khi mở danh sách (chỉ bật khi CSKH_INBOX_ROTATING_SYNC_ENABLED=true). */
   private readonly rotatingSyncEnabled =
     process.env.CSKH_INBOX_ROTATING_SYNC_ENABLED === 'true';
-  private readonly msgLimit = Number(process.env.CSKH_INBOX_MSG_LIMIT || 50);
+  private readonly msgLimit = Number(process.env.CSKH_INBOX_MSG_LIMIT || 120);
   /** Khi recheck audit — tải nhiều tin hơn để so khớp transcript. */
   private readonly auditRecheckMsgLimit = Number(
     process.env.CSKH_INBOX_AUDIT_RECHECK_LIMIT || 200,
@@ -2205,7 +2205,7 @@ export class CskhInboxService {
     }
 
     const filtered = (messages ?? []).filter((m) => !this.graph.isStoredMessageNoise(m.text));
-    this.ensureInboundTranslations(conv, filtered, tenantId);
+    this.ensureMessageTranslations(conv, filtered, tenantId);
 
     return {
       conversation: {
@@ -2993,12 +2993,15 @@ export class CskhInboxService {
     if (options?.autoTranslate) {
       const langInfo = await this.resolveCustomerLang(conv, tenantId);
       if (langInfo.lang && langInfo.lang !== 'vi' && langInfo.lang !== 'und') {
+        const contextMessages = await this.loadTranslateContext(conv.id);
         const tr = await this.ai.translateText({
           text: trimmed,
           sourceLang: 'vi',
           targetLang: langInfo.lang,
+          direction: 'outbound',
+          contextMessages,
         });
-        if (!tr.sameLanguage && tr.translatedText.trim()) {
+        if (!tr.sameLanguage && tr.translatedText.trim() && tr.translatedText.trim() !== trimmed) {
           outboundText = tr.translatedText.trim();
           originalText = trimmed;
           translatedText = trimmed;
@@ -3099,6 +3102,8 @@ export class CskhInboxService {
       text: trimmed,
       sourceLang: 'vi',
       targetLang: target,
+      direction: 'outbound',
+      contextMessages: await this.loadTranslateContext(conv.id),
     });
 
     return {
@@ -3138,18 +3143,19 @@ export class CskhInboxService {
       };
     }
 
-    const inbound = await this.prisma.cskhInboxMessage.findMany({
+    // Lấy nhiều tin trong hội thoại (ưu tiên inbound, bổ sung outbound nếu thiếu)
+    const rows = await this.prisma.cskhInboxMessage.findMany({
       where: {
         conversationId: conv.id,
-        direction: 'inbound',
         messageType: 'text',
         NOT: { text: { in: ['', '[Ảnh]', '[Video]', '[Sticker]', '[attachment]'] } },
       },
-      orderBy: { sentAt: 'desc' },
-      take: 8,
-      select: { text: true },
+      orderBy: { sentAt: 'asc' },
+      take: 120,
+      select: { text: true, direction: true },
     });
-    const samples = inbound.map((m) => m.text).filter(Boolean);
+    const inbound = rows.filter((m) => m.direction === 'inbound').map((m) => m.text);
+    const samples = (inbound.length >= 3 ? inbound : rows.map((m) => m.text)).filter(Boolean);
     const detected = await this.ai.detectLang(samples);
 
     try {
@@ -3173,37 +3179,68 @@ export class CskhInboxService {
     };
   }
 
-  /** Dịch inbound thiếu translatedText → lưu BE DB, publish SSE. Không chặn response. */
-  private ensureInboundTranslations(
+  private async loadTranslateContext(conversationId: string): Promise<string[]> {
+    const rows = await this.prisma.cskhInboxMessage.findMany({
+      where: {
+        conversationId,
+        messageType: 'text',
+        NOT: { text: { in: ['', '[Ảnh]', '[Video]', '[Sticker]', '[attachment]'] } },
+      },
+      orderBy: { sentAt: 'desc' },
+      take: 16,
+      select: { text: true, direction: true, senderType: true },
+    });
+    return rows
+      .reverse()
+      .map((m) => {
+        const who = m.direction === 'inbound' || m.senderType === 'customer' ? 'Khách' : 'Shop';
+        return `${who}: ${m.text.slice(0, 220)}`;
+      });
+  }
+
+  /**
+   * Dịch thiếu bản VI cho cả inbound + outbound → lưu BE, publish SSE.
+   * - inbound: text (ngôn ngữ khách) → translatedText (VI)
+   * - outbound: nếu chưa có originalText/translatedText → dịch text → VI vào translatedText
+   */
+  private ensureMessageTranslations(
     conv: CskhInboxConversation | InboxConversationAccess,
     messages: Array<
       Pick<CskhInboxMessage, 'id' | 'direction' | 'messageType' | 'text'> & {
         translatedText?: string | null;
+        originalText?: string | null;
       }
     >,
     tenantId?: string,
   ): void {
+    const noise = new Set(['[Ảnh]', '[Video]', '[Sticker]', '[attachment]']);
     const need = messages.filter((m) => {
-      return (
-        m.direction === 'inbound' &&
-        m.messageType === 'text' &&
-        m.text?.trim() &&
-        !m.translatedText &&
-        !['[Ảnh]', '[Video]', '[Sticker]', '[attachment]'].includes(m.text)
-      );
+      if (m.messageType !== 'text' || !m.text?.trim() || noise.has(m.text)) return false;
+      const hasVi = Boolean((m.originalText || m.translatedText || '').trim());
+      return !hasVi;
     });
     if (!need.length) return;
 
+    const contextMessages = messages
+      .filter((m) => m.messageType === 'text' && m.text?.trim() && !noise.has(m.text))
+      .slice(-20)
+      .map((m) => {
+        const who = m.direction === 'inbound' ? 'Khách' : 'Shop';
+        return `${who}: ${m.text.slice(0, 220)}`;
+      });
+
     void (async () => {
       const updated: CskhInboxMessage[] = [];
-      for (const msg of need.slice(0, 12)) {
+      for (const msg of need.slice(0, 30)) {
         try {
           const tr = await this.ai.translateText({
             text: msg.text,
             sourceLang: 'auto',
             targetLang: 'vi',
+            direction: msg.direction === 'outbound' ? 'outbound' : 'inbound',
+            contextMessages,
           });
-          if (tr.sameLanguage || !tr.translatedText.trim()) {
+          if (tr.sameLanguage || !tr.translatedText.trim() || tr.translatedText.trim() === msg.text.trim()) {
             const patched = await this.prisma.cskhInboxMessage.update({
               where: { id: msg.id },
               data: {
@@ -3219,11 +3256,15 @@ export class CskhInboxService {
             data: {
               sourceLang: tr.detectedLang,
               translatedText: tr.translatedText,
+              // Outbound lịch sử: giữ text = bản gửi FB, VI nằm ở translatedText
+              ...(msg.direction === 'outbound' && !msg.originalText
+                ? {}
+                : {}),
             },
           });
           updated.push(patched);
         } catch (e) {
-          this.logger.debug(`inbound translate skip ${msg.id}: ${(e as Error).message}`);
+          this.logger.debug(`message translate skip ${msg.id}: ${(e as Error).message}`);
         }
       }
       if (updated.length) {

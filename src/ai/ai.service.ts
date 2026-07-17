@@ -299,6 +299,8 @@ export class AiService {
     text: string;
     sourceLang?: string;
     targetLang?: string;
+    direction?: 'inbound' | 'outbound';
+    contextMessages?: string[];
   }): Promise<{
     originalText: string;
     translatedText: string;
@@ -327,8 +329,10 @@ export class AiService {
           text,
           source_lang: sourceLang,
           target_lang: targetLang,
+          direction: data.direction ?? null,
+          context_messages: (data.contextMessages || []).slice(-12),
         },
-        { timeout: 30_000 },
+        { timeout: 45_000 },
       );
       return {
         originalText: String(result.original_text ?? result.originalText ?? text),
@@ -360,7 +364,7 @@ export class AiService {
     langLabel: string;
     confidence: string;
   }> {
-    const samples = texts.map((t) => t.trim()).filter(Boolean).slice(0, 12);
+    const samples = texts.map((t) => t.trim()).filter(Boolean).slice(0, 60);
     if (!samples.length) {
       return { lang: 'vi', langLabel: 'Tiếng Việt', confidence: 'low' };
     }
@@ -368,7 +372,7 @@ export class AiService {
       const { data: result } = await axios.post(
         `${this.aiBaseUrl}/cskh/detect-lang`,
         { texts: samples },
-        { timeout: 20_000 },
+        { timeout: 30_000 },
       );
       return {
         lang: String(result.lang ?? 'vi').trim().toLowerCase().slice(0, 16),

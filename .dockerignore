@@ -3,9 +3,12 @@ dist
 npm-debug.log
 .git
 .env
-Dockerfile
-.dockerignore
+.env.*
+!.env.example
 backfill-inbox.ts
 check-*.js
 verify-*.js
+scripts/out
 tsconfig.build.tsbuildinfo
+*.md
+.github

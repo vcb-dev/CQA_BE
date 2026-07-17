@@ -1,0 +1,115 @@
+name: Deploy Railway
+
+# Railway đang pull image Docker Hub: viejhaf/cqa-be:latest
+# Flow: build → push Docker Hub → railway redeploy (API + Worker)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Redeploy service (api | worker | both)'
+        required: true
+        default: both
+        type: choice
+        options: [api, worker, both]
+      skip_docker_push:
+        description: 'Chỉ redeploy Railway (không build/push Docker)'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: deploy-railway-production
+  cancel-in-progress: false
+
+env:
+  IMAGE: viejhaf/cqa-be:latest
+
+jobs:
+  build-and-push:
+    name: Build & Push Docker Hub
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.skip_docker_push != 'true')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  redeploy:
+    name: Redeploy Railway
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [build-and-push]
+    if: |
+      always() &&
+      (needs.build-and-push.result == 'success' || needs.build-and-push.result == 'skipped') &&
+      (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
+
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_SERVICE_API: ${{ secrets.RAILWAY_SERVICE_API }}
+      RAILWAY_SERVICE_WORKER: ${{ secrets.RAILWAY_SERVICE_WORKER }}
+
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Validate Railway secrets
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::Thiếu secret RAILWAY_TOKEN"
+            exit 1
+          fi
+          echo "RAILWAY_TOKEN OK"
+
+      - name: Resolve targets
+        id: targets
+        run: |
+          MODE="${{ github.event.inputs.service || 'both' }}"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "Redeploy mode: $MODE"
+
+      - name: Redeploy API
+        if: steps.targets.outputs.mode == 'api' || steps.targets.outputs.mode == 'both'
+        run: |
+          if [ -z "$RAILWAY_SERVICE_API" ]; then
+            echo "::error::Thiếu secret RAILWAY_SERVICE_API"
+            exit 1
+          fi
+          echo "Redeploy API → $RAILWAY_SERVICE_API"
+          railway redeploy --service "$RAILWAY_SERVICE_API" --yes
+
+      - name: Redeploy Worker
+        if: steps.targets.outputs.mode == 'worker' || steps.targets.outputs.mode == 'both'
+        run: |
+          if [ -z "$RAILWAY_SERVICE_WORKER" ]; then
+            echo "::warning::Thiếu RAILWAY_SERVICE_WORKER — bỏ qua worker"
+            exit 0
+          fi
+          echo "Redeploy Worker → $RAILWAY_SERVICE_WORKER"
+          railway redeploy --service "$RAILWAY_SERVICE_WORKER" --yes

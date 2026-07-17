@@ -295,6 +295,93 @@ export class AiService {
     }
   }
 
+  async translateText(data: {
+    text: string;
+    sourceLang?: string;
+    targetLang?: string;
+  }): Promise<{
+    originalText: string;
+    translatedText: string;
+    detectedLang: string;
+    sourceLang: string;
+    targetLang: string;
+    sameLanguage: boolean;
+  }> {
+    const text = (data.text || '').trim();
+    const sourceLang = (data.sourceLang || 'auto').trim() || 'auto';
+    const targetLang = (data.targetLang || 'vi').trim() || 'vi';
+    if (!text) {
+      return {
+        originalText: '',
+        translatedText: '',
+        detectedLang: 'und',
+        sourceLang,
+        targetLang,
+        sameLanguage: true,
+      };
+    }
+    try {
+      const { data: result } = await axios.post(
+        `${this.aiBaseUrl}/cskh/translate`,
+        {
+          text,
+          source_lang: sourceLang,
+          target_lang: targetLang,
+        },
+        { timeout: 30_000 },
+      );
+      return {
+        originalText: String(result.original_text ?? result.originalText ?? text),
+        translatedText: String(result.translated_text ?? result.translatedText ?? text),
+        detectedLang: String(result.detected_lang ?? result.detectedLang ?? 'und')
+          .trim()
+          .toLowerCase()
+          .slice(0, 16),
+        sourceLang: String(result.source_lang ?? result.sourceLang ?? sourceLang),
+        targetLang: String(result.target_lang ?? result.targetLang ?? targetLang),
+        sameLanguage: Boolean(result.same_language ?? result.sameLanguage),
+      };
+    } catch (error: unknown) {
+      const err = error as { message?: string };
+      this.logger.warn(`Translate failed: ${err.message}`);
+      return {
+        originalText: text,
+        translatedText: text,
+        detectedLang: sourceLang === 'auto' ? 'und' : sourceLang,
+        sourceLang,
+        targetLang,
+        sameLanguage: true,
+      };
+    }
+  }
+
+  async detectLang(texts: string[]): Promise<{
+    lang: string;
+    langLabel: string;
+    confidence: string;
+  }> {
+    const samples = texts.map((t) => t.trim()).filter(Boolean).slice(0, 12);
+    if (!samples.length) {
+      return { lang: 'vi', langLabel: 'Tiếng Việt', confidence: 'low' };
+    }
+    try {
+      const { data: result } = await axios.post(
+        `${this.aiBaseUrl}/cskh/detect-lang`,
+        { texts: samples },
+        { timeout: 20_000 },
+      );
+      return {
+        lang: String(result.lang ?? 'vi').trim().toLowerCase().slice(0, 16),
+        langLabel: String(result.lang_label ?? result.langLabel ?? result.lang ?? 'vi'),
+        confidence: String(result.confidence ?? 'medium'),
+      };
+    } catch (error: unknown) {
+      const err = error as { message?: string };
+      this.logger.warn(`Detect lang failed: ${err.message}`);
+      return { lang: 'vi', langLabel: 'Tiếng Việt', confidence: 'low' };
+    }
+  }
+
   async analyzeCustomerIntent(data: {
     messages: Array<{ sender: string; text: string }>;
     customerName?: string | null;

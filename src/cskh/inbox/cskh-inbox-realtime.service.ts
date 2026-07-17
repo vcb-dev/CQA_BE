@@ -23,6 +23,9 @@ export type InboxMessagePayload = {
   direction: string;
   senderType: string;
   text: string;
+  originalText?: string | null;
+  translatedText?: string | null;
+  sourceLang?: string | null;
   messageType: string;
   attachmentUrl: string | null;
   sentAt: string;
@@ -44,6 +47,8 @@ export type InboxConversationPayload = {
   adTitle: string | null;
   adId?: string | null;
   referralSource?: string | null;
+  customerLang?: string | null;
+  customerLangLabel?: string | null;
   labels?: InboxLabelPayload[];
   labelsLocked?: boolean;
   viewers?: InboxViewerPayload[];

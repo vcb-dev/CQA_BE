@@ -107,15 +107,15 @@ export function matchInterestedProducts(
     seen.add(item.variantId);
     const price = parseFloat(item.price) || 0;
     const compareAt = item.compareAtPrice ? parseFloat(item.compareAtPrice) : null;
-    const name =
-      item.variantTitle && !/^default/i.test(item.variantTitle)
-        ? `${item.productTitle} · ${item.variantTitle}`
-        : item.productTitle;
+    // Tên SP sạch; size/màu để FE hiển thị riêng qua variantTitle.
+    const name = item.productTitle;
+    const variantTitle =
+      item.variantTitle && !/^default/i.test(item.variantTitle) ? item.variantTitle : '';
     out.push({
       productId: item.productId,
       variantId: item.variantId,
       name,
-      variantTitle: item.variantTitle,
+      variantTitle,
       price,
       priceLabel: formatVnd(price),
       compareAtPrice: compareAt,

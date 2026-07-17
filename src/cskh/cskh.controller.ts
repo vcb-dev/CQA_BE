@@ -38,6 +38,7 @@ import { parseMediaProxyUrlFromRequest } from './facebook/facebook-message.util'
 import { SapoOAuthService } from './sapo/sapo-oauth.service';
 import { SapoProductService } from './sapo/sapo-product.service';
 import { SapoOrderService } from './sapo/sapo-order.service';
+import { ProductAnalyticsService } from './product-analytics.service';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtService } from '@nestjs/jwt';
 import { UsersService } from '../users/users.service';
@@ -61,6 +62,7 @@ export class CskhController {
     private readonly sapoOAuth: SapoOAuthService,
     private readonly sapoProducts: SapoProductService,
     private readonly sapoOrders: SapoOrderService,
+    private readonly productAnalytics: ProductAnalyticsService,
     private readonly jwtService: JwtService,
     private readonly usersService: UsersService,
     private readonly configService: ConfigService,
@@ -293,8 +295,8 @@ export class CskhController {
       items: items.map((v) => {
         const variantTitle =
           v.variantTitle && !/^default/i.test(v.variantTitle) ? v.variantTitle : '';
-        // Tên sạch = tên sản phẩm; biến thể (size/màu) tách riêng ở variantTitle.
-        const name = variantTitle ? `${v.productTitle} · ${variantTitle}` : v.productTitle;
+        // Tên SP sạch; size/màu tách riêng ở variantTitle để FE gắn nhãn Size/Màu.
+        const name = v.productTitle;
         const price = parseFloat(v.price) || 0;
         return {
           productId: v.productId,
@@ -320,6 +322,23 @@ export class CskhController {
   @UseGuards(JwtAuthGuard)
   async sapoCatalogSync() {
     return this.sapoProducts.syncCatalogToDb();
+  }
+
+  /** Dashboard analytics sản phẩm từ DB (catalog + đơn inbox). */
+  @Get('products/analytics')
+  @UseGuards(JwtAuthGuard)
+  getProductsAnalytics(
+    @Query('q') q?: string,
+    @Query('category') category?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.productAnalytics.getDashboard({
+      q,
+      category,
+      page: page ? Number(page) : 1,
+      pageSize: pageSize ? Number(pageSize) : 20,
+    });
   }
 
   /** Import sản phẩm từ Sapo API → bảng products / product_variants. */
@@ -803,9 +822,32 @@ export class CskhController {
   sendInboxMessage(
     @CurrentUser() user: User,
     @Param('id') id: string,
-    @Body() body: { text?: string },
+    @Body() body: { text?: string; autoTranslate?: boolean },
   ) {
-    return this.inbox.sendMessage(id, body.text ?? '', user.tenantId || undefined);
+    return this.inbox.sendMessage(id, body.text ?? '', user.tenantId || undefined, {
+      autoTranslate: Boolean(body.autoTranslate),
+    });
+  }
+
+  @Post('inbox/conversations/:id/translate-preview')
+  @UseGuards(JwtAuthGuard)
+  translateInboxPreview(
+    @CurrentUser() user: User,
+    @Param('id') id: string,
+    @Body() body: { text?: string; targetLang?: string },
+  ) {
+    return this.inbox.translatePreview(
+      id,
+      body.text ?? '',
+      user.tenantId || undefined,
+      body.targetLang,
+    );
+  }
+
+  @Post('inbox/conversations/:id/detect-lang')
+  @UseGuards(JwtAuthGuard)
+  detectInboxLang(@CurrentUser() user: User, @Param('id') id: string) {
+    return this.inbox.detectAndPersistCustomerLang(id, user.tenantId || undefined);
   }
 
   @Post('inbox/conversations/:id/typing')

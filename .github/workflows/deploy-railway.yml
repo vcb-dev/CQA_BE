@@ -1,8 +1,5 @@
 name: Deploy Railway
 
-# Railway đang pull image Docker Hub: viejhaf/cqa-be:latest
-# Flow: build → push Docker Hub → railway redeploy (API + Worker)
-
 on:
   push:
     branches: [main]

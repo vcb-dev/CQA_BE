@@ -1111,6 +1111,9 @@ model CskhInboxConversation {
   adTitle            String?                      @map("ad_title") @db.VarChar
   referralSource     String?                      @map("referral_source") @db.VarChar
   referralAt         DateTime?                    @map("referral_at") @db.Timestamptz(6)
+  /** Ngôn ngữ khách (ISO 639-1) — dùng khi NV bật tự dịch khi gửi. Persist ở BE. */
+  customerLang       String?                      @map("customer_lang") @db.VarChar(16)
+  customerLangLabel  String?                      @map("customer_lang_label") @db.VarChar(64)
   tenantId           String?                      @map("tenant_id") @db.Uuid
   tenant             Tenant?                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt          DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -1132,7 +1135,14 @@ model CskhInboxMessage {
   fbMessageId    String?               @unique @map("fb_message_id") @db.VarChar
   direction      String
   senderType     String                @map("sender_type")
+  /** Nội dung gửi/nhận trên Facebook (ngôn ngữ khách nếu đã dịch outbound). */
   text           String                @db.Text
+  /** Bản gốc NV gõ (thường VI) khi auto-translate outbound. */
+  originalText   String?               @map("original_text") @db.Text
+  /** Bản dịch tiếng Việt để NV đọc (inbound), hoặc mirror originalText (outbound). */
+  translatedText String?               @map("translated_text") @db.Text
+  /** Ngôn ngữ của `text` (ISO 639-1). */
+  sourceLang     String?               @map("source_lang") @db.VarChar(16)
   messageType    String                @default("text") @map("message_type")
   attachmentUrl  String?               @map("attachment_url") @db.Text
   tenantId       String?               @map("tenant_id") @db.Uuid

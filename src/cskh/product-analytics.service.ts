@@ -3,15 +3,65 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 const NA = 'chưa có data';
+const MISSING_SIZE = 'chưa có size';
+const MISSING_COLOR = 'chưa có màu';
 
 function formatVnd(n: number | null | undefined): string {
-  if (n == null || !Number.isFinite(n)) return NA;
+  if (n == null || !Number.isFinite(n)) return '0đ';
   return `${Math.round(n).toLocaleString('vi-VN')}đ`;
 }
 
 function formatNum(n: number | null | undefined): string {
-  if (n == null || !Number.isFinite(n)) return NA;
+  if (n == null || !Number.isFinite(n)) return '0';
   return Math.round(n).toLocaleString('vi-VN');
+}
+
+/** Parse size/màu từ variant.title (cùng rule FE create-order). */
+export function parseSizeColor(variantTitle: string | null | undefined): {
+  size: string;
+  color: string;
+} {
+  const missingSize = MISSING_SIZE;
+  const missingColor = MISSING_COLOR;
+  const vt = (variantTitle || '').trim();
+  if (!vt || /^default(\s+title)?$/i.test(vt)) {
+    return { size: missingSize, color: missingColor };
+  }
+
+  const normSize = (t: string) => {
+    if (/^(size|kích\s*thước)\b/i.test(t)) return t.replace(/^kích\s*thước\s*/i, 'Size ').trim();
+    if (/^\d+(\.\d+)?$/.test(t)) return `Size ${t}`;
+    if (/^\d+(\.\d+)?\s*cm$/i.test(t)) return t;
+    return t;
+  };
+  const normColor = (t: string) => {
+    if (/^màu\b/i.test(t)) return t;
+    return `Màu ${t}`;
+  };
+
+  if (vt.includes('/')) {
+    const parts = vt.split('/').map((p) => p.trim()).filter(Boolean);
+    let size: string | null = null;
+    let color: string | null = null;
+    for (const part of parts) {
+      if (/size|kích\s*thước|^\d+(\.\d+)?$/i.test(part)) size = normSize(part);
+      else color = normColor(part);
+    }
+    return { size: size ?? missingSize, color: color ?? missingColor };
+  }
+
+  if (/^\d+(\.\d+)?$/.test(vt) || /^(size|kích\s*thước)\b/i.test(vt) || /\bcm$/i.test(vt)) {
+    return { size: normSize(vt), color: missingColor };
+  }
+  if (/^màu\b/i.test(vt)) return { size: missingSize, color: vt };
+  return { size: missingSize, color: normColor(vt) };
+}
+
+function uniqJoin(values: string[], missing: string): string {
+  const cleaned = [...new Set(values.map((v) => v.trim()).filter(Boolean))];
+  if (!cleaned.length) return missing;
+  if (cleaned.every((v) => v === missing)) return missing;
+  return cleaned.filter((v) => v !== missing).join(', ') || missing;
 }
 
 @Injectable()
@@ -38,6 +88,8 @@ export class ProductAnalyticsService {
               { name: { contains: q, mode: 'insensitive' } },
               { slug: { contains: q, mode: 'insensitive' } },
               { category: { contains: q, mode: 'insensitive' } },
+              { material: { contains: q, mode: 'insensitive' } },
+              { variants: { some: { sku: { contains: q, mode: 'insensitive' } } } },
             ],
           }
         : {}),
@@ -58,36 +110,39 @@ export class ProductAnalyticsService {
       salesRows = [];
     }
 
-    const [totalProducts, categoriesRaw, products, filteredTotal, inboxMsgCount] =
-      await Promise.all([
-        this.prisma.product.count({
-          where: { isPublished: true, isDiscontinued: false },
-        }),
-        this.prisma.product.findMany({
-          where: { isPublished: true, isDiscontinued: false, category: { not: null } },
-          select: { category: true },
-          distinct: ['category'],
-          orderBy: { category: 'asc' },
-          take: 200,
-        }),
-        this.prisma.product.findMany({
-          where,
-          select: {
-            id: true,
-            slug: true,
-            name: true,
-            category: true,
-            material: true,
-            imageUrl: true,
-            variants: { select: { id: true, sku: true, title: true }, take: 3 },
+    const [totalProducts, categoriesRaw, products, filteredTotal] = await Promise.all([
+      this.prisma.product.count({
+        where: { isPublished: true, isDiscontinued: false },
+      }),
+      this.prisma.product.findMany({
+        where: { isPublished: true, isDiscontinued: false, category: { not: null } },
+        select: { category: true },
+        distinct: ['category'],
+        orderBy: { category: 'asc' },
+        take: 200,
+      }),
+      this.prisma.product.findMany({
+        where,
+        select: {
+          id: true,
+          slug: true,
+          name: true,
+          category: true,
+          material: true,
+          craftType: true,
+          imageUrl: true,
+          variants: {
+            select: { id: true, sku: true, title: true, price: true },
+            orderBy: { id: 'asc' },
+            take: 40,
           },
-          orderBy: { name: 'asc' },
-          skip: (page - 1) * pageSize,
-          take: pageSize,
-        }),
-        this.prisma.product.count({ where }),
-        this.prisma.cskhInboxMessage.count().catch(() => 0),
-      ]);
+        },
+        orderBy: { name: 'asc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.product.count({ where }),
+    ]);
 
     const salesByProduct = new Map<string, { unitsSold: number; revenue: number }>();
     let totalUnitsSold = 0;
@@ -103,71 +158,46 @@ export class ProductAnalyticsService {
       if (units > 0) productsWithSales += 1;
     }
 
-    // Phân loại tình trạng theo doanh số (dựa trên toàn bộ catalog đã bán)
-    const allPublished = await this.prisma.product.findMany({
-      where: { isPublished: true, isDiscontinued: false },
-      select: { id: true },
-    });
-    let hot = 0;
-    let potential = 0;
-    let average = 0;
-    let poor = 0;
-    for (const p of allPublished) {
-      const s = salesByProduct.get(p.id.toString());
-      const units = s?.unitsSold ?? 0;
-      if (units >= 10) hot += 1;
-      else if (units >= 3) potential += 1;
-      else if (units >= 1) average += 1;
-      else poor += 1;
-    }
-    const statusTotal = allPublished.length || 1;
-    const statusBreakdown = [
-      { key: 'hot', label: 'Sản phẩm bán chạy', count: hot, pct: Math.round((hot / statusTotal) * 1000) / 10, color: '#22c55e' },
-      { key: 'potential', label: 'Sản phẩm tiềm năng', count: potential, pct: Math.round((potential / statusTotal) * 1000) / 10, color: '#3b82f6' },
-      { key: 'average', label: 'Sản phẩm trung bình', count: average, pct: Math.round((average / statusTotal) * 1000) / 10, color: '#f59e0b' },
-      { key: 'poor', label: 'Sản phẩm chưa bán', count: poor, pct: Math.round((poor / statusTotal) * 1000) / 10, color: '#ef4444' },
-    ];
-
     const items = products.map((p) => {
       const sale = salesByProduct.get(p.id.toString());
       const unitsSold = sale?.unitsSold ?? 0;
       const revenue = sale?.revenue ?? 0;
       const sku = p.variants[0]?.sku ?? p.slug;
-      const variantHint = p.variants
-        .map((v) => v.title)
-        .filter((t) => t && !/^default/i.test(t))
-        .slice(0, 2)
-        .join(', ');
+      const parsed = p.variants.map((v) => parseSizeColor(v.title));
+      const size = uniqJoin(
+        parsed.map((x) => x.size),
+        MISSING_SIZE,
+      );
+      const color = uniqJoin(
+        parsed.map((x) => x.color),
+        MISSING_COLOR,
+      );
+      const price = p.variants[0]?.price != null ? Number(p.variants[0].price) : null;
+
       return {
         productId: Number(p.id),
         code: sku,
         name: p.name,
-        category: p.category || NA,
-        material: p.material,
+        category: p.category || '—',
+        material: p.material || '—',
+        craftType: p.craftType || null,
         imageUrl: p.imageUrl,
-        variantHint: variantHint || null,
-        messageCount: null as number | null,
-        messageCountLabel: NA,
-        responseRate: null as number | null,
-        responseRateLabel: NA,
-        closeRate: null as number | null,
-        closeRateLabel: NA,
+        size,
+        color,
+        price,
+        priceLabel: price != null ? formatVnd(price) : '—',
+        variantCount: p.variants.length,
         unitsSold,
         unitsSoldLabel: formatNum(unitsSold),
         revenue,
         revenueLabel: formatVnd(revenue),
-        revenuePerUnit: unitsSold > 0 ? revenue / unitsSold : null,
-        revenuePerUnitLabel: unitsSold > 0 ? formatVnd(revenue / unitsSold) : NA,
-        aiScore: null as number | null,
-        aiScoreLabel: NA,
-        trend: unitsSold > 0 ? ('up' as const) : ('flat' as const),
       };
     });
 
     const topByRevenue = [...salesByProduct.entries()]
       .map(([productId, s]) => ({ productId, ...s }))
       .sort((a, b) => b.revenue - a.revenue)
-      .slice(0, 5);
+      .slice(0, 8);
 
     const topProductIds = topByRevenue.map((t) => BigInt(t.productId));
     const topNames =
@@ -177,9 +207,7 @@ export class ProductAnalyticsService {
             select: { id: true, name: true, imageUrl: true },
           })
         : [];
-    const nameById = new Map(
-      topNames.map((p) => [p.id.toString(), p] as const),
-    );
+    const nameById = new Map(topNames.map((p) => [p.id.toString(), p] as const));
 
     const topRevenue = topByRevenue.map((t, i) => {
       const meta = nameById.get(t.productId.toString());
@@ -195,35 +223,12 @@ export class ProductAnalyticsService {
       };
     });
 
-    const chartTopSold = [...salesByProduct.entries()]
-      .map(([productId, s]) => ({ productId, ...s }))
-      .sort((a, b) => b.unitsSold - a.unitsSold)
-      .slice(0, 10);
-
-    const chartIds = chartTopSold.map((t) => BigInt(t.productId));
-    const chartNames =
-      chartIds.length > 0
-        ? await this.prisma.product.findMany({
-            where: { id: { in: chartIds } },
-            select: { id: true, name: true },
-          })
-        : [];
-    const chartNameById = new Map(chartNames.map((p) => [p.id.toString(), p.name]));
-
-    const insights: string[] = [];
-    if (totalProducts === 0) {
-      insights.push('Chưa có sản phẩm trong database. Hãy import catalog từ Sapo.');
-    } else {
-      insights.push(`Hiện có ${totalProducts.toLocaleString('vi-VN')} sản phẩm đang bán trên hệ thống.`);
-      if (productsWithSales > 0) {
-        insights.push(
-          `${productsWithSales.toLocaleString('vi-VN')} sản phẩm đã có đơn từ hội thoại (Sapo inbox), tổng ${formatNum(totalUnitsSold)} sản phẩm bán · doanh thu ${formatVnd(totalRevenue)}.`,
-        );
-      } else {
-        insights.push('Chưa có đơn hàng inbox gắn sản phẩm — doanh thu / đã bán đang ở mức 0.');
-      }
-      insights.push('Tin nhắn / tỷ lệ phản hồi / tỷ lệ chốt / AI Score theo từng SP: chưa có data (chưa gắn mention SP với hội thoại).');
-    }
+    const insights: string[] = [
+      `Catalog: ${totalProducts.toLocaleString('vi-VN')} sản phẩm đang bán.`,
+      productsWithSales > 0
+        ? `Đã bán (đơn inbox): ${formatNum(totalUnitsSold)} SP · doanh thu ${formatVnd(totalRevenue)}.`
+        : 'Chưa có đơn inbox gắn biến thể — đã bán / doanh thu đang = 0.',
+    ];
 
     return {
       source: 'database' as const,
@@ -233,51 +238,34 @@ export class ProductAnalyticsService {
           label: 'Tổng sản phẩm',
           value: formatNum(totalProducts),
           raw: totalProducts,
-          change: NA,
+          change: '',
           available: true,
-        },
-        {
-          key: 'productsWithMessages',
-          label: 'Sản phẩm có tin nhắn',
-          value: NA,
-          raw: null,
-          change: NA,
-          available: false,
-        },
-        {
-          key: 'totalMessages',
-          label: 'Tổng tin nhắn inbox',
-          value: formatNum(inboxMsgCount),
-          raw: inboxMsgCount,
-          change: NA,
-          available: true,
-          sub: 'toàn hệ thống (chưa tách theo SP)',
         },
         {
           key: 'unitsSold',
-          label: 'Sản phẩm đã bán',
+          label: 'Đã bán',
           value: formatNum(totalUnitsSold),
           raw: totalUnitsSold,
-          change: NA,
+          change: '',
           available: true,
           sub: 'từ đơn inbox',
         },
         {
           key: 'revenue',
-          label: 'Doanh thu từ SP',
+          label: 'Doanh thu',
           value: formatVnd(totalRevenue),
           raw: totalRevenue,
-          change: NA,
+          change: '',
           available: true,
           sub: 'từ đơn inbox',
         },
         {
-          key: 'avgCloseRate',
-          label: 'Tỷ lệ chốt trung bình',
-          value: NA,
-          raw: null,
-          change: NA,
-          available: false,
+          key: 'productsWithSales',
+          label: 'SP có doanh số',
+          value: formatNum(productsWithSales),
+          raw: productsWithSales,
+          change: '',
+          available: true,
         },
       ],
       categories: categoriesRaw
@@ -291,14 +279,15 @@ export class ProductAnalyticsService {
         totalPages: Math.max(1, Math.ceil(filteredTotal / pageSize)),
       },
       topByRevenue: topRevenue,
-      statusBreakdown,
+      statusBreakdown: [] as Array<{
+        key: string;
+        label: string;
+        count: number;
+        pct: number;
+        color: string;
+      }>,
       charts: {
-        topSold: chartTopSold.map((t) => ({
-          productId: Number(t.productId),
-          name: chartNameById.get(t.productId.toString()) ?? `SP #${t.productId}`,
-          unitsSold: t.unitsSold,
-          revenue: t.revenue,
-        })),
+        topSold: [] as Array<{ productId: number; name: string; unitsSold: number; revenue: number }>,
         topCloseRate: [] as Array<{ productId: number; name: string; closeRate: number }>,
       },
       insights,

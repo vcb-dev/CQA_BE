@@ -50,6 +50,7 @@ import { findInboxConversationById,
   findInboxConversationByPageParticipant,
   isInboxSchemaMigrationError,
   isPrismaPoolTimeout,
+  type InboxConversationAccess,
 } from './cskh-inbox-conversation.util';
 import { getCskhRunMode, isCskhApiProcess, isCskhWorkerProcess } from '../cskh-run-mode';
 
@@ -78,6 +79,9 @@ const INBOX_MESSAGE_SELECT = {
   direction: true,
   senderType: true,
   text: true,
+  originalText: true,
+  translatedText: true,
+  sourceLang: true,
   messageType: true,
   attachmentUrl: true,
   sentAt: true,
@@ -503,6 +507,9 @@ export class CskhInboxService {
       direction: row.direction,
       senderType: row.senderType,
       text: row.text,
+      originalText: row.originalText ?? null,
+      translatedText: row.translatedText ?? null,
+      sourceLang: row.sourceLang ?? null,
       messageType: row.messageType,
       attachmentUrl: row.attachmentUrl,
       sentAt: row.sentAt.toISOString(),
@@ -510,7 +517,7 @@ export class CskhInboxService {
     };
   }
 
-  private formatConversationRow(conv: CskhInboxConversation): InboxConversationPayload {
+  private formatConversationRow(conv: CskhInboxConversation | InboxConversationAccess): InboxConversationPayload {
     return {
       id: conv.id,
       pageId: conv.pageId,
@@ -526,6 +533,8 @@ export class CskhInboxService {
       adTitle: conv.adTitle,
       adId: conv.adId,
       referralSource: conv.referralSource,
+      customerLang: conv.customerLang ?? null,
+      customerLangLabel: conv.customerLangLabel ?? null,
     };
   }
 
@@ -535,7 +544,7 @@ export class CskhInboxService {
     messages: CskhInboxMessage[],
     analyzeIntent = false,
     tenantId?: string,
-    conversation?: CskhInboxConversation,
+    conversation?: CskhInboxConversation | InboxConversationAccess,
   ): void {
     if (!messages.length) return;
     const startPublish = Date.now();
@@ -2131,6 +2140,9 @@ export class CskhInboxService {
         });
     }
 
+    const filtered = (messages ?? []).filter((m) => !this.graph.isStoredMessageNoise(m.text));
+    this.ensureInboundTranslations(conv, filtered, tenantId);
+
     return {
       conversation: {
         ...conv,
@@ -2140,7 +2152,7 @@ export class CskhInboxService {
         viewers: [],
         labelsLocked: hasLabels,
       },
-      messages: (messages ?? []).filter((m) => !this.graph.isStoredMessageNoise(m.text)),
+      messages: filtered,
     };
   }
 
@@ -2890,7 +2902,12 @@ export class CskhInboxService {
     };
   }
 
-  async sendMessage(conversationId: string, text: string, tenantId?: string) {
+  async sendMessage(
+    conversationId: string,
+    text: string,
+    tenantId?: string,
+    options?: { autoTranslate?: boolean },
+  ) {
     const trimmed = text.trim();
     if (!trimmed) throw new BadRequestException('Tin nhắn trống');
 
@@ -2904,12 +2921,37 @@ export class CskhInboxService {
       throw new BadRequestException('Page chưa có access token');
     }
 
+    let outboundText = trimmed;
+    let originalText: string | null = null;
+    let translatedText: string | null = null;
+    let sourceLang: string | null = 'vi';
+
+    if (options?.autoTranslate) {
+      const langInfo = await this.resolveCustomerLang(conv, tenantId);
+      if (langInfo.lang && langInfo.lang !== 'vi' && langInfo.lang !== 'und') {
+        const tr = await this.ai.translateText({
+          text: trimmed,
+          sourceLang: 'vi',
+          targetLang: langInfo.lang,
+        });
+        if (!tr.sameLanguage && tr.translatedText.trim()) {
+          outboundText = tr.translatedText.trim();
+          originalText = trimmed;
+          translatedText = trimmed;
+          sourceLang = langInfo.lang;
+        }
+      }
+    }
+
     const pending = await this.prisma.cskhInboxMessage.create({
       data: {
         conversationId: conv.id,
         direction: 'outbound',
         senderType: 'staff',
-        text: trimmed,
+        text: outboundText,
+        originalText,
+        translatedText,
+        sourceLang,
         status: 'pending',
         tenantId,
       },
@@ -2918,7 +2960,7 @@ export class CskhInboxService {
     const updatedConv = await this.prisma.cskhInboxConversation.update({
       where: { id: conv.id },
       data: {
-        lastMessage: trimmed,
+        lastMessage: outboundText,
         lastMessageAt: new Date(),
         unreadCount: 0,
         awaitingLabel: false,
@@ -2935,7 +2977,7 @@ export class CskhInboxService {
           conv.pageId,
           config.pageAccessToken,
           conv.participantPsid,
-          trimmed,
+          outboundText,
         );
         const sent = await this.prisma.cskhInboxMessage.update({
           where: { id: pending.id },
@@ -2956,7 +2998,170 @@ export class CskhInboxService {
     })();
 
     // 3. Return the pending message immediately to caller
-    return pending;
+    return this.formatMessageRow(pending);
+  }
+
+  /** Preview dịch VI → ngôn ngữ khách (không lưu DB). */
+  async translatePreview(
+    conversationId: string,
+    text: string,
+    tenantId?: string,
+    targetLang?: string,
+  ) {
+    const trimmed = text.trim();
+    if (!trimmed) throw new BadRequestException('Tin nhắn trống');
+
+    const conv = await findInboxConversationById(this.prisma, conversationId, tenantId);
+    if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
+
+    const langInfo = targetLang?.trim()
+      ? { lang: targetLang.trim().toLowerCase(), langLabel: targetLang.trim() }
+      : await this.resolveCustomerLang(conv, tenantId);
+
+    const target = langInfo.lang && langInfo.lang !== 'und' ? langInfo.lang : 'vi';
+    if (target === 'vi') {
+      return {
+        originalText: trimmed,
+        translatedText: trimmed,
+        detectedLang: 'vi',
+        targetLang: 'vi',
+        customerLang: langInfo.lang,
+        customerLangLabel: langInfo.langLabel,
+        sameLanguage: true,
+      };
+    }
+
+    const tr = await this.ai.translateText({
+      text: trimmed,
+      sourceLang: 'vi',
+      targetLang: target,
+    });
+
+    return {
+      originalText: trimmed,
+      translatedText: tr.translatedText,
+      detectedLang: tr.detectedLang,
+      targetLang: target,
+      customerLang: langInfo.lang,
+      customerLangLabel: langInfo.langLabel,
+      sameLanguage: tr.sameLanguage,
+    };
+  }
+
+  /** Phát hiện + lưu ngôn ngữ khách trên conversation (BE DB). */
+  async detectAndPersistCustomerLang(conversationId: string, tenantId?: string) {
+    const conv = await findInboxConversationById(this.prisma, conversationId, tenantId);
+    if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
+
+    const langInfo = await this.resolveCustomerLang(conv, tenantId, true);
+    return {
+      customerLang: langInfo.lang,
+      customerLangLabel: langInfo.langLabel,
+      confidence: langInfo.confidence,
+    };
+  }
+
+  private async resolveCustomerLang(
+    conv: CskhInboxConversation | InboxConversationAccess,
+    _tenantId?: string,
+    forceRefresh = false,
+  ): Promise<{ lang: string; langLabel: string; confidence: string }> {
+    if (!forceRefresh && conv.customerLang) {
+      return {
+        lang: conv.customerLang,
+        langLabel: conv.customerLangLabel || conv.customerLang,
+        confidence: 'cached',
+      };
+    }
+
+    const inbound = await this.prisma.cskhInboxMessage.findMany({
+      where: {
+        conversationId: conv.id,
+        direction: 'inbound',
+        messageType: 'text',
+        NOT: { text: { in: ['', '[Ảnh]', '[Video]', '[Sticker]', '[attachment]'] } },
+      },
+      orderBy: { sentAt: 'desc' },
+      take: 8,
+      select: { text: true },
+    });
+    const samples = inbound.map((m) => m.text).filter(Boolean);
+    const detected = await this.ai.detectLang(samples);
+
+    try {
+      await this.prisma.cskhInboxConversation.update({
+        where: { id: conv.id },
+        data: {
+          customerLang: detected.lang,
+          customerLangLabel: detected.langLabel,
+        },
+      });
+    } catch (e) {
+      this.logger.warn(
+        `persist customerLang failed (chạy manual-inbox-translate.sql?): ${(e as Error).message}`,
+      );
+    }
+
+    return {
+      lang: detected.lang,
+      langLabel: detected.langLabel,
+      confidence: detected.confidence,
+    };
+  }
+
+  /** Dịch inbound thiếu translatedText → lưu BE DB, publish SSE. Không chặn response. */
+  private ensureInboundTranslations(
+    conv: CskhInboxConversation | InboxConversationAccess,
+    messages: Array<Pick<CskhInboxMessage, 'id' | 'direction' | 'messageType' | 'text' | 'translatedText'>>,
+    tenantId?: string,
+  ): void {
+    const need = messages.filter((m) => {
+      return (
+        m.direction === 'inbound' &&
+        m.messageType === 'text' &&
+        m.text?.trim() &&
+        !m.translatedText &&
+        !['[Ảnh]', '[Video]', '[Sticker]', '[attachment]'].includes(m.text)
+      );
+    });
+    if (!need.length) return;
+
+    void (async () => {
+      const updated: CskhInboxMessage[] = [];
+      for (const msg of need.slice(0, 12)) {
+        try {
+          const tr = await this.ai.translateText({
+            text: msg.text,
+            sourceLang: 'auto',
+            targetLang: 'vi',
+          });
+          if (tr.sameLanguage || !tr.translatedText.trim()) {
+            const patched = await this.prisma.cskhInboxMessage.update({
+              where: { id: msg.id },
+              data: {
+                sourceLang: tr.detectedLang === 'und' ? 'vi' : tr.detectedLang,
+                translatedText: msg.text,
+              },
+            });
+            updated.push(patched);
+            continue;
+          }
+          const patched = await this.prisma.cskhInboxMessage.update({
+            where: { id: msg.id },
+            data: {
+              sourceLang: tr.detectedLang,
+              translatedText: tr.translatedText,
+            },
+          });
+          updated.push(patched);
+        } catch (e) {
+          this.logger.debug(`inbound translate skip ${msg.id}: ${(e as Error).message}`);
+        }
+      }
+      if (updated.length) {
+        this.publishMessageRealtime(conv.pageId, conv.id, updated, false, tenantId, conv);
+      }
+    })();
   }
 
   /** Broadcast typing indicator event qua SSE. */

@@ -5,6 +5,10 @@ export function isInboxSchemaMigrationError(e: unknown): boolean {
   const msg = String((e as Error)?.message ?? e ?? '');
   return (
     msg.includes('awaiting_label') ||
+    msg.includes('customer_lang') ||
+    msg.includes('original_text') ||
+    msg.includes('translated_text') ||
+    msg.includes('source_lang') ||
     msg.includes('cskh_inbox_labels') ||
     msg.includes('cskh_inbox_conversation_labels') ||
     msg.includes('cskh_inbox_conversation_views') ||
@@ -51,11 +55,13 @@ export const CONVERSATION_ACCESS_SELECT_LEGACY = {
 export const CONVERSATION_ACCESS_SELECT = {
   ...CONVERSATION_ACCESS_SELECT_LEGACY,
   awaitingLabel: true,
+  customerLang: true,
+  customerLangLabel: true,
 } as const;
 
 export type InboxConversationAccess = Pick<
   CskhInboxConversation,
-  keyof typeof CONVERSATION_ACCESS_SELECT_LEGACY | 'awaitingLabel'
+  keyof typeof CONVERSATION_ACCESS_SELECT
 >;
 
 async function findWithMigrationFallback(
@@ -69,11 +75,27 @@ async function findWithMigrationFallback(
     });
   } catch (e) {
     if (!isInboxSchemaMigrationError(e)) throw e;
-    const row = await prisma.cskhInboxConversation.findFirst({
-      where,
-      select: CONVERSATION_ACCESS_SELECT_LEGACY,
-    });
-    return row ? { ...row, awaitingLabel: false } : null;
+    try {
+      const withAwaiting = await prisma.cskhInboxConversation.findFirst({
+        where,
+        select: {
+          ...CONVERSATION_ACCESS_SELECT_LEGACY,
+          awaitingLabel: true,
+        },
+      });
+      return withAwaiting
+        ? { ...withAwaiting, customerLang: null, customerLangLabel: null }
+        : null;
+    } catch (e2) {
+      if (!isInboxSchemaMigrationError(e2)) throw e2;
+      const row = await prisma.cskhInboxConversation.findFirst({
+        where,
+        select: CONVERSATION_ACCESS_SELECT_LEGACY,
+      });
+      return row
+        ? { ...row, awaitingLabel: false, customerLang: null, customerLangLabel: null }
+        : null;
+    }
   }
 }
 

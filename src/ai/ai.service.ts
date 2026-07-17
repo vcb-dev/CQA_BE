@@ -359,6 +359,98 @@ export class AiService {
     }
   }
 
+  async translateBatch(data: {
+    items: Array<{ id: string; text: string; direction?: 'inbound' | 'outbound' }>;
+    targetLang?: string;
+    contextMessages?: string[];
+  }): Promise<
+    Array<{
+      id: string;
+      originalText: string;
+      translatedText: string;
+      detectedLang: string;
+      sameLanguage: boolean;
+    }>
+  > {
+    const items = (data.items || [])
+      .map((it) => ({
+        id: String(it.id),
+        text: (it.text || '').trim(),
+        direction: it.direction,
+      }))
+      .filter((it) => it.id && it.text)
+      .slice(0, 24);
+    if (!items.length) return [];
+
+    try {
+      const { data: result } = await axios.post(
+        `${this.aiBaseUrl}/cskh/translate-batch`,
+        {
+          items: items.map((it) => ({
+            id: it.id,
+            text: it.text,
+            direction: it.direction ?? 'inbound',
+          })),
+          target_lang: data.targetLang || 'vi',
+          context_messages: (data.contextMessages || []).slice(-10),
+        },
+        { timeout: 60_000 },
+      );
+      const rows = Array.isArray(result?.items) ? result.items : [];
+      type BatchHit = {
+        id: string;
+        originalText: string;
+        translatedText: string;
+        detectedLang: string;
+        sameLanguage: boolean;
+      };
+      const byId = new Map<string, BatchHit>();
+      for (const r of rows as Array<Record<string, unknown>>) {
+        const id = String(r.id ?? '').trim();
+        if (!id) continue;
+        byId.set(id, {
+          id,
+          originalText: String(r.original_text ?? r.originalText ?? ''),
+          translatedText: String(r.translated_text ?? r.translatedText ?? ''),
+          detectedLang: String(r.detected_lang ?? r.detectedLang ?? 'und')
+            .trim()
+            .toLowerCase()
+            .slice(0, 16),
+          sameLanguage: Boolean(r.same_language ?? r.sameLanguage),
+        });
+      }
+      return items.map((it) => {
+        const hit = byId.get(it.id);
+        if (!hit?.translatedText) {
+          return {
+            id: it.id,
+            originalText: it.text,
+            translatedText: it.text,
+            detectedLang: 'und',
+            sameLanguage: true,
+          };
+        }
+        return {
+          id: hit.id,
+          originalText: hit.originalText || it.text,
+          translatedText: hit.translatedText || it.text,
+          detectedLang: hit.detectedLang,
+          sameLanguage: hit.sameLanguage,
+        };
+      });
+    } catch (error: unknown) {
+      const err = error as { message?: string };
+      this.logger.warn(`Translate batch failed: ${err.message}`);
+      return items.map((it) => ({
+        id: it.id,
+        originalText: it.text,
+        translatedText: it.text,
+        detectedLang: 'und',
+        sameLanguage: true,
+      }));
+    }
+  }
+
   async detectLang(texts: string[]): Promise<{
     lang: string;
     langLabel: string;

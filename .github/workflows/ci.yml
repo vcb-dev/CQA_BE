@@ -40,7 +40,10 @@ jobs:
         env:
           DATABASE_URL: postgresql://user:pass@localhost:5432/ci
           DIRECT_URL: postgresql://user:pass@localhost:5432/ci
-        run: npm run build
+        # Xóa incremental cache — nếu giữ tsbuildinfo cũ thì Nest chỉ emit .d.ts, thiếu main.js/worker.js
+        run: |
+          rm -rf dist tsconfig.build.tsbuildinfo
+          npm run build
 
       - name: Check dist outputs
         run: |

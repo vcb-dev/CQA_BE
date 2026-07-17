@@ -3199,9 +3199,8 @@ export class CskhInboxService {
   }
 
   /**
-   * Dịch thiếu bản VI cho cả inbound + outbound → lưu BE, publish SSE.
-   * - inbound: text (ngôn ngữ khách) → translatedText (VI)
-   * - outbound: nếu chưa có originalText/translatedText → dịch text → VI vào translatedText
+   * Dịch thiếu bản VI cho inbound + outbound.
+   * Tối ưu: skip VI heuristic → batch LLM (1 call/~12 tin) → SSE từng batch (ưu tiên tin mới).
    */
   private ensureMessageTranslations(
     conv: CskhInboxConversation | InboxConversationAccess,
@@ -3221,56 +3220,100 @@ export class CskhInboxService {
     });
     if (!need.length) return;
 
+    // Ưu tiên tin mới nhất (cuối danh sách)
+    const prioritized = [...need].reverse().slice(0, 36);
+
     const contextMessages = messages
       .filter((m) => m.messageType === 'text' && m.text?.trim() && !noise.has(m.text))
-      .slice(-20)
+      .slice(-16)
       .map((m) => {
         const who = m.direction === 'inbound' ? 'Khách' : 'Shop';
-        return `${who}: ${m.text.slice(0, 220)}`;
+        return `${who}: ${m.text.slice(0, 180)}`;
       });
 
     void (async () => {
-      const updated: CskhInboxMessage[] = [];
-      for (const msg of need.slice(0, 30)) {
-        try {
-          const tr = await this.ai.translateText({
-            text: msg.text,
-            sourceLang: 'auto',
-            targetLang: 'vi',
-            direction: msg.direction === 'outbound' ? 'outbound' : 'inbound',
-            contextMessages,
-          });
-          if (tr.sameLanguage || !tr.translatedText.trim() || tr.translatedText.trim() === msg.text.trim()) {
+      // 1) Skip nhanh tin đã là tiếng Việt — không gọi AI
+      const needAi: typeof prioritized = [];
+      const instant: CskhInboxMessage[] = [];
+      for (const msg of prioritized) {
+        if (this.looksLikeVietnamese(msg.text) && !this.looksLikeForeignScript(msg.text)) {
+          try {
             const patched = await this.prisma.cskhInboxMessage.update({
               where: { id: msg.id },
-              data: {
-                sourceLang: tr.detectedLang === 'und' ? 'vi' : tr.detectedLang,
-                translatedText: msg.text,
-              },
+              data: { sourceLang: 'vi', translatedText: msg.text },
             });
-            updated.push(patched);
-            continue;
+            instant.push(patched);
+          } catch {
+            /* ignore */
           }
-          const patched = await this.prisma.cskhInboxMessage.update({
-            where: { id: msg.id },
-            data: {
-              sourceLang: tr.detectedLang,
-              translatedText: tr.translatedText,
-              // Outbound lịch sử: giữ text = bản gửi FB, VI nằm ở translatedText
-              ...(msg.direction === 'outbound' && !msg.originalText
-                ? {}
-                : {}),
-            },
-          });
-          updated.push(patched);
-        } catch (e) {
-          this.logger.debug(`message translate skip ${msg.id}: ${(e as Error).message}`);
+        } else {
+          needAi.push(msg);
         }
       }
-      if (updated.length) {
-        this.publishMessageRealtime(conv.pageId, conv.id, updated, false, tenantId, conv);
+      if (instant.length) {
+        this.publishMessageRealtime(conv.pageId, conv.id, instant, false, tenantId, conv);
+      }
+      if (!needAi.length) return;
+
+      // 2) Batch LLM — chunk 12, publish SSE sau mỗi chunk (UI hiện dần)
+      const chunkSize = 12;
+      for (let i = 0; i < needAi.length; i += chunkSize) {
+        const chunk = needAi.slice(i, i + chunkSize);
+        try {
+          const results = await this.ai.translateBatch({
+            items: chunk.map((m) => ({
+              id: m.id,
+              text: m.text,
+              direction: m.direction === 'outbound' ? 'outbound' : 'inbound',
+            })),
+            targetLang: 'vi',
+            contextMessages,
+          });
+          const updated: CskhInboxMessage[] = [];
+          for (const tr of results) {
+            const src = chunk.find((c) => c.id === tr.id);
+            if (!src) continue;
+            const same =
+              tr.sameLanguage ||
+              !tr.translatedText.trim() ||
+              tr.translatedText.trim() === src.text.trim();
+            try {
+              const patched = await this.prisma.cskhInboxMessage.update({
+                where: { id: tr.id },
+                data: {
+                  sourceLang: same
+                    ? tr.detectedLang === 'und'
+                      ? 'vi'
+                      : tr.detectedLang
+                    : tr.detectedLang,
+                  translatedText: same ? src.text : tr.translatedText,
+                },
+              });
+              updated.push(patched);
+            } catch (e) {
+              this.logger.debug(`batch persist skip ${tr.id}: ${(e as Error).message}`);
+            }
+          }
+          if (updated.length) {
+            this.publishMessageRealtime(conv.pageId, conv.id, updated, false, tenantId, conv);
+          }
+        } catch (e) {
+          this.logger.warn(`translate batch chunk failed: ${(e as Error).message}`);
+        }
       }
     })();
+  }
+
+  /** Heuristic nhanh: có dấu Việt / chữ đ. */
+  private looksLikeVietnamese(text: string): boolean {
+    return /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(
+      text,
+    );
+  }
+
+  /** Có script Thái / Trung / Nhật / Hàn… */
+  private looksLikeForeignScript(text: string): boolean {
+    return /[\u0E00-\u0E7F\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/.test(text);
   }
 
   /** Broadcast typing indicator event qua SSE. */

@@ -31,3 +31,7 @@ lerna-debug.log*
 
 # Nest CLI cache
 .nestcli.db
+
+# TypeScript incremental (đừng commit — gây CI thiếu dist/main.js)
+*.tsbuildinfo
+tsconfig.build.tsbuildinfo

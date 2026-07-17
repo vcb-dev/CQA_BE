@@ -2,35 +2,40 @@ const axios = require('axios');
 require('dotenv').config();
 
 async function testSapoConnection() {
-  const store = process.env.SAPO_STORE || 'vienchibao';
-  const apiKey = process.env.SAPO_API_KEY;
-  const apiSecret = process.env.SAPO_API_SECRET;
+  const store = (process.env.SAPO_STORE || 'vienchibao').replace(/^["']|["']$/g, '');
+  const apiKey = process.env.SAPO_API_KEY || process.env.SAPO_PRIVATE_API_KEY;
+  const apiSecret = process.env.SAPO_API_SECRET || process.env.SAPO_PRIVATE_API_SECRET;
   const accessToken = process.env.SAPO_ACCESS_TOKEN;
 
   console.log('--- Cấu hình Sapo đang sử dụng ---');
   console.log(`Cửa hàng (SAPO_STORE): ${store}.mysapo.net`);
-  console.log(`API Key (SAPO_API_KEY): ${apiKey ? 'Đã cấu hình' : 'CHƯA CẤU HÌNH'}`);
-  console.log(`API Secret (SAPO_API_SECRET): ${apiSecret ? 'Đã cấu hình' : 'CHƯA CẤU HÌNH'}`);
-  console.log(`Access Token (SAPO_ACCESS_TOKEN): ${accessToken ? 'Đã cấu hình' : 'CHƯA CẤU HÌNH'}`);
+  console.log(`API Key: ${apiKey ? 'Đã cấu hình' : 'CHƯA CẤU HÌNH'}`);
+  console.log(`API Secret: ${apiSecret ? 'Đã cấu hình' : 'CHƯA CẤU HÌNH'}`);
+  console.log(`Access Token: ${accessToken ? 'Đã cấu hình' : 'CHƯA CẤU HÌNH'}`);
+  console.log('Endpoint: GET /admin/products.json');
   console.log('---------------------------------\n');
-
-  if (!accessToken) {
-    console.error('❌ LỖI: Thiếu biến SAPO_ACCESS_TOKEN.');
-    console.log('👉 Vui lòng chạy quy trình OAuth trên web để lấy Access Token, điền vào file .env rồi chạy lại script này.');
-    return;
-  }
 
   const host = store.includes('mysapo.net') ? store : `${store}.mysapo.net`;
   const url = `https://${host}/admin/products.json`;
+
+  const axiosConfig = accessToken
+    ? {
+        headers: { 'Content-Type': 'application/json', 'X-Sapo-Access-Token': accessToken },
+      }
+    : apiKey && apiSecret
+      ? { auth: { username: apiKey, password: apiSecret }, headers: { 'Content-Type': 'application/json' } }
+      : null;
+
+  if (!axiosConfig) {
+    console.error('❌ LỖI: Thiếu SAPO_ACCESS_TOKEN hoặc SAPO_API_KEY + SAPO_API_SECRET (Private App).');
+    return;
+  }
 
   console.log(`🔄 Đang thử kết nối tới Sapo API: ${url}...`);
 
   try {
     const response = await axios.get(url, {
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Sapo-Access-Token': accessToken,
-      },
+      ...axiosConfig,
       params: { limit: 5 },
       timeout: 15000,
     });
@@ -41,7 +46,7 @@ async function testSapoConnection() {
     if (products.length > 0) {
       console.log('\nDanh sách 5 sản phẩm đầu tiên:');
       products.forEach((p, index) => {
-        console.log(`${index + 1}. ${p.title} (ID: ${p.id}) - Tags: ${p.tags || 'Trống'}`);
+        console.log(`${index + 1}. ${p.name || p.title} (ID: ${p.id}) - Tags: ${p.tags || 'Trống'}`);
       });
     } else {
       console.log('Cửa hàng chưa có sản phẩm nào.');

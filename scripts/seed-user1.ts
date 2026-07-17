@@ -18,16 +18,17 @@ async function main() {
       where: { email: EMAIL },
       create: {
         email: EMAIL,
-        fullName: 'User 1',
-        password: hashed,
-        role: 'admin',
+        name: 'User 1',
+        passwordHash: hashed,
+        roles: ['admin'],
+        status: 'active',
         isActive: true,
         tenantId: tenant?.id ?? null,
       },
       update: {
-        password: hashed,
+        passwordHash: hashed,
         isActive: true,
-        role: 'admin',
+        roles: ['admin'],
         ...(tenant?.id ? { tenantId: tenant.id } : {}),
       },
     });

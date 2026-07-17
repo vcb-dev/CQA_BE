@@ -10,6 +10,7 @@ import {
   CskhInboxRealtimeService,
   type InboxConversationPayload,
 } from './cskh-inbox-realtime.service';
+import { toUserIdNumber } from '../../users/user-role.util';
 import {
   findInboxConversationById,
   isInboxSchemaMigrationError,
@@ -79,7 +80,7 @@ export class CskhInboxLabelsService {
       name: row.name,
       color: row.color,
       type: row.type as 'staff' | 'status',
-      userId: row.userId,
+      userId: toUserIdNumber(row.userId),
       sortOrder: row.sortOrder,
     };
   }
@@ -110,13 +111,13 @@ export class CskhInboxLabelsService {
     };
   }
 
-  private staffColor(userId: number): string {
-    return STAFF_COLORS[Math.abs(userId) % STAFF_COLORS.length];
+  private staffColor(userId: bigint | number): string {
+    return STAFF_COLORS[Math.abs(Number(userId)) % STAFF_COLORS.length];
   }
 
   private async upsertLabelByName(
     tenantId: string | undefined,
-    data: { name: string; color: string; type: string; sortOrder: number; userId?: number },
+    data: { name: string; color: string; type: string; sortOrder: number; userId?: bigint | number },
   ) {
     const tid = tenantId ?? null;
     const existing = await this.prisma.cskhInboxLabel.findFirst({
@@ -152,7 +153,7 @@ export class CskhInboxLabelsService {
 
   private async upsertStaffLabel(
     tenantId: string | undefined,
-    userId: number,
+    userId: bigint | number,
     name: string,
     color: string,
     sortOrder: number,
@@ -199,13 +200,13 @@ export class CskhInboxLabelsService {
         isActive: true,
         ...(tenantId ? { tenantId } : {}),
       },
-      select: { id: true, fullName: true },
-      orderBy: { fullName: 'asc' },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
     });
 
     let order = 100;
     for (const user of users) {
-      const name = user.fullName?.trim() || `NV #${user.id}`;
+      const name = user.name?.trim() || `NV #${user.id}`;
       await this.upsertStaffLabel(tenantId, user.id, name, this.staffColor(user.id), order++);
     }
     this.labelsEnsuredAt.set(cacheKey, Date.now());
@@ -284,23 +285,23 @@ export class CskhInboxLabelsService {
   }
 
   async getViewersForConversation(conversationId: string): Promise<InboxViewerDto[]> {
-    const [assigners, rows] = await Promise.all([
-      this.getLabelAssignerIds(conversationId),
+    const [chotUserIds, rows] = await Promise.all([
+      this.getChotUserIds(conversationId),
       this.prisma.cskhInboxConversationView.findMany({
         where: { conversationId },
         include: {
-          user: { select: { id: true, fullName: true, avatarUrl: true } },
+          user: { select: { id: true, name: true, avatarUrl: true } },
         },
         orderBy: { viewedAt: 'desc' },
         take: 50,
       }),
     ]);
     return rows.map((row) => ({
-      userId: row.user.id,
-      fullName: row.user.fullName,
+      userId: Number(row.user.id),
+      fullName: row.user.name ?? '',
       avatarUrl: row.user.avatarUrl,
       viewedAt: row.viewedAt.toISOString(),
-      hasChot: assigners.has(row.user.id),
+      hasChot: chotUserIds.has(Number(row.user.id)),
     }));
   }
 
@@ -331,16 +332,61 @@ export class CskhInboxLabelsService {
     this.viewHistoryCache.delete(`${tenantId ?? '__all__'}:${conversationId}`);
   }
 
-  private async getLabelAssignerIds(conversationId: string): Promise<Set<number>> {
-    const rows = await this.prisma.cskhInboxConversationLabel.findMany({
-      where: { conversationId, assignedByUserId: { not: null } },
-      select: { assignedByUserId: true },
+  /** NV đã chốt: gán nhãn "Đã chốt", hoặc là / gán nhãn nhân viên chốt. */
+  private async getChotUserIds(conversationId: string): Promise<Set<number>> {
+    const assignments = await this.prisma.cskhInboxConversationLabel.findMany({
+      where: { conversationId },
+      include: {
+        label: { select: { type: true, name: true, userId: true } },
+      },
     });
-    return new Set(
-      rows
-        .map((r) => r.assignedByUserId)
-        .filter((id): id is number => id != null),
-    );
+
+    const ids = new Set<number>();
+    for (const a of assignments) {
+      if (a.assignedByUserId != null) {
+        if (a.label.type === 'status' && a.label.name === 'Đã chốt') {
+          ids.add(Number(a.assignedByUserId));
+        }
+        if (a.label.type === 'staff') {
+          ids.add(Number(a.assignedByUserId));
+        }
+      }
+      if (a.label.type === 'staff' && a.label.userId != null) {
+        ids.add(Number(a.label.userId));
+      }
+    }
+    return ids;
+  }
+
+  private async getChotUserIdsMap(
+    conversationIds: string[],
+  ): Promise<Map<string, Set<number>>> {
+    const map = new Map<string, Set<number>>();
+    if (!conversationIds.length) return map;
+
+    const rows = await this.prisma.cskhInboxConversationLabel.findMany({
+      where: { conversationId: { in: conversationIds } },
+      include: {
+        label: { select: { type: true, name: true, userId: true } },
+      },
+    });
+
+    for (const row of rows) {
+      const set = map.get(row.conversationId) ?? new Set<number>();
+      if (row.assignedByUserId != null) {
+        if (row.label.type === 'status' && row.label.name === 'Đã chốt') {
+          set.add(Number(row.assignedByUserId));
+        }
+        if (row.label.type === 'staff') {
+          set.add(Number(row.assignedByUserId));
+        }
+      }
+      if (row.label.type === 'staff' && row.label.userId != null) {
+        set.add(Number(row.label.userId));
+      }
+      map.set(row.conversationId, set);
+    }
+    return map;
   }
 
   async attachViewersMap(
@@ -349,12 +395,12 @@ export class CskhInboxLabelsService {
     const map = new Map<string, InboxViewerDto[]>();
     if (!conversationIds.length) return map;
 
-    const assignerMap = await this.getLabelAssignerIdsMap(conversationIds);
+    const assignerMap = await this.getChotUserIdsMap(conversationIds);
 
     const rows = await this.prisma.cskhInboxConversationView.findMany({
       where: { conversationId: { in: conversationIds } },
       include: {
-        user: { select: { id: true, fullName: true, avatarUrl: true } },
+        user: { select: { id: true, name: true, avatarUrl: true } },
       },
       orderBy: { viewedAt: 'desc' },
     });
@@ -362,38 +408,15 @@ export class CskhInboxLabelsService {
     for (const row of rows) {
       const list = map.get(row.conversationId) ?? [];
       if (list.length >= 5) continue;
-      const assigners = assignerMap.get(row.conversationId) ?? new Set<number>();
+      const chotUsers = assignerMap.get(row.conversationId) ?? new Set<number>();
       list.push({
-        userId: row.user.id,
-        fullName: row.user.fullName,
+        userId: Number(row.user.id),
+        fullName: row.user.name ?? '',
         avatarUrl: row.user.avatarUrl,
         viewedAt: row.viewedAt.toISOString(),
-        hasChot: assigners.has(row.user.id),
+        hasChot: chotUsers.has(Number(row.user.id)),
       });
       map.set(row.conversationId, list);
-    }
-    return map;
-  }
-
-  private async getLabelAssignerIdsMap(
-    conversationIds: string[],
-  ): Promise<Map<string, Set<number>>> {
-    const map = new Map<string, Set<number>>();
-    if (!conversationIds.length) return map;
-
-    const rows = await this.prisma.cskhInboxConversationLabel.findMany({
-      where: {
-        conversationId: { in: conversationIds },
-        assignedByUserId: { not: null },
-      },
-      select: { conversationId: true, assignedByUserId: true },
-    });
-
-    for (const row of rows) {
-      if (row.assignedByUserId == null) continue;
-      const set = map.get(row.conversationId) ?? new Set<number>();
-      set.add(row.assignedByUserId);
-      map.set(row.conversationId, set);
     }
     return map;
   }
@@ -403,7 +426,7 @@ export class CskhInboxLabelsService {
    */
   recordConversationViewLite(
     conversationId: string,
-    userId: number,
+    userId: bigint | number,
     ctx: {
       pageId: string;
       tenantId: string | null;
@@ -465,7 +488,7 @@ export class CskhInboxLabelsService {
   /** Ghi nhận NV đã xem; nếu chưa gán nhãn thì giữ chờ xử lý (awaitingLabel). */
   async recordConversationView(
     conversationId: string,
-    userId: number,
+    userId: bigint | number,
     tenantId?: string,
   ): Promise<{ labels: InboxLabelDto[]; viewers: InboxViewerDto[]; conversation: CskhInboxConversation }> {
     const conv = await this.assertConversationAccess(conversationId, tenantId);
@@ -568,7 +591,7 @@ export class CskhInboxLabelsService {
   async toggleConversationLabel(
     conversationId: string,
     labelId: string,
-    actorUserId: number,
+    actorUserId: bigint | number,
     tenantId?: string,
   ): Promise<InboxLabelDto[]> {
     const conv = await this.assertConversationAccess(conversationId, tenantId);
@@ -619,20 +642,25 @@ export class CskhInboxLabelsService {
       },
     });
 
-    const updatedConv = await this.prisma.cskhInboxConversation.update({
-      where: { id: conversationId },
-      data: { unreadCount: 0, awaitingLabel: false },
-    });
+    this.invalidateViewHistoryCache(conversationId, conv.tenantId ?? undefined);
 
-    const labels = await this.getLabelsForConversation(conversationId);
-    const viewers = await this.getViewersForConversation(conversationId);
-    const payload = this.formatConvPayload(updatedConv, labels, viewers);
-    this.realtime.publish({
-      type: 'conversation',
-      pageId: conv.pageId,
-      conversationId: conv.id,
-      conversation: payload,
-      tenantId: conv.tenantId || undefined,
+    const [updatedConv, labels] = await Promise.all([
+      this.prisma.cskhInboxConversation.update({
+        where: { id: conversationId },
+        data: { unreadCount: 0, awaitingLabel: false },
+      }),
+      this.getLabelsForConversation(conversationId),
+    ]);
+
+    const payload = this.formatConvPayload(updatedConv, labels);
+    setImmediate(() => {
+      this.realtime.publish({
+        type: 'conversation',
+        pageId: conv.pageId,
+        conversationId: conv.id,
+        conversation: payload,
+        tenantId: conv.tenantId || undefined,
+      });
     });
 
     return labels;
@@ -641,7 +669,7 @@ export class CskhInboxLabelsService {
   async setConversationLabels(
     conversationId: string,
     labelIds: string[],
-    actorUserId: number,
+    actorUserId: bigint | number,
     tenantId?: string,
   ): Promise<InboxLabelDto[]> {
     await this.assertConversationAccess(conversationId, tenantId);

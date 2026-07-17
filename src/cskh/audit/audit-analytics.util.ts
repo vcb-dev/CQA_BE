@@ -59,6 +59,100 @@ function parseTime(iso?: string | null): number {
   return Number.isNaN(t) ? NaN : t;
 }
 
+const VN_TZ = 'Asia/Ho_Chi_Minh';
+
+/** Ngày lịch VN (YYYY-MM-DD) từ ISO timestamp. */
+export function toVnYmd(iso?: string | null): string | null {
+  if (!iso?.trim()) return null;
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return null;
+  return new Intl.DateTimeFormat('en-CA', { timeZone: VN_TZ }).format(t);
+}
+
+/** Khoảng ngày hoạt động tin nhắn thực tế trong hội thoại (lịch VN). */
+export function computeMessageActivityYmdRange(
+  messages: Array<{ created_time?: string | null }>,
+): { from: string; to: string } | null {
+  const days: string[] = [];
+  for (const m of messages) {
+    const ymd = toVnYmd(m.created_time);
+    if (ymd) days.push(ymd);
+  }
+  if (!days.length) return null;
+  days.sort();
+  return { from: days[0]!, to: days[days.length - 1]! };
+}
+
+export function ymdRangesOverlap(
+  activityFrom: string,
+  activityTo: string,
+  filterFrom: string,
+  filterTo: string,
+): boolean {
+  return activityFrom <= filterTo && activityTo >= filterFrom;
+}
+
+function transcriptMessageYmds(transcript: unknown): string[] {
+  const lines = Array.isArray(transcript) ? transcript : [];
+  const days: string[] = [];
+  for (const line of lines) {
+    if (!line || typeof line !== 'object') continue;
+    const ymd = toVnYmd((line as TranscriptLine).timestamp);
+    if (ymd) days.push(ymd);
+  }
+  return days;
+}
+
+/** Hội thoại có tin nhắn trong khoảng filter (lịch VN) — không dùng created_at hay ngày job batch. */
+export function auditMatchesActivityFilter(
+  meta: Record<string, unknown> | null | undefined,
+  transcript: unknown,
+  filterFrom: string,
+  filterTo: string,
+): boolean {
+  const actFrom = typeof meta?.activityDateFrom === 'string' ? meta.activityDateFrom.trim() : '';
+  const actTo = typeof meta?.activityDateTo === 'string' ? meta.activityDateTo.trim() : '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(actFrom) && /^\d{4}-\d{2}-\d{2}$/.test(actTo)) {
+    return ymdRangesOverlap(actFrom, actTo, filterFrom, filterTo);
+  }
+
+  for (const ymd of transcriptMessageYmds(transcript)) {
+    if (ymd >= filterFrom && ymd <= filterTo) return true;
+  }
+
+  const single = typeof meta?.auditDate === 'string' ? meta.auditDate.trim() : '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(single) && !meta?.auditDateFrom) {
+    return single >= filterFrom && single <= filterTo;
+  }
+
+  return false;
+}
+
+/** Khoảng ngày hoạt động đã biết — chỉ từ activityDate hoặc transcript, không fallback created_at. */
+export function resolveAuditActivityYmdRange(
+  meta: Record<string, unknown> | null | undefined,
+  transcript: unknown,
+): { from: string; to: string } | null {
+  const actFrom = typeof meta?.activityDateFrom === 'string' ? meta.activityDateFrom.trim() : '';
+  const actTo = typeof meta?.activityDateTo === 'string' ? meta.activityDateTo.trim() : '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(actFrom) && /^\d{4}-\d{2}-\d{2}$/.test(actTo)) {
+    return { from: actFrom, to: actTo };
+  }
+
+  const days = transcriptMessageYmds(transcript);
+  if (days.length) {
+    days.sort();
+    return { from: days[0]!, to: days[days.length - 1]! };
+  }
+
+  const single = typeof meta?.auditDate === 'string' ? meta.auditDate.trim() : '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(single) && !meta?.auditDateFrom) {
+    return { from: single, to: single };
+  }
+
+  return null;
+}
+
 export function computeTranscriptMetrics(transcript: unknown): AuditTranscriptMetrics {
   const lines = Array.isArray(transcript) ? (transcript as TranscriptLine[]) : [];
   let firstCustomerAt: number | null = null;

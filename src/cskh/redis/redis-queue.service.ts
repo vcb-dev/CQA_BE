@@ -8,16 +8,23 @@ import {
   forwardRef,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import Redis from 'ioredis';
+import type Redis from 'ioredis';
 import { CskhInboxService } from '../inbox/cskh-inbox.service';
 import { CskhService } from '../cskh.service';
-import { getCskhRunMode, isCskhWorkerProcess } from '../cskh-run-mode';
+import { getCskhRunMode, isCskhApiProcess, isCskhWorkerProcess } from '../cskh-run-mode';
 import { CskhRedisSignalsService } from './cskh-redis-signals.service';
 import {
   isRedisCircuitOpen,
   isRedisQuotaError,
   onRedisQuotaTripped,
 } from './cskh-redis-circuit';
+import {
+  connectCskhRedis,
+  createCskhRedisClient,
+  isRedisClientReady,
+  isRedisDisabledByEnv,
+  resolveRedisConnectionConfig,
+} from './cskh-redis-client';
 
 export type AuditQueuePayload = {
   jobId: string;
@@ -52,7 +59,7 @@ type IntentQueuePayload = { conversationId: string; tenantId?: string };
 @Injectable()
 export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnApplicationBootstrap {
   private readonly logger = new Logger(RedisQueueService.name);
-  private redisClient: Redis;
+  private redisClient: Redis | null = null;
   /** Một connection blocking duy nhất — BRPOP nhiều queue (tiết kiệm Upstash requests). */
   private blockingConsumer: Redis | null = null;
   private running = false;
@@ -60,6 +67,7 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
   private intentMemCache = new Map<string, { raw: string; exp: number }>();
   private lastHeartbeatRedisWrite = 0;
   private webhookDepthCache = { at: 0, depth: 0 };
+  private workerAliveCache = { at: 0, alive: false };
 
   constructor(
     private readonly configService: ConfigService,
@@ -70,38 +78,37 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
     private readonly cskhService: CskhService,
   ) {}
 
-  onModuleInit() {
-    const cleanValue = (val: unknown) => {
-      if (typeof val !== 'string') return val;
-      return val.trim().replace(/^['"]|['"]$/g, '');
-    };
+  async onModuleInit() {
+    if (isRedisDisabledByEnv()) {
+      this.logger.warn('CSKH_REDIS_ENABLED=false — queue chạy in-memory / inline only');
+      this.logger.log(`CSKH_RUN_MODE=${getCskhRunMode()}`);
+      return;
+    }
 
-    const redisUrl = cleanValue(this.configService.get<string>('REDIS_URL'));
-    const host = cleanValue(this.configService.get<string>('REDIS_HOST')) || 'localhost';
-    const port = Number(this.configService.get<number>('REDIS_PORT')) || 6379;
-    const password =
-      cleanValue(
-        this.configService.get<string>('REDIS_PASSWORD') ||
-          this.configService.get<string>('REDISPASSWORD'),
-      ) || undefined;
+    const cfg = resolveRedisConnectionConfig(this.configService);
+    this.logger.log('Initializing Redis (single client + optional blocking consumer)...');
 
-    if (redisUrl) {
-      this.logger.log('Initializing Redis (single client + optional blocking consumer)...');
-      this.redisClient = new Redis(redisUrl as string);
-      if (isCskhWorkerProcess()) {
-        this.blockingConsumer = new Redis(redisUrl as string);
-      }
-    } else {
-      this.logger.log(`Initializing Redis to ${host}:${port}...`);
-      const redisConfig = {
-        host: host as string,
-        port,
-        password: password as string | undefined,
-      };
-      this.redisClient = new Redis(redisConfig);
-      if (isCskhWorkerProcess()) {
-        this.blockingConsumer = new Redis(redisConfig);
-      }
+    this.redisClient = createCskhRedisClient(cfg, {
+      logger: this.logger,
+      label: 'redis-queue',
+    });
+    const mainOk = await connectCskhRedis(this.redisClient, {
+      logger: this.logger,
+      label: 'redis-queue',
+    });
+    if (!mainOk) this.redisClient = null;
+
+    if (isCskhWorkerProcess()) {
+      this.blockingConsumer = createCskhRedisClient(cfg, {
+        blocking: true,
+        logger: this.logger,
+        label: 'redis-blocking',
+      });
+      const blockOk = await connectCskhRedis(this.blockingConsumer, {
+        logger: this.logger,
+        label: 'redis-blocking',
+      });
+      if (!blockOk) this.blockingConsumer = null;
     }
 
     this.logger.log(`CSKH_RUN_MODE=${getCskhRunMode()}`);
@@ -120,7 +127,7 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
       void this.touchAuditWorkerHeartbeat();
     } else {
       this.logger.log(
-        'Queue consumers OFF on API process — webhook/audit/intent chạy trên worker (CSKH_RUN_MODE=worker)',
+        'Queue consumers OFF on API — webhook inbox vẫn chạy inline trên process này; worker chỉ cần cho audit/backfill/intent queue',
       );
     }
   }
@@ -137,12 +144,42 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
     });
   }
 
-  get client(): Redis {
-    return this.redisClient;
+  get client(): Redis | null {
+    return isRedisClientReady(this.redisClient) ? this.redisClient : null;
   }
 
   private canUseRedis(): boolean {
-    return !isRedisCircuitOpen();
+    return isRedisClientReady(this.redisClient);
+  }
+
+  /** API / webhook có thể dùng Redis queue không (false → mọi thứ chạy inline, không chặn sync). */
+  isRedisQueueEnabled(): boolean {
+    if (isRedisDisabledByEnv() || isRedisCircuitOpen()) return false;
+    return this.canUseRedis();
+  }
+
+  /** Redis còn hoạt động mới nhường Graph cho webhook — Redis fail thì luôn cho quét/lưu DB. */
+  async shouldDeferInboxSync(): Promise<boolean> {
+    if (!this.isRedisQueueEnabled()) return false;
+    return this.isInboxHot();
+  }
+
+  /** Webhook queue chỉ dùng khi Redis + worker consumer còn khỏe. */
+  async isWebhookQueueHealthy(): Promise<boolean> {
+    if (!this.canUseRedis()) return false;
+    if (!isRedisClientReady(this.blockingConsumer)) return false;
+    try {
+      const alive = await this.isAuditWorkerAlive();
+      if (!alive) return false;
+      const depth = await this.getWebhookQueueDepth();
+      return depth < 200;
+    } catch {
+      return false;
+    }
+  }
+
+  private activeRedis(): Redis | null {
+    return isRedisClientReady(this.redisClient) ? this.redisClient : null;
   }
 
   private handleRedisError(e: unknown): void {
@@ -178,23 +215,39 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
   }
 
   async touchAuditWorkerHeartbeat(): Promise<void> {
-    if (!this.canUseRedis()) return;
+    const redis = this.activeRedis();
+    if (!redis) return;
     const now = Date.now();
     if (now - this.lastHeartbeatRedisWrite < 25_000) return;
     this.lastHeartbeatRedisWrite = now;
     try {
-      await this.redisClient.set(AUDIT_HEARTBEAT_KEY, String(now), 'EX', 60);
+      await redis.set(AUDIT_HEARTBEAT_KEY, String(now), 'EX', 60);
     } catch (e) {
       this.handleRedisError(e);
     }
   }
 
   async isAuditWorkerAlive(): Promise<boolean> {
-    if (!this.canUseRedis()) return isCskhWorkerProcess();
+    const now = Date.now();
+    if (now - this.workerAliveCache.at < 5000) {
+      return this.workerAliveCache.alive;
+    }
+    if (!this.canUseRedis()) {
+      this.workerAliveCache = { at: now, alive: false };
+      return false;
+    }
+    const redis = this.activeRedis();
+    if (!redis) {
+      this.workerAliveCache = { at: now, alive: false };
+      return false;
+    }
     try {
-      return !!(await this.redisClient.get(AUDIT_HEARTBEAT_KEY));
+      const alive = !!(await redis.get(AUDIT_HEARTBEAT_KEY));
+      this.workerAliveCache = { at: now, alive };
+      return alive;
     } catch (e) {
       this.handleRedisError(e);
+      this.workerAliveCache = { at: now, alive: false };
       return false;
     }
   }
@@ -245,20 +298,35 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
 
   async enqueueIntent(conversationId: string, tenantId?: string): Promise<void> {
     const payload = JSON.stringify({ conversationId, tenantId });
-    if (!this.canUseRedis()) {
+    const runInline = () => {
+      if (isCskhApiProcess() && getCskhRunMode() === 'api') {
+        void this.redisSignals.isInboxHot().then((hot) => {
+          if (hot) return;
+          void this.inboxService.analyzeAndBroadcastIntent(conversationId, tenantId).catch((err) => {
+            this.logger.error(`Inline intent processing failed: ${(err as Error).message}`);
+          });
+        });
+        return;
+      }
       void this.inboxService.analyzeAndBroadcastIntent(conversationId, tenantId).catch((err) => {
         this.logger.error(`Inline intent processing failed: ${(err as Error).message}`);
       });
+    };
+    if (!this.canUseRedis()) {
+      runInline();
+      return;
+    }
+    const redis = this.activeRedis();
+    if (!redis) {
+      runInline();
       return;
     }
     try {
-      await this.redisClient.lpush(INTENT_QUEUE, payload);
+      await redis.lpush(INTENT_QUEUE, payload);
     } catch (e) {
       this.handleRedisError(e);
       this.logger.error(`Failed to enqueue intent: ${(e as Error).message}`);
-      void this.inboxService.analyzeAndBroadcastIntent(conversationId, tenantId).catch((err) => {
-        this.logger.error(`Fallback intent processing failed: ${(err as Error).message}`);
-      });
+      runInline();
     }
   }
 
@@ -267,8 +335,10 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
       return this.webhookDepthCache.depth;
     }
     if (!this.canUseRedis()) return 0;
+    const redis = this.activeRedis();
+    if (!redis) return 0;
     try {
-      const depth = (await this.redisClient.llen(WEBHOOK_MESSAGING_QUEUE)) ?? 0;
+      const depth = (await redis.llen(WEBHOOK_MESSAGING_QUEUE)) ?? 0;
       this.webhookDepthCache = { at: Date.now(), depth };
       return depth;
     } catch (e) {
@@ -278,10 +348,11 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
   }
 
   async enqueueWebhookMessaging(pageId: string, event: Record<string, unknown>): Promise<boolean> {
-    if (!this.canUseRedis()) return false;
+    const redis = this.activeRedis();
+    if (!redis) return false;
     try {
       const payload: WebhookMessagingQueuePayload = { pageId, event };
-      await this.redisClient.lpush(WEBHOOK_MESSAGING_QUEUE, JSON.stringify(payload));
+      await redis.lpush(WEBHOOK_MESSAGING_QUEUE, JSON.stringify(payload));
       return true;
     } catch (e) {
       this.handleRedisError(e);
@@ -292,7 +363,12 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
 
   /** Worker duy nhất — BRPOP 4 queue, ưu tiên webhook trước backfill/audit. */
   private async runUnifiedQueueWorker() {
-    if (!this.blockingConsumer) return;
+    if (!this.blockingConsumer || !isRedisClientReady(this.blockingConsumer)) {
+      this.logger.warn(
+        'Unified queue worker: Redis blocking client unavailable — worker idle (quota/disabled)',
+      );
+      return;
+    }
     this.logger.log('Unified queue worker started (webhook + intent + backfill + audit).');
     while (this.running) {
       if (!this.canUseRedis()) {
@@ -381,9 +457,10 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
   }
 
   async enqueueAuditJob(payload: AuditQueuePayload): Promise<boolean> {
-    if (!this.canUseRedis()) return false;
+    const redis = this.activeRedis();
+    if (!redis) return false;
     try {
-      await this.redisClient.lpush(AUDIT_QUEUE, JSON.stringify(payload));
+      await redis.lpush(AUDIT_QUEUE, JSON.stringify(payload));
       return true;
     } catch (e) {
       this.handleRedisError(e);
@@ -393,9 +470,10 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
   }
 
   async enqueueBackfillJob(payload: BackfillQueuePayload): Promise<boolean> {
-    if (!this.canUseRedis()) return false;
+    const redis = this.activeRedis();
+    if (!redis) return false;
     try {
-      await this.redisClient.lpush(BACKFILL_QUEUE, JSON.stringify(payload));
+      await redis.lpush(BACKFILL_QUEUE, JSON.stringify(payload));
       return true;
     } catch (e) {
       this.handleRedisError(e);
@@ -406,9 +484,11 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
 
   async purgeAuditQueueForJobIds(jobIds: string[]): Promise<number> {
     if (!jobIds.length || !this.canUseRedis()) return 0;
+    const redis = this.activeRedis();
+    if (!redis) return 0;
     const idSet = new Set(jobIds);
     try {
-      const items = await this.redisClient.lrange(AUDIT_QUEUE, 0, -1);
+      const items = await redis.lrange(AUDIT_QUEUE, 0, -1);
       if (!items.length) return 0;
       const kept: string[] = [];
       let removed = 0;
@@ -426,7 +506,7 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
         kept.push(raw);
       }
       if (removed === 0) return 0;
-      const multi = this.redisClient.multi();
+      const multi = redis.multi();
       multi.del(AUDIT_QUEUE);
       if (kept.length) {
         for (let i = kept.length - 1; i >= 0; i--) {
@@ -444,10 +524,11 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
   }
 
   async purgeAuditQueue(): Promise<number> {
-    if (!this.canUseRedis()) return 0;
+    const redis = this.activeRedis();
+    if (!redis) return 0;
     try {
-      const len = await this.redisClient.llen(AUDIT_QUEUE);
-      if (len > 0) await this.redisClient.del(AUDIT_QUEUE);
+      const len = await redis.llen(AUDIT_QUEUE);
+      if (len > 0) await redis.del(AUDIT_QUEUE);
       if (len > 0) this.logger.log(`Cleared audit queue (${len} item(s))`);
       return len;
     } catch (e) {
@@ -458,10 +539,11 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
   }
 
   async purgeBackfillQueue(): Promise<number> {
-    if (!this.canUseRedis()) return 0;
+    const redis = this.activeRedis();
+    if (!redis) return 0;
     try {
-      const len = await this.redisClient.llen(BACKFILL_QUEUE);
-      if (len > 0) await this.redisClient.del(BACKFILL_QUEUE);
+      const len = await redis.llen(BACKFILL_QUEUE);
+      if (len > 0) await redis.del(BACKFILL_QUEUE);
       if (len > 0) this.logger.log(`Cleared backfill queue (${len} item(s))`);
       return len;
     } catch (e) {

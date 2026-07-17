@@ -14,10 +14,10 @@ import type { Response } from 'express';
 import { PrismaService, Prisma } from '../prisma/prisma.service';
 import { AiService } from '../ai/ai.service';
 import { FacebookGraphService, type FbConversation, type FbMessage } from './facebook/facebook-graph.service';
-import { FacebookAdsService, type AdInsightsPayload } from './facebook/facebook-ads.service';
+import { FacebookAdsService, type AdInsightsPayload, type PageAdHint } from './facebook/facebook-ads.service';
 import { GraphApiCoordinatorService } from './facebook/graph-api-coordinator.service';
 import { RedisQueueService } from './redis/redis-queue.service';
-import { getCskhRunMode, isCskhApiProcess, shouldAuditYieldToInbox } from './cskh-run-mode';
+import { getCskhRunMode, isCskhApiProcess, isCskhWorkerProcess, shouldAuditYieldToInbox } from './cskh-run-mode';
 import { CskhInboxService } from './inbox/cskh-inbox.service';
 import {
   buildFacebookOAuthUrl,
@@ -30,7 +30,11 @@ import {
 import { isAllowedFacebookMediaUrl } from './facebook/facebook-message.util';
 import { findInboxConversationById } from './inbox/cskh-inbox-conversation.util';
 import { detectAdFromFbMessages, parseWebhookReferral } from './facebook/facebook-referral.util';
-import { trimTranscriptForAi, type TranscriptLine } from './audit/audit-analytics.util';
+import {
+  trimTranscriptForAi,
+  computeMessageActivityYmdRange,
+  type TranscriptLine,
+} from './audit/audit-analytics.util';
 import { toUserFacingError } from '../common/user-facing-error.util';
 
 /** Page CSKH đang bật — trường dùng trong monitor/audit (tránh phụ thuộc export Prisma model). */
@@ -61,7 +65,7 @@ export class CskhService implements OnModuleInit {
   /** Số hội thoại fetch tin FB song song / batch. */
   private readonly auditFetchConcurrency = Number(
     process.env.CSKH_AUDIT_FETCH_CONCURRENCY ||
-      (getCskhRunMode() === 'worker' ? 2 : 6),
+      (getCskhRunMode() === 'worker' ? 2 : 3),
   );
   /** Số Page quét FB song song (khi bật nhiều page). */
   private readonly auditPageConcurrency = Number(
@@ -69,7 +73,10 @@ export class CskhService implements OnModuleInit {
       (getCskhRunMode() === 'worker' ? 1 : 2),
   );
   private readonly auditMsgLimit = Number(process.env.CSKH_AUDIT_MSG_LIMIT || 100);
-  private readonly auditSource = process.env.CSKH_AUDIT_SOURCE || 'facebook';
+  /** Nguồn hội thoại khi chấm: `database` (inbox DB) hoặc `facebook` (quét Graph API). */
+  private readonly auditSource = (process.env.CSKH_AUDIT_SOURCE || 'database').toLowerCase();
+  /** Khi auditSource=database mà DB trống — chỉ fallback API nếu bật explicit. */
+  private readonly auditDbFallbackApi = process.env.CSKH_AUDIT_DB_FALLBACK_API === 'true';
   /** Tối đa dòng transcript gửi AI (DB vẫn lưu đủ). */
   private readonly auditAiTranscriptMax = Number(process.env.CSKH_AUDIT_AI_TRANSCRIPT_MAX || 100);
   private readonly auditProgressEvery = Math.max(
@@ -77,9 +84,15 @@ export class CskhService implements OnModuleInit {
     Number(process.env.CSKH_AUDIT_PROGRESS_EVERY || 40),
   );
   private readonly monitorMaxPages = Number(process.env.CSKH_MONITOR_MAX_PAGES || 10);
-  private readonly monitorPageConcurrency = Number(process.env.CSKH_MONITOR_PAGE_CONCURRENCY || 3);
+  private readonly monitorPageConcurrency = Number(
+    process.env.CSKH_MONITOR_PAGE_CONCURRENCY ||
+      (getCskhRunMode() === 'worker' ? 2 : 2),
+  );
   /** Số hội thoại fetch messages song song / Page (tăng tốc monitor). */
-  private readonly monitorMsgConcurrency = Number(process.env.CSKH_MONITOR_MSG_CONCURRENCY || 8);
+  private readonly monitorMsgConcurrency = Number(
+    process.env.CSKH_MONITOR_MSG_CONCURRENCY ||
+      (getCskhRunMode() === 'worker' ? 4 : 4),
+  );
 
   private readonly activeJobs = new Map<string, { pauseRequested: boolean }>();
   private readonly dashboardStatsCache = new Map<
@@ -142,6 +155,13 @@ export class CskhService implements OnModuleInit {
   );
   /** null = chưa kiểm tra; false = bảng chưa migrate → fallback COUNT chậm. */
   private pageMessageTotalsTableAvailable: boolean | null = null;
+  private readonly oauthSessionForPageCache = new Map<
+    string,
+    { at: number; session: Awaited<ReturnType<CskhService['resolveOAuthSessionForPage']>> }
+  >();
+  private readonly oauthSessionForPageCacheTtlMs = Number(
+    process.env.CSKH_OAUTH_SESSION_PAGE_CACHE_MS || 3_600_000,
+  );
 
   private readonly oauthSyncInFlight = new Set<string>();
 
@@ -163,7 +183,7 @@ export class CskhService implements OnModuleInit {
     await this.cleanupStuckJobsOnBoot();
   }
 
-  /** Hủy job audit/monitor đang running + purge Redis queue — tránh quét lại khi restart. */
+  /** Hủy job audit/monitor đang running. Chỉ worker mới purge Redis queue — tránh API restart xóa hàng đợi worker. */
   async cleanupStuckJobsOnBoot(): Promise<{ cancelledJobs: number; purgedQueue: number }> {
     const mode = getCskhRunMode();
     const n = await this.prisma.cskhJobRun.updateMany({
@@ -174,12 +194,21 @@ export class CskhService implements OnModuleInit {
         finishedAt: new Date(),
       },
     });
-    const purgedAudit = await this.redisQueue.purgeAuditQueue();
-    const purgedBackfill = await this.redisQueue.purgeBackfillQueue();
+    let purgedAudit = 0;
+    let purgedBackfill = 0;
+    if (isCskhWorkerProcess()) {
+      purgedAudit = await this.redisQueue.purgeAuditQueue();
+      purgedBackfill = await this.redisQueue.purgeBackfillQueue();
+    }
     const purged = purgedAudit + purgedBackfill;
     if (n.count > 0 || purged > 0) {
       this.logger.warn(
-        `Restart (${mode}): hủy ${n.count} job running, xóa ${purgedAudit} audit + ${purgedBackfill} backfill queue item(s)`,
+        `Restart (${mode}): hủy ${n.count} job running` +
+          (purged > 0
+            ? `, xóa ${purgedAudit} audit + ${purgedBackfill} backfill queue item(s)`
+            : isCskhApiProcess()
+              ? ' (API — giữ nguyên Redis queue cho worker)'
+              : ''),
       );
     }
 
@@ -773,7 +802,7 @@ export class CskhService implements OnModuleInit {
     if (!(await this.isPageAdSpendSchemaAvailable())) return;
     const today = this.vietnamCalendarDate(0);
     const yesterday = this.vietnamCalendarDate(-1);
-    const delayMs = Number(process.env.CSKH_PAGE_AD_SYNC_DELAY_MS || 1_200);
+    const delayMs = Number(process.env.CSKH_PAGE_AD_SYNC_DELAY_MS || 2_500);
     for (const statDate of [yesterday, today]) {
       try {
         const res = await this.syncPageAdSpendDaily(pageId, statDate, tenantId);
@@ -915,6 +944,8 @@ export class CskhService implements OnModuleInit {
       return { pageId, statDate, ok: false, reason: 'oauth_required' as const };
     }
 
+    await this.ensurePageAdHintHydrated(pageId);
+
     const oauthMeta =
       (session.metadata as { adAccounts?: Array<{ id: string; name?: string }> } | null) ?? null;
     let activeAccounts: Array<{ id: string; name?: string }> = [];
@@ -933,27 +964,19 @@ export class CskhService implements OnModuleInit {
       return { pageId, statDate, ok: false, reason: 'no_ad_accounts' as const };
     }
 
-    const pageAccounts = await this.ads.filterAdAccountsForPage(
+    const pageAccounts = this.ads.orderAccountsForPage(
       pageId,
-      session.userAccessToken,
-      activeAccounts.slice(0, 3),
+      activeAccounts.slice(0, 4) as Array<{ id: string; name?: string }>,
+      2,
     );
-    const accountsToTry = pageAccounts.length
-      ? pageAccounts
-      : activeAccounts.slice(0, 2);
+    const accountsToTry = pageAccounts.length > 0 ? pageAccounts : activeAccounts.slice(0, 2);
 
-    let best: Awaited<ReturnType<FacebookAdsService['fetchPageMessagingInsights']>> = null;
-    for (const account of accountsToTry.slice(0, 3)) {
-      const est = await this.ads.fetchPageMessagingInsights(
-        account,
-        pageId,
-        session.userAccessToken,
-        { since: statDate, until: statDate },
-      );
-      if (!est) continue;
-      if (!best || (est.spend ?? 0) > (best.spend ?? 0)) best = est;
-      if ((est.spend ?? 0) > 0) break;
-    }
+    const best = await this.ads.fetchPageAdInsightsFast(
+      pageId,
+      accountsToTry as Array<{ id: string; name?: string }>,
+      session.userAccessToken,
+      { since: statDate, until: statDate },
+    );
 
     if (!best || (best.spend == null && best.messagingConversations == null)) {
       await upsertEmpty('no_ads_for_page');
@@ -1011,6 +1034,10 @@ export class CskhService implements OnModuleInit {
       this.logger.log('[page-ad-spend] Bỏ qua sync — đang có quét đầy đủ inbox');
       return { synced: 0, pages: 0, dates: statDates };
     }
+    if (await this.redisQueue.shouldDeferInboxSync()) {
+      this.logger.log('[page-ad-spend] Bỏ qua sync — inbox/webhook đang ưu tiên');
+      return { synced: 0, pages: 0, dates: statDates };
+    }
 
     const uniqueDates = [...new Set(statDates.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)))];
     if (!uniqueDates.length) {
@@ -1023,12 +1050,28 @@ export class CskhService implements OnModuleInit {
       orderBy: { pageName: 'asc' },
     });
 
-    const delayMs = Number(process.env.CSKH_PAGE_AD_SYNC_DELAY_MS || 1_200);
+    const delayMs = Number(process.env.CSKH_PAGE_AD_SYNC_DELAY_MS || 2_500);
+    const freshSkipMs = Number(process.env.CSKH_PAGE_AD_SYNC_FRESH_SKIP_MS || 3_600_000);
     let synced = 0;
 
     for (const statDate of uniqueDates) {
       for (const page of pages) {
+        if (await this.redisQueue.shouldDeferInboxSync()) {
+          this.logger.log('[page-ad-spend] Dừng giữa chừng — nhường inbox/webhook');
+          return { synced, pages: pages.length, dates: uniqueDates };
+        }
         try {
+          const existing = await this.prisma.cskhPageAdSpendDaily.findUnique({
+            where: { pageId_statDate: { pageId: page.pageId, statDate } },
+            select: { syncedAt: true, unavailableReason: true },
+          });
+          if (
+            existing?.syncedAt &&
+            Date.now() - existing.syncedAt.getTime() < freshSkipMs &&
+            !existing.unavailableReason
+          ) {
+            continue;
+          }
           const res = await this.syncPageAdSpendDaily(page.pageId, statDate, tenantId);
           if (res.ok) synced++;
         } catch (e) {
@@ -1092,6 +1135,14 @@ export class CskhService implements OnModuleInit {
 
   /** OAuth token đúng với Page — ưu tiên session có QC gán Page. */
   private async resolveOAuthSessionForPage(pageId: string, tenantId?: string) {
+    const cacheKey = `${tenantId ?? '__all__'}:${pageId}`;
+    const cached = this.oauthSessionForPageCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < this.oauthSessionForPageCacheTtlMs) {
+      return cached.session;
+    }
+
+    await this.ensurePageAdHintHydrated(pageId);
+
     const config = await this.prisma.facebookCskhConfig.findFirst({
       where: tenantId ? { pageId, tenantId } : { pageId },
       select: { metadata: true },
@@ -1112,32 +1163,81 @@ export class CskhService implements OnModuleInit {
       }
     }
 
+    const pickSession = async (
+      session: (typeof candidates)[number] | null | undefined,
+    ): Promise<(typeof candidates)[number] | null> => {
+      if (!session?.userAccessToken) return null;
+      const meta =
+        (session.metadata as { adAccounts?: Array<{ id: string; name?: string }> } | null) ?? null;
+      if (Array.isArray(meta?.adAccounts) && meta.adAccounts.length) {
+        return session;
+      }
+      try {
+        const accounts = await this.ads.fetchAdAccounts(session.userAccessToken);
+        if (accounts.length) return session;
+      } catch {
+        return null;
+      }
+      return null;
+    };
+
     const seen = new Set<string>();
     for (const session of candidates) {
       if (!session?.userAccessToken || seen.has(session.fbUserId)) continue;
       seen.add(session.fbUserId);
-      let accounts: Array<{ id: string; name?: string }> = [];
-      const meta =
-        (session.metadata as { adAccounts?: Array<{ id: string; name?: string }> } | null) ?? null;
-      if (Array.isArray(meta?.adAccounts) && meta.adAccounts.length) {
-        accounts = meta.adAccounts;
-      } else {
-        try {
-          accounts = await this.ads.fetchAdAccounts(session.userAccessToken);
-        } catch {
-          continue;
-        }
+      const picked = await pickSession(session);
+      if (picked) {
+        this.oauthSessionForPageCache.set(cacheKey, { at: Date.now(), session: picked });
+        return picked;
       }
-      if (!accounts.length) continue;
-      const linked = await this.ads.filterAdAccountsForPage(
-        pageId,
-        session.userAccessToken,
-        accounts.slice(0, 6),
-      );
-      if (linked.length) return session;
     }
 
-    return candidates.find((s) => s.userAccessToken) ?? null;
+    const fallback = candidates.find((s) => s.userAccessToken) ?? null;
+    this.oauthSessionForPageCache.set(cacheKey, { at: Date.now(), session: fallback });
+    return fallback;
+  }
+
+  /** Nạp hint QC Page từ DB → RAM (sau restart chỉ cần 1 API insights). */
+  private async ensurePageAdHintHydrated(pageId: string): Promise<void> {
+    if (this.ads.getPageAdHint(pageId)) return;
+    const config = await this.prisma.facebookCskhConfig.findUnique({
+      where: { pageId },
+      select: { metadata: true },
+    });
+    const hint = (config?.metadata as { pageAdHint?: PageAdHint } | null)?.pageAdHint;
+    if (hint?.adAccountId && hint?.adsetId) {
+      this.ads.savePageAdHint(pageId, hint);
+    }
+  }
+
+  /** Lưu hint QC Page vào DB để lần sau không cần discover. */
+  private async persistPageAdHint(pageId: string, hint: PageAdHint): Promise<void> {
+    this.ads.savePageAdHint(pageId, hint);
+    try {
+      const config = await this.prisma.facebookCskhConfig.findUnique({
+        where: { pageId },
+        select: { metadata: true },
+      });
+      const prev = (config?.metadata as Record<string, unknown> | null) ?? {};
+      const existing = prev.pageAdHint as PageAdHint | undefined;
+      if (
+        existing?.adAccountId === hint.adAccountId &&
+        existing?.adsetId === hint.adsetId
+      ) {
+        return;
+      }
+      await this.prisma.facebookCskhConfig.update({
+        where: { pageId },
+        data: {
+          metadata: {
+            ...prev,
+            pageAdHint: hint,
+          },
+        },
+      });
+    } catch (e) {
+      this.logger.debug(`persistPageAdHint page=${pageId}: ${(e as Error).message}`);
+    }
   }
 
   /** Thử lấy ad_id từ referral trên tin Graph (webhook cũ / heuristic không lưu ad_id). */
@@ -1196,21 +1296,33 @@ export class CskhService implements OnModuleInit {
   }
 
   /** Chi phí QC ước tính cho hội thoại ads — cần ads_read + ad_id từ webhook. */
-  async getConversationAdInsights(conversationId: string, tenantId?: string): Promise<AdInsightsPayload> {
+  async getConversationAdInsights(
+    conversationId: string,
+    tenantId?: string,
+    bypassCache = false,
+  ): Promise<AdInsightsPayload> {
     const cacheKey = `${tenantId ?? '__all__'}:${conversationId}`;
-    const cached = this.adInsightsConvCache.get(cacheKey);
-    if (cached && Date.now() - cached.at < this.adInsightsConvCacheTtlMs) {
-      return cached.data;
+    if (!bypassCache) {
+      const cached = this.adInsightsConvCache.get(cacheKey);
+      if (cached && Date.now() - cached.at < this.adInsightsConvCacheTtlMs) {
+        return cached.data;
+      }
     }
 
-    const result = await this.loadConversationAdInsights(conversationId, tenantId);
-    this.adInsightsConvCache.set(cacheKey, { at: Date.now(), data: result });
-    return result;
+    const result = await this.loadConversationAdInsights(conversationId, tenantId, bypassCache);
+    const payload: AdInsightsPayload = {
+      ...result,
+      metaFetchedAt: new Date().toISOString(),
+      refreshedFromMeta: bypassCache,
+    };
+    this.adInsightsConvCache.set(cacheKey, { at: Date.now(), data: payload });
+    return payload;
   }
 
   private async loadConversationAdInsights(
     conversationId: string,
     tenantId?: string,
+    bypassCache = false,
   ): Promise<AdInsightsPayload> {
     const conv = await findInboxConversationById(this.prisma, conversationId, tenantId);
     if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
@@ -1256,6 +1368,7 @@ export class CskhService implements OnModuleInit {
         const insights = await this.ads.fetchAdInsights(effectiveAdId, session.userAccessToken, {
           since,
           until,
+          bypassCache,
         });
         const estimatedForThisConversation =
           insights.costPerConversation ??
@@ -1304,22 +1417,7 @@ export class CskhService implements OnModuleInit {
       }
     }
 
-    const pageAccounts = await this.ads.filterAdAccountsForPage(
-      conv.pageId,
-      session.userAccessToken,
-      activeAccounts.filter((a) => a.id).slice(0, 8) as Array<{
-        id: string;
-        name?: string;
-        account_status?: number;
-      }>,
-    );
-
-    let accountsToTry =
-      pageAccounts.length > 0
-        ? pageAccounts
-        : activeAccounts.filter((a) => a.id).slice(0, 10);
-
-    if (!accountsToTry.length) {
+    if (!activeAccounts.length) {
       return {
         ...empty('no_ad_accounts'),
         estimateNote:
@@ -1327,161 +1425,115 @@ export class CskhService implements OnModuleInit {
       };
     }
 
-    // Ưu tiên tài khoản đã lọc theo Page — bỏ qua countPageAds (chậm) khi đã có danh sách
-    if (pageAccounts.length > 0) {
-      accountsToTry = pageAccounts;
-    } else {
-      const scored = await Promise.all(
-        accountsToTry.slice(0, 4).map(async (account) => ({
-          account,
-          pageAdCount: account.id
-            ? await this.ads.countPageAds(account.id, conv.pageId, session.userAccessToken)
-            : 0,
-        })),
-      );
-      accountsToTry = scored
-        .sort((a, b) => b.pageAdCount - a.pageAdCount)
-        .map((s) => s.account);
-    }
-
-    const usedPageFilterFallback = pageAccounts.length === 0 && accountsToTry.length > 0;
-    const pageFallbackNote = usedPageFilterFallback
-      ? ' Meta không trả danh sách Page↔QC — đang quét từng tài khoản OAuth.'
-      : '';
-
-    type PageEst = Awaited<ReturnType<FacebookAdsService['fetchPageMessagingInsights']>>;
-    const insightResults = await Promise.all(
-      accountsToTry.slice(0, 3).map((account) =>
-        this.ads.fetchPageMessagingInsights(account, conv.pageId, session.userAccessToken),
-      ),
+    await this.ensurePageAdHintHydrated(conv.pageId);
+    const accountsToTry = this.ads.orderAccountsForPage(
+      conv.pageId,
+      activeAccounts.filter((a) => a.id) as Array<{ id: string; name?: string }>,
+      4,
     );
-    let pageEstimate: PageEst = null;
-    let bestPartial: PageEst = null;
-    for (const est of insightResults) {
-      if (!est) continue;
-      if (est.costPerConversation != null) {
-        pageEstimate = est;
-        break;
-      }
-      if (
-        est.spend != null &&
-        est.spend > 0 &&
-        (!bestPartial || (bestPartial.spend ?? 0) < est.spend)
-      ) {
-        bestPartial = est;
-      }
+
+    const pageEst = await this.ads.fetchPageAdInsightsFast(
+      conv.pageId,
+      accountsToTry,
+      session.userAccessToken,
+      { bypassCache },
+    );
+
+    const hintAfter = this.ads.getPageAdHint(conv.pageId);
+    if (hintAfter) void this.persistPageAdHint(conv.pageId, hintAfter);
+
+    if (pageEst?.spend != null && pageEst.spend > 0) {
+      return this.formatPageAdInsightsForConversation(conv, pageEst);
     }
 
-    if (!pageEstimate?.costPerConversation && bestPartial) {
-      pageEstimate = bestPartial;
-    }
-
-    // Ưu tiên chi phí theo chiến dịch (khớp Ads Manager) thay vì TB cả Page
-    if (pageEstimate?.campaignName && pageEstimate.adAccountId) {
-      const campaignEst = await this.ads.fetchCampaignMessagingInsights(
-        {
-          id: pageEstimate.adAccountId,
-          name: pageEstimate.adAccountName ?? undefined,
-        },
-        pageEstimate.campaignName,
-        session.userAccessToken,
-      );
-      if (campaignEst?.costPerConversation != null) {
-        const displayAdName = conv.adTitle?.trim() || pageEstimate.adName || null;
-        return {
-          adId: '',
-          adName: displayAdName,
-          adsetName: campaignEst.adsetName ?? pageEstimate.adsetName,
-          campaignName: campaignEst.campaignName ?? pageEstimate.campaignName,
-          currency: campaignEst.currency,
-          spend: campaignEst.spend,
-          impressions: null,
-          clicks: null,
-          messagingConversations: campaignEst.messagingConversations,
-          costPerConversation: campaignEst.costPerConversation,
-          dateStart: campaignEst.dateStart,
-          dateStop: campaignEst.dateStop,
-          estimatedForThisConversation: campaignEst.costPerConversation,
-          localConversationCount: 0,
-          unavailableReason: null,
-          isPageLevelEstimate: false,
-          insightsScope: 'campaign',
-          connectedAdAccountId: campaignEst.adAccountId,
-          connectedAdAccountName: campaignEst.adAccountName,
-          estimateNote: null,
-        };
-      }
-    }
-
-    if (pageEstimate?.costPerConversation != null) {
-      const displayAdName = conv.adTitle?.trim() || pageEstimate.adName || null;
-      const displayCampaign = pageEstimate.campaignName || null;
-      const displayAdset = pageEstimate.adsetName || null;
-      return {
-        adId: '',
-        adName: displayAdName,
-        adsetName: displayAdset,
-        campaignName: displayCampaign,
-        currency: pageEstimate.currency,
-        spend: pageEstimate.spend,
-        impressions: null,
-        clicks: null,
-        messagingConversations: pageEstimate.messagingConversations,
-        costPerConversation: pageEstimate.costPerConversation,
-        dateStart: pageEstimate.dateStart,
-        dateStop: pageEstimate.dateStop,
-        estimatedForThisConversation: pageEstimate.costPerConversation,
-        localConversationCount: 0,
-        unavailableReason: null,
-        isPageLevelEstimate: true,
-        insightsScope: 'page',
-        connectedAdAccountId: pageEstimate.adAccountId,
-        connectedAdAccountName: pageEstimate.adAccountName,
-        estimateNote: null,
-        topCampaigns: pageEstimate.topCampaigns?.length
-          ? pageEstimate.topCampaigns
-          : displayCampaign
-            ? [{ campaignName: displayCampaign, spend: pageEstimate.spend, messagingConversations: pageEstimate.messagingConversations }]
-            : undefined,
-      };
-    }
-
-    if (pageEstimate?.spend != null && pageEstimate.spend > 0) {
+    if (pageEst?.messagingConversations != null && (pageEst.spend ?? 0) > 0) {
       return {
         adId: '',
         adName: conv.adTitle,
-        adsetName: null,
-        campaignName: null,
-        currency: pageEstimate.currency,
+        adsetName: pageEst.adsetName,
+        campaignName: pageEst.campaignName,
+        currency: pageEst.currency,
         spend: null,
         impressions: null,
         clicks: null,
-        messagingConversations: pageEstimate.messagingConversations,
+        messagingConversations: pageEst.messagingConversations,
         costPerConversation: null,
-        dateStart: pageEstimate.dateStart,
-        dateStop: pageEstimate.dateStop,
+        dateStart: pageEst.dateStart,
+        dateStop: pageEst.dateStop,
         estimatedForThisConversation: null,
         localConversationCount: 0,
         unavailableReason: null,
         isPageLevelEstimate: true,
         insightsScope: 'page',
-        connectedAdAccountId: pageEstimate.adAccountId,
-        connectedAdAccountName: pageEstimate.adAccountName,
+        connectedAdAccountId: pageEst.adAccountId,
+        connectedAdAccountName: pageEst.adAccountName,
         estimateNote:
           'Page có chi tiêu QC nhưng Meta chưa trả số hội thoại messaging (30 ngày) — không tính được chi phí/tin.',
       };
     }
 
+    const hint = this.ads.getPageAdHint(conv.pageId);
     return {
       ...empty('no_messaging_insights'),
-      connectedAdAccountId: accountsToTry[0]?.id ?? null,
-      connectedAdAccountName: accountsToTry[0]?.name ?? null,
+      connectedAdAccountId: pageEst?.adAccountId ?? activeAccounts[0]?.id ?? null,
+      connectedAdAccountName: pageEst?.adAccountName ?? activeAccounts[0]?.name ?? null,
       estimateNote: await this.buildNoMessagingInsightsNote(
         conv.pageId,
         session.userAccessToken,
-        accountsToTry.slice(0, 6) as Array<{ id: string; name?: string }>,
-        pageFallbackNote,
+        activeAccounts.slice(0, 3) as Array<{ id: string; name?: string }>,
+        this.ads.isGraphUserRateLimited()
+          ? ' Meta đang giới hạn tần suất API — thử lại sau ~20 phút.'
+          : '',
+        hint?.adAccountName ? [hint.adAccountName] : undefined,
       ),
+    };
+  }
+
+  private formatPageAdInsightsForConversation(
+    conv: { adTitle: string | null },
+    est: {
+      adName: string | null;
+      adsetName: string | null;
+      campaignName: string | null;
+      currency: string | null;
+      spend: number | null;
+      messagingConversations: number | null;
+      costPerConversation: number | null;
+      dateStart: string | null;
+      dateStop: string | null;
+      adAccountId: string | null;
+      adAccountName: string | null;
+      adsetId?: string | null;
+    },
+  ): AdInsightsPayload {
+    const displayAdName = conv.adTitle?.trim() || est.adName || null;
+    const cost =
+      est.costPerConversation ??
+      (est.spend != null && est.messagingConversations && est.messagingConversations > 0
+        ? est.spend / est.messagingConversations
+        : null);
+    const scope = est.adsetId || est.adsetName ? 'adset' : 'campaign';
+    return {
+      adId: '',
+      adName: displayAdName,
+      adsetName: est.adsetName,
+      campaignName: est.campaignName,
+      currency: est.currency,
+      spend: est.spend,
+      impressions: null,
+      clicks: null,
+      messagingConversations: est.messagingConversations,
+      costPerConversation: cost,
+      dateStart: est.dateStart,
+      dateStop: est.dateStop,
+      estimatedForThisConversation: cost,
+      localConversationCount: 0,
+      unavailableReason: null,
+      isPageLevelEstimate: false,
+      insightsScope: scope,
+      connectedAdAccountId: est.adAccountId,
+      connectedAdAccountName: est.adAccountName,
+      estimateNote: null,
     };
   }
 
@@ -1491,23 +1543,23 @@ export class CskhService implements OnModuleInit {
     userAccessToken: string,
     accounts: Array<{ id: string; name?: string }>,
     fallbackNote: string,
+    knownAccountsWithAds?: string[],
   ): Promise<string> {
-    const withAds: string[] = [];
-    for (const account of accounts) {
-      if (!account.id) continue;
-      try {
-        const n = await this.ads.countPageAds(account.id, pageId, userAccessToken);
-        if (n > 0) withAds.push(account.name || account.id);
-      } catch {
-        /* ignore */
-      }
+    const withAds: string[] = [...(knownAccountsWithAds ?? [])];
+    if (!withAds.length) {
+      const hint = this.ads.getPageAdHint(pageId);
+      if (hint?.adAccountName) withAds.push(hint.adAccountName);
     }
 
     if (!withAds.length) {
       const names = accounts.map((a) => a.name || a.id).filter(Boolean).slice(0, 3).join(', ');
+      const rateLimited = accounts.some((a) => a.id && this.ads.isAccountRateLimited(a.id));
+      const rateHint = rateLimited
+        ? ' Meta đang giới hạn tần suất API (rate limit) — thử lại sau ~30 phút hoặc giảm số kênh quét đồng thời.'
+        : '';
       return (
         `Không tìm thấy QC nào của Page này trên tài khoản OAuth${names ? ` (${names})` : ''}.` +
-        ` Cần OAuth lại bằng admin BM — chọn đúng tài khoản QC đang chạy ads cho Page.${fallbackNote}`
+        ` Cần OAuth lại bằng admin BM — chọn đúng tài khoản QC đang chạy ads cho Page.${fallbackNote}${rateHint}`
       );
     }
 
@@ -1722,6 +1774,8 @@ export class CskhService implements OnModuleInit {
   ): Promise<boolean> {
     if (!(await this.isPageAdSpendSchemaAvailable())) return false;
     if (await this.isInboxBackfillRunning(tenantId)) return false;
+    if (await this.redisQueue.shouldDeferInboxSync()) return false;
+    if (await this.redisQueue.isInboxSyncActive()) return false;
 
     const scheduleKey = `${tenantId ?? '__all__'}:${statDate}`;
     const lastScheduled = this.pageAdSpendSyncScheduled.get(scheduleKey) ?? 0;
@@ -1832,17 +1886,17 @@ export class CskhService implements OnModuleInit {
       metadata: Prisma.JsonValue | null;
     };
 
-    const batchSize = 12;
+    const batchSize = 6;
     for (let i = 0; i < pageIds.length; i += batchSize) {
       const chunk = pageIds.slice(i, i + batchSize);
       const configs: PagePictureRow[] = await this.prisma.facebookCskhConfig.findMany({
         where: { pageId: { in: chunk } },
         select: { pageId: true, pageAccessToken: true, metadata: true },
       });
-      await Promise.all(
-        configs.map(async (cfg) => {
+      for (const cfg of configs) {
+        try {
           const url = await this.graph.getPagePictureUrl(cfg.pageId, cfg.pageAccessToken);
-          if (!url) return;
+          if (!url) continue;
           const prev = (cfg.metadata as Record<string, unknown>) || {};
           await this.prisma.facebookCskhConfig.update({
             where: { pageId: cfg.pageId },
@@ -1850,8 +1904,10 @@ export class CskhService implements OnModuleInit {
               metadata: { ...prev, pictureUrl: url } as Prisma.InputJsonValue,
             },
           });
-        }),
-      );
+        } catch (e) {
+          this.logger.debug(`enrichPagePictures ${cfg.pageId}: ${(e as Error).message}`);
+        }
+      }
     }
   }
 
@@ -2014,65 +2070,62 @@ export class CskhService implements OnModuleInit {
     oauthFbUserId?: string,
   ) {
     const validAccounts = accounts.filter((acc) => acc.id && acc.access_token);
-    
-    // Process all pages concurrently using Promise.all
-    const results = await Promise.all(
-      validAccounts.map(async (acc) => {
-        try {
-          const canMessage = !acc.tasks?.length || acc.tasks.includes('MESSAGING');
-          const pictureUrl = acc.picture?.data?.url ?? null;
-          const existing = await this.prisma.facebookCskhConfig.findUnique({
-            where: { pageId: acc.id },
-            select: { metadata: true },
-          });
-          const prevMeta = (existing?.metadata as Record<string, unknown>) || {};
-          const meta = {
-            ...prevMeta,
-            connectedVia: source,
-            tasks: acc.tasks || [],
-            ...(pictureUrl ? { pictureUrl } : {}),
-            ...(oauthFbUserId ? { oauthFbUserId } : {}),
-            refreshedAt: new Date().toISOString(),
-          } as Prisma.InputJsonValue;
+    const upsertConcurrency = Number(process.env.CSKH_OAUTH_UPSERT_CONCURRENCY || 4);
+    let savedCount = 0;
 
-          await this.prisma.facebookCskhConfig.upsert({
-            where: { pageId: acc.id },
-            create: {
-              pageId: acc.id,
-              pageName: acc.name || null,
-              pageAccessToken: acc.access_token,
-              enabled: canMessage,
-              tenantId,
-              metadata: {
-                connectedVia: source,
-                tasks: acc.tasks || [],
-                ...(pictureUrl ? { pictureUrl } : {}),
-                ...(oauthFbUserId ? { oauthFbUserId } : {}),
-              } as Prisma.InputJsonValue,
-            },
-            update: {
-              pageName: acc.name || undefined,
-              pageAccessToken: acc.access_token,
-              enabled: canMessage,
-              tenantId,
-              metadata: meta,
-            },
-          });
+    await this.runWithConcurrency(validAccounts, upsertConcurrency, async (acc) => {
+      try {
+        const canMessage = !acc.tasks?.length || acc.tasks.includes('MESSAGING');
+        const pictureUrl = acc.picture?.data?.url ?? null;
+        const existing = await this.prisma.facebookCskhConfig.findUnique({
+          where: { pageId: acc.id },
+          select: { metadata: true },
+        });
+        const prevMeta = (existing?.metadata as Record<string, unknown>) || {};
+        const meta = {
+          ...prevMeta,
+          connectedVia: source,
+          tasks: acc.tasks || [],
+          ...(pictureUrl ? { pictureUrl } : {}),
+          ...(oauthFbUserId ? { oauthFbUserId } : {}),
+          refreshedAt: new Date().toISOString(),
+        } as Prisma.InputJsonValue;
 
-          // Webhook subscribe chạy nền — không chặn OAuth redirect
-          void this.subscribePageToWebhook(acc.id, acc.access_token).catch((e) => {
-            this.logger.error(`Auto subscribe failed for page ${acc.id} via OAuth: ${e.message}`);
-          });
+        await this.prisma.facebookCskhConfig.upsert({
+          where: { pageId: acc.id },
+          create: {
+            pageId: acc.id,
+            pageName: acc.name || null,
+            pageAccessToken: acc.access_token,
+            enabled: canMessage,
+            tenantId,
+            metadata: {
+              connectedVia: source,
+              tasks: acc.tasks || [],
+              ...(pictureUrl ? { pictureUrl } : {}),
+              ...(oauthFbUserId ? { oauthFbUserId } : {}),
+            } as Prisma.InputJsonValue,
+          },
+          update: {
+            pageName: acc.name || undefined,
+            pageAccessToken: acc.access_token,
+            enabled: canMessage,
+            tenantId,
+            metadata: meta,
+          },
+        });
 
-          return true;
-        } catch (e: any) {
-          this.logger.error(`Failed to upsert page ${acc.id} via ${source}: ${e.message}`);
-          return false;
-        }
-      }),
-    );
+        // Webhook subscribe chạy nền — không chặn OAuth redirect
+        void this.subscribePageToWebhook(acc.id, acc.access_token).catch((e) => {
+          this.logger.error(`Auto subscribe failed for page ${acc.id} via OAuth: ${e.message}`);
+        });
 
-    const savedCount = results.filter(Boolean).length;
+        savedCount++;
+      } catch (e: any) {
+        this.logger.error(`Failed to upsert page ${acc.id} via ${source}: ${e.message}`);
+      }
+    });
+
     return savedCount;
   }
 
@@ -2926,11 +2979,14 @@ export class CskhService implements OnModuleInit {
 
         // Load messages just-in-time from local DB if empty (to optimize memory usage)
         if (this.auditSource === 'database' && (!conv.messages?.data || conv.messages.data.length === 0)) {
-          const { end } = this.graph.vietnamDateRange(auditDateFrom, auditDateTo);
+          const { start, end } = this.graph.vietnamDateRange(auditDateFrom, auditDateTo);
           const dbMessages = await this.prisma.cskhInboxMessage.findMany({
             where: {
               conversationId: (conv as any).dbConversationId || conv.id,
-              sentAt: { lte: end },
+              sentAt: {
+                gte: start,
+                lte: end,
+              },
             },
             orderBy: { sentAt: 'desc' },
             take: this.auditMsgLimit,
@@ -2971,6 +3027,9 @@ export class CskhService implements OnModuleInit {
           auditDateTo,
         );
         const dayMessages = rangeMessages;
+        const activityRange = computeMessageActivityYmdRange(
+          rangeMessages.map((m) => ({ created_time: m.created_time })),
+        );
         const staffAbsent = !this.graph.hasStaffMessage(rangeMessages, config.pageId);
         const needsFollowUp = this.graph.needsFollowUpOnDay(rangeMessages, config.pageId);
         const noReplyForAi = staffAbsent;
@@ -3022,6 +3081,9 @@ export class CskhService implements OnModuleInit {
             auditDate: auditDateFrom,
             auditDateFrom,
             auditDateTo,
+            ...(activityRange
+              ? { activityDateFrom: activityRange.from, activityDateTo: activityRange.to }
+              : {}),
             auditDayMessageCount: dayMessages.length,
             transcriptMessageCount: rangeMessages.length,
             noReply: needsFollowUp || staffAbsent,
@@ -3154,7 +3216,9 @@ export class CskhService implements OnModuleInit {
               };
 
               if (this.auditSource === 'database') {
-                this.logger.log(`[CskhService] Thử nghiệm quét từ database cục bộ cho Page ${pageName}...`);
+                this.logger.log(
+                  `[CskhService] Chấm từ inbox DB cho Page ${pageName} (khoảng ${rangeLabel})...`,
+                );
                 conversations = await this.fetchConversationsForAuditFromDb(
                   config.pageId,
                   auditDateFrom,
@@ -3181,10 +3245,15 @@ export class CskhService implements OnModuleInit {
                 );
                 if (conversations.length > 0) {
                   usingDb = true;
-                } else {
+                } else if (this.auditDbFallbackApi) {
                   this.logger.warn(
-                    `[CskhService] Không tìm thấy cuộc hội thoại nào trong database cho Page ${pageName} trong khoảng ${rangeLabel}. ` +
-                      `Tự động fallback sang quét trực tiếp từ Facebook API...`,
+                    `[CskhService] Inbox DB trống cho Page ${pageName} (${rangeLabel}) — fallback quét Facebook API (CSKH_AUDIT_DB_FALLBACK_API=true).`,
+                  );
+                } else {
+                  usingDb = true;
+                  this.logger.warn(
+                    `[CskhService] Inbox DB không có hội thoại cho Page ${pageName} (${rangeLabel}). ` +
+                      `Chạy "Quét đầy đủ" ở tab Kênh trước khi chấm. Không quét API.`,
                   );
                 }
               }
@@ -3504,11 +3573,21 @@ export class CskhService implements OnModuleInit {
           FROM chat_audits
           WHERE metadata->>'pageId' = ${pid}
             AND (
-              (metadata->>'auditDateFrom' = ${from} AND metadata->>'auditDateTo' = ${to})
+              (
+                NULLIF(metadata->>'activityDateFrom', '') IS NOT NULL
+                AND NULLIF(metadata->>'activityDateFrom', '') <= ${to}
+                AND COALESCE(NULLIF(metadata->>'activityDateTo', ''), metadata->>'activityDateFrom') >= ${from}
+              )
               OR (
-                ${from} = ${to}
-                AND metadata->>'auditDate' = ${from}
-                AND COALESCE(metadata->>'auditDateFrom', '') = ''
+                NULLIF(metadata->>'activityDateFrom', '') IS NULL
+                AND (
+                  (metadata->>'auditDateFrom' = ${from} AND metadata->>'auditDateTo' = ${to})
+                  OR (
+                    ${from} = ${to}
+                    AND metadata->>'auditDate' = ${from}
+                    AND COALESCE(metadata->>'auditDateFrom', '') = ''
+                  )
+                )
               )
             )
             AND (${tenantId}::uuid IS NULL OR tenant_id = ${tenantId}::uuid)
@@ -3521,11 +3600,21 @@ export class CskhService implements OnModuleInit {
             COUNT(*) FILTER (WHERE COALESCE(metadata->>'fromAd', 'false') = 'true')::bigint AS from_ad
           FROM chat_audits
           WHERE (
-              (metadata->>'auditDateFrom' = ${from} AND metadata->>'auditDateTo' = ${to})
+              (
+                NULLIF(metadata->>'activityDateFrom', '') IS NOT NULL
+                AND NULLIF(metadata->>'activityDateFrom', '') <= ${to}
+                AND COALESCE(NULLIF(metadata->>'activityDateTo', ''), metadata->>'activityDateFrom') >= ${from}
+              )
               OR (
-                ${from} = ${to}
-                AND metadata->>'auditDate' = ${from}
-                AND COALESCE(metadata->>'auditDateFrom', '') = ''
+                NULLIF(metadata->>'activityDateFrom', '') IS NULL
+                AND (
+                  (metadata->>'auditDateFrom' = ${from} AND metadata->>'auditDateTo' = ${to})
+                  OR (
+                    ${from} = ${to}
+                    AND metadata->>'auditDate' = ${from}
+                    AND COALESCE(metadata->>'auditDateFrom', '') = ''
+                  )
+                )
               )
             )
             AND (${tenantId}::uuid IS NULL OR tenant_id = ${tenantId}::uuid)

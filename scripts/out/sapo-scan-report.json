@@ -1,0 +1,2376 @@
+{
+  "scannedAt": "2026-07-17T01:49:00.461Z",
+  "store": "vienchibao.mysapo.net",
+  "totalProducts": 11999,
+  "summary": {
+    "variantsTotal": 14685,
+    "productsWithMultipleVariants": 762,
+    "productsWithImages": 11206,
+    "variantsWithCompareAt": 78,
+    "variantsWithBarcode": 14279
+  },
+  "productFieldFrequency": [
+    {
+      "value": "id",
+      "count": 11999
+    },
+    {
+      "value": "name",
+      "count": 11999
+    },
+    {
+      "value": "alias",
+      "count": 11999
+    },
+    {
+      "value": "vendor",
+      "count": 11999
+    },
+    {
+      "value": "product_type",
+      "count": 11999
+    },
+    {
+      "value": "meta_title",
+      "count": 11999
+    },
+    {
+      "value": "meta_description",
+      "count": 11999
+    },
+    {
+      "value": "summary",
+      "count": 11999
+    },
+    {
+      "value": "published_on",
+      "count": 11999
+    },
+    {
+      "value": "template_layout",
+      "count": 11999
+    },
+    {
+      "value": "created_on",
+      "count": 11999
+    },
+    {
+      "value": "modified_on",
+      "count": 11999
+    },
+    {
+      "value": "content",
+      "count": 11999
+    },
+    {
+      "value": "tags",
+      "count": 11999
+    },
+    {
+      "value": "status",
+      "count": 11999
+    },
+    {
+      "value": "type",
+      "count": 11999
+    },
+    {
+      "value": "images",
+      "count": 11999
+    },
+    {
+      "value": "image",
+      "count": 11999
+    },
+    {
+      "value": "variants",
+      "count": 11999
+    },
+    {
+      "value": "options",
+      "count": 11999
+    },
+    {
+      "value": "vat_pit_category_code",
+      "count": 11999
+    }
+  ],
+  "variantFieldFrequency": [
+    {
+      "value": "id",
+      "count": 14685
+    },
+    {
+      "value": "inventory_item_id",
+      "count": 14685
+    },
+    {
+      "value": "barcode",
+      "count": 14685
+    },
+    {
+      "value": "sku",
+      "count": 14685
+    },
+    {
+      "value": "price",
+      "count": 14685
+    },
+    {
+      "value": "compare_at_price",
+      "count": 14685
+    },
+    {
+      "value": "option1",
+      "count": 14685
+    },
+    {
+      "value": "option2",
+      "count": 14685
+    },
+    {
+      "value": "option3",
+      "count": 14685
+    },
+    {
+      "value": "taxable",
+      "count": 14685
+    },
+    {
+      "value": "inventory_management",
+      "count": 14685
+    },
+    {
+      "value": "inventory_policy",
+      "count": 14685
+    },
+    {
+      "value": "inventory_quantity",
+      "count": 14685
+    },
+    {
+      "value": "lot_management",
+      "count": 14685
+    },
+    {
+      "value": "requires_shipping",
+      "count": 14685
+    },
+    {
+      "value": "weight",
+      "count": 14685
+    },
+    {
+      "value": "weight_unit",
+      "count": 14685
+    },
+    {
+      "value": "unit",
+      "count": 14685
+    },
+    {
+      "value": "image_id",
+      "count": 14685
+    },
+    {
+      "value": "position",
+      "count": 14685
+    },
+    {
+      "value": "created_on",
+      "count": 14685
+    },
+    {
+      "value": "modified_on",
+      "count": 14685
+    },
+    {
+      "value": "title",
+      "count": 14685
+    },
+    {
+      "value": "grams",
+      "count": 14685
+    },
+    {
+      "value": "product_id",
+      "count": 14685
+    },
+    {
+      "value": "type",
+      "count": 14685
+    },
+    {
+      "value": "requires_components",
+      "count": 14685
+    }
+  ],
+  "productTypeRaw": [
+    {
+      "value": "NHẪN >> Bạc",
+      "count": 1668
+    },
+    {
+      "value": "BÔNG TAI >> Bạc Trang sức",
+      "count": 1354
+    },
+    {
+      "value": "NHẪN >> Vàng",
+      "count": 1291
+    },
+    {
+      "value": "LẮC >> Bạc Thái",
+      "count": 623
+    },
+    {
+      "value": "NHẪN >> Bạc Moiss",
+      "count": 618
+    },
+    {
+      "value": "DÂY CHUYỀN >> Bạc Trang sức",
+      "count": 558
+    },
+    {
+      "value": "LẮC >> Bạc Trang sức",
+      "count": 495
+    },
+    {
+      "value": "VẬT PHẨM, QUÀ TẶNG",
+      "count": 488
+    },
+    {
+      "value": "DÂY CHUYỀN >> Bạc",
+      "count": 459
+    },
+    {
+      "value": "Túi Xách Nữ",
+      "count": 347
+    },
+    {
+      "value": "DÂY CHUYỀN >> Vàng",
+      "count": 344
+    },
+    {
+      "value": "MẶT DÂY CHUYỀN >> Bạc Thái",
+      "count": 270
+    },
+    {
+      "value": "VÒNG >> Vòng phong thuỷ",
+      "count": 216
+    },
+    {
+      "value": "ĐÁ QUÝ",
+      "count": 207
+    },
+    {
+      "value": "(empty)",
+      "count": 202
+    },
+    {
+      "value": "MẶT DÂY CHUYỀN >> Bạc Trang sức",
+      "count": 190
+    },
+    {
+      "value": "BÔNG TAI >> Bạc Thái",
+      "count": 166
+    },
+    {
+      "value": "BÔNG TAI >> Vàng",
+      "count": 161
+    },
+    {
+      "value": "NHẪN >> Bạc thái",
+      "count": 156
+    },
+    {
+      "value": "KIỀNG >> Bạc Thái",
+      "count": 149
+    },
+    {
+      "value": "CHARM >> Bạc",
+      "count": 147
+    },
+    {
+      "value": "LẮC >> Vàng",
+      "count": 138
+    },
+    {
+      "value": "MẶT DÂY CHUYỀN >> Vàng",
+      "count": 137
+    },
+    {
+      "value": "KIỀNG >> Bạc Trang Sức",
+      "count": 121
+    },
+    {
+      "value": "DÂY CHUYỀN >> Bạc THÁI",
+      "count": 121
+    },
+    {
+      "value": "BÔNG TAI >> Titan",
+      "count": 104
+    },
+    {
+      "value": "BÔNG TAI >> Bạc Moiss",
+      "count": 87
+    },
+    {
+      "value": "CHARM >> Vàng",
+      "count": 77
+    },
+    {
+      "value": "VÒNG >> Trầm hương",
+      "count": 64
+    },
+    {
+      "value": "LẮC >> Bạc Moiss",
+      "count": 62
+    },
+    {
+      "value": "CÔNG CỤ DỤNG CỤ",
+      "count": 62
+    },
+    {
+      "value": "DÂY CHUYỀN >> Titan",
+      "count": 60
+    },
+    {
+      "value": "VÒNG >> Bạc Trang sức",
+      "count": 54
+    },
+    {
+      "value": "KHÁC >> KÍNH MẮT",
+      "count": 53
+    },
+    {
+      "value": "KHÁC >> ĐỒ DA",
+      "count": 51
+    },
+    {
+      "value": "VÒNG >> Bạc Thái",
+      "count": 51
+    },
+    {
+      "value": "DÂY CHUYỀN >> Bạc Moiss",
+      "count": 47
+    },
+    {
+      "value": "MẶT DÂY CHUYỀN >> Bạc Moiss",
+      "count": 42
+    },
+    {
+      "value": "VÒNG >> Bạc trẻ em",
+      "count": 40
+    },
+    {
+      "value": "NGUYÊN PHỤ LIỆU",
+      "count": 35
+    },
+    {
+      "value": "BÔNG TAI >> Bạc Trang Sức Moiss",
+      "count": 33
+    },
+    {
+      "value": "DÂY CHUYỀN >> Bạc Trang Sức Moiss",
+      "count": 33
+    },
+    {
+      "value": "LẮC >> Titan",
+      "count": 33
+    },
+    {
+      "value": "LẮC >> Bạc",
+      "count": 30
+    },
+    {
+      "value": "NHẪN >> Bạch Kim",
+      "count": 29
+    },
+    {
+      "value": "VẬT PHẨM, QUÀ TẶNG >> Bạc Thái",
+      "count": 25
+    },
+    {
+      "value": "KIỀNG >> BẠC",
+      "count": 24
+    },
+    {
+      "value": "LẮC >> Bạc Trang Sức Moiss",
+      "count": 22
+    },
+    {
+      "value": "VÒNG >> Vàng",
+      "count": 22
+    },
+    {
+      "value": "Thắt lưng nam",
+      "count": 15
+    },
+    {
+      "value": "NHẪN >> Titan",
+      "count": 15
+    },
+    {
+      "value": "KIỀNG >> Vàng",
+      "count": 14
+    },
+    {
+      "value": "Ví Nam",
+      "count": 13
+    },
+    {
+      "value": "túi xách nam",
+      "count": 13
+    },
+    {
+      "value": "KHÁC >> ĐỒNG HỒ",
+      "count": 13
+    },
+    {
+      "value": "Ví Nữ",
+      "count": 11
+    },
+    {
+      "value": "NHẪN >> Khác",
+      "count": 11
+    },
+    {
+      "value": "Dây đồng hồ",
+      "count": 11
+    },
+    {
+      "value": "CHARM >> Bạc Thái",
+      "count": 11
+    },
+    {
+      "value": "MẶT DÂY CHUYỀN >> BẠC",
+      "count": 10
+    },
+    {
+      "value": "Bao chìa khóa ô tô",
+      "count": 9
+    },
+    {
+      "value": "Charm Da",
+      "count": 8
+    },
+    {
+      "value": "KIỀNG >> Bạc Trang Sức Moiss",
+      "count": 7
+    },
+    {
+      "value": "VÒNG >> Titan",
+      "count": 7
+    },
+    {
+      "value": "DỊCH VỤ GIA TĂNG",
+      "count": 6
+    },
+    {
+      "value": "BÔNG TAI >> Bạch kim",
+      "count": 5
+    },
+    {
+      "value": "LẮC >> Bạc THÁI",
+      "count": 5
+    },
+    {
+      "value": "KIỀNG >> Bạc Thái Trang Sức",
+      "count": 5
+    },
+    {
+      "value": "BÔNG TAI >> Bạc trang sức",
+      "count": 5
+    },
+    {
+      "value": "MẶT DÂY CHUYỀN >> Trầm hương",
+      "count": 5
+    },
+    {
+      "value": "Thắt lưng nữ",
+      "count": 4
+    },
+    {
+      "value": "MẶT DÂY CHUYỀN >> BẠC THÁI TRANG SỨC",
+      "count": 4
+    },
+    {
+      "value": "MẶT DÂY CHUYỀN >> Đá quý",
+      "count": 4
+    },
+    {
+      "value": "NHẪN >> Bạch Kim Moiss",
+      "count": 3
+    },
+    {
+      "value": "Balo",
+      "count": 2
+    },
+    {
+      "value": "KHÁC >> KÍNH",
+      "count": 2
+    },
+    {
+      "value": "KHÁC >> BẠC THÁI",
+      "count": 2
+    },
+    {
+      "value": "KHÁC >> TRẦM HƯƠNG",
+      "count": 2
+    },
+    {
+      "value": "VÒNG >> Gỗ",
+      "count": 2
+    },
+    {
+      "value": "Bao da phụ kiện",
+      "count": 1
+    }
+  ],
+  "productTypeLevelDistribution": [
+    {
+      "value": "2",
+      "count": 10562
+    },
+    {
+      "value": "1",
+      "count": 1235
+    },
+    {
+      "value": "0",
+      "count": 202
+    }
+  ],
+  "vendorDistribution": [
+    {
+      "value": "(empty)",
+      "count": 6493
+    },
+    {
+      "value": "HuyK",
+      "count": 3067
+    },
+    {
+      "value": "VCB",
+      "count": 651
+    },
+    {
+      "value": "Vân Phong Các",
+      "count": 449
+    },
+    {
+      "value": "SHOPEE VCB SILVER",
+      "count": 400
+    },
+    {
+      "value": "HuyK - Viễn Chí Bảo",
+      "count": 284
+    },
+    {
+      "value": "NGA",
+      "count": 212
+    },
+    {
+      "value": "HIỀN",
+      "count": 196
+    },
+    {
+      "value": "Shopee Miêu",
+      "count": 128
+    },
+    {
+      "value": "VCB Art Silver",
+      "count": 70
+    },
+    {
+      "value": "Miêu Bạc",
+      "count": 24
+    },
+    {
+      "value": "Huyền Đỗ",
+      "count": 13
+    },
+    {
+      "value": "HUYỀN",
+      "count": 6
+    },
+    {
+      "value": "SHOPEE VCB ART SILVER",
+      "count": 5
+    },
+    {
+      "value": "H.ĐẠT",
+      "count": 1
+    }
+  ],
+  "statusDistribution": [
+    {
+      "value": "active",
+      "count": 11999
+    }
+  ],
+  "optionCountDistribution": [
+    {
+      "value": "1",
+      "count": 11965
+    },
+    {
+      "value": "2",
+      "count": 34
+    }
+  ],
+  "optionNames": [
+    {
+      "value": "Title",
+      "count": 11198
+    },
+    {
+      "value": "Kích thước",
+      "count": 308
+    },
+    {
+      "value": "Size",
+      "count": 283
+    },
+    {
+      "value": "Màu sắc",
+      "count": 159
+    },
+    {
+      "value": "Màu",
+      "count": 14
+    },
+    {
+      "value": "Hoạ tiết",
+      "count": 10
+    },
+    {
+      "value": "Màu Sắc",
+      "count": 9
+    },
+    {
+      "value": "Phân Loại",
+      "count": 7
+    },
+    {
+      "value": "size",
+      "count": 6
+    },
+    {
+      "value": "màu",
+      "count": 5
+    },
+    {
+      "value": "Giới tính",
+      "count": 5
+    },
+    {
+      "value": "Cung hoàng đạo",
+      "count": 4
+    },
+    {
+      "value": "Màu đá",
+      "count": 3
+    },
+    {
+      "value": "Chất liệu",
+      "count": 3
+    },
+    {
+      "value": "Con giáp",
+      "count": 3
+    },
+    {
+      "value": "Phân loại",
+      "count": 2
+    },
+    {
+      "value": "Đường kính",
+      "count": 2
+    },
+    {
+      "value": "Phật bản mệnh",
+      "count": 2
+    },
+    {
+      "value": "Hình dạng",
+      "count": 2
+    },
+    {
+      "value": "Màu da",
+      "count": 1
+    },
+    {
+      "value": "phân loại",
+      "count": 1
+    },
+    {
+      "value": "màu đá",
+      "count": 1
+    },
+    {
+      "value": "Loại đá",
+      "count": 1
+    },
+    {
+      "value": "Chiều dài",
+      "count": 1
+    },
+    {
+      "value": "Hình dáng",
+      "count": 1
+    },
+    {
+      "value": "Năm sinh",
+      "count": 1
+    },
+    {
+      "value": "Phiên bản",
+      "count": 1
+    }
+  ],
+  "unitDistribution": [
+    {
+      "value": "Chiếc",
+      "count": 12923
+    },
+    {
+      "value": "(empty)",
+      "count": 668
+    },
+    {
+      "value": "Cái",
+      "count": 270
+    },
+    {
+      "value": "Đôi",
+      "count": 174
+    },
+    {
+      "value": "chiếc",
+      "count": 171
+    },
+    {
+      "value": "Cặp",
+      "count": 85
+    },
+    {
+      "value": "Viên",
+      "count": 80
+    },
+    {
+      "value": "cái",
+      "count": 72
+    },
+    {
+      "value": "Dây",
+      "count": 67
+    },
+    {
+      "value": "Set",
+      "count": 65
+    },
+    {
+      "value": "Bộ",
+      "count": 22
+    },
+    {
+      "value": "đôi",
+      "count": 10
+    },
+    {
+      "value": "set",
+      "count": 6
+    },
+    {
+      "value": "viên",
+      "count": 6
+    },
+    {
+      "value": "2.6g",
+      "count": 4
+    },
+    {
+      "value": "CHIẾC",
+      "count": 4
+    },
+    {
+      "value": "2.1g",
+      "count": 3
+    },
+    {
+      "value": "1.5g",
+      "count": 3
+    },
+    {
+      "value": "3g",
+      "count": 3
+    },
+    {
+      "value": "0.8g",
+      "count": 2
+    },
+    {
+      "value": "2.2g",
+      "count": 2
+    },
+    {
+      "value": "2.5g",
+      "count": 2
+    },
+    {
+      "value": "2.7g",
+      "count": 2
+    },
+    {
+      "value": "cặp",
+      "count": 2
+    },
+    {
+      "value": "Túi",
+      "count": 2
+    },
+    {
+      "value": "túi",
+      "count": 2
+    },
+    {
+      "value": "22.66g",
+      "count": 1
+    },
+    {
+      "value": "3.5g",
+      "count": 1
+    },
+    {
+      "value": "5.5g",
+      "count": 1
+    },
+    {
+      "value": "4.2g",
+      "count": 1
+    },
+    {
+      "value": "TX102",
+      "count": 1
+    },
+    {
+      "value": "3,8g",
+      "count": 1
+    },
+    {
+      "value": "4g",
+      "count": 1
+    },
+    {
+      "value": "Bộ trang sức",
+      "count": 1
+    },
+    {
+      "value": "1",
+      "count": 1
+    },
+    {
+      "value": "3.8g",
+      "count": 1
+    },
+    {
+      "value": "2.8g",
+      "count": 1
+    },
+    {
+      "value": "3.6g",
+      "count": 1
+    },
+    {
+      "value": "7.4g",
+      "count": 1
+    },
+    {
+      "value": "8.2g",
+      "count": 1
+    }
+  ],
+  "weightUnitDistribution": [
+    {
+      "value": "g",
+      "count": 14067
+    },
+    {
+      "value": "kg",
+      "count": 618
+    }
+  ],
+  "tagVocabulary": [
+    {
+      "value": "bạc",
+      "count": 4147
+    },
+    {
+      "value": "nhẫn",
+      "count": 3478
+    },
+    {
+      "value": "bông tai",
+      "count": 1879
+    },
+    {
+      "value": "bạc trang sức",
+      "count": 1824
+    },
+    {
+      "value": "Chế tác",
+      "count": 1564
+    },
+    {
+      "value": "vàng",
+      "count": 1404
+    },
+    {
+      "value": "lắc",
+      "count": 1269
+    },
+    {
+      "value": "đá moiss",
+      "count": 1262
+    },
+    {
+      "value": "moissanite",
+      "count": 1103
+    },
+    {
+      "value": "s925",
+      "count": 1079
+    },
+    {
+      "value": "check",
+      "count": 1069
+    },
+    {
+      "value": "dây chuyền",
+      "count": 1017
+    },
+    {
+      "value": "Bạc S925",
+      "count": 963
+    },
+    {
+      "value": "lắc tay",
+      "count": 945
+    },
+    {
+      "value": "Vàng",
+      "count": 930
+    },
+    {
+      "value": "Bạc Thái",
+      "count": 855
+    },
+    {
+      "value": "Đá Moissanite",
+      "count": 836
+    },
+    {
+      "value": "Bạc Moiss",
+      "count": 831
+    },
+    {
+      "value": "Nữ",
+      "count": 811
+    },
+    {
+      "value": "Vàng 18K",
+      "count": 809
+    },
+    {
+      "value": "nữ",
+      "count": 765
+    },
+    {
+      "value": "Dây chuyền",
+      "count": 732
+    },
+    {
+      "value": "đính đá",
+      "count": 711
+    },
+    {
+      "value": "chế tác",
+      "count": 647
+    },
+    {
+      "value": "Mặt dây",
+      "count": 607
+    },
+    {
+      "value": "nhẫn bạc",
+      "count": 603
+    },
+    {
+      "value": "Vàng 10K",
+      "count": 579
+    },
+    {
+      "value": "đính Moissanite",
+      "count": 555
+    },
+    {
+      "value": "phật",
+      "count": 536
+    },
+    {
+      "value": "moiss",
+      "count": 518
+    },
+    {
+      "value": "Bạc Nữ",
+      "count": 506
+    },
+    {
+      "value": "bạc thái",
+      "count": 493
+    },
+    {
+      "value": "Vòng",
+      "count": 441
+    },
+    {
+      "value": "Bạc Trang sức",
+      "count": 413
+    },
+    {
+      "value": "Nam",
+      "count": 404
+    },
+    {
+      "value": "charm",
+      "count": 401
+    },
+    {
+      "value": "Mặt Dây",
+      "count": 400
+    },
+    {
+      "value": "đá mois",
+      "count": 385
+    },
+    {
+      "value": "10k",
+      "count": 373
+    },
+    {
+      "value": "Vàng Vàng",
+      "count": 367
+    },
+    {
+      "value": "Vàng 14K",
+      "count": 353
+    },
+    {
+      "value": "vàng trắng",
+      "count": 340
+    },
+    {
+      "value": "túi xách",
+      "count": 339
+    },
+    {
+      "value": "lục tự",
+      "count": 335
+    },
+    {
+      "value": "cỏ 4 lá",
+      "count": 316
+    },
+    {
+      "value": "nam",
+      "count": 296
+    },
+    {
+      "value": "vòng tay",
+      "count": 286
+    },
+    {
+      "value": "vòng",
+      "count": 265
+    },
+    {
+      "value": "Kiềng",
+      "count": 263
+    },
+    {
+      "value": "nhẫn nữ",
+      "count": 260
+    },
+    {
+      "value": "trái tim",
+      "count": 259
+    },
+    {
+      "value": "kiềng",
+      "count": 233
+    },
+    {
+      "value": "Charm",
+      "count": 229
+    },
+    {
+      "value": "Lắc tay",
+      "count": 222
+    },
+    {
+      "value": "nhẫn vàng",
+      "count": 217
+    },
+    {
+      "value": "bạc ta",
+      "count": 213
+    },
+    {
+      "value": "18k",
+      "count": 212
+    },
+    {
+      "value": "14k",
+      "count": 195
+    },
+    {
+      "value": "kim tiền",
+      "count": 192
+    },
+    {
+      "value": "tỳ hưu",
+      "count": 192
+    },
+    {
+      "value": "lắc chân",
+      "count": 178
+    },
+    {
+      "value": "S925",
+      "count": 178
+    },
+    {
+      "value": "màu vàng",
+      "count": 175
+    },
+    {
+      "value": "cartier",
+      "count": 156
+    },
+    {
+      "value": "xi vàng",
+      "count": 148
+    },
+    {
+      "value": "trẻ em",
+      "count": 128
+    },
+    {
+      "value": "liên hoa",
+      "count": 127
+    },
+    {
+      "value": "kiềng tay",
+      "count": 127
+    },
+    {
+      "value": "trẻ con",
+      "count": 124
+    },
+    {
+      "value": "BẠC NAM",
+      "count": 121
+    },
+    {
+      "value": "thương hiệu",
+      "count": 118
+    },
+    {
+      "value": "Dây chuyền bạc nữ",
+      "count": 117
+    },
+    {
+      "value": "mặt dây chuyền",
+      "count": 114
+    },
+    {
+      "value": "hoa sen",
+      "count": 114
+    },
+    {
+      "value": "cartie",
+      "count": 112
+    },
+    {
+      "value": "da bò",
+      "count": 110
+    },
+    {
+      "value": "S999",
+      "count": 107
+    },
+    {
+      "value": "khuyên tai",
+      "count": 106
+    },
+    {
+      "value": "rồng",
+      "count": 102
+    },
+    {
+      "value": "Đá CZ",
+      "count": 101
+    },
+    {
+      "value": "Vàng Hồng",
+      "count": 100
+    },
+    {
+      "value": "thìn",
+      "count": 100
+    },
+    {
+      "value": "kim cương",
+      "count": 97
+    },
+    {
+      "value": "s999",
+      "count": 94
+    },
+    {
+      "value": "phật bản mệnh",
+      "count": 93
+    },
+    {
+      "value": "bồ tát",
+      "count": 77
+    },
+    {
+      "value": "24k",
+      "count": 76
+    },
+    {
+      "value": "đôi",
+      "count": 75
+    },
+    {
+      "value": "đính CZ",
+      "count": 74
+    },
+    {
+      "value": "đá mắt hổ",
+      "count": 74
+    },
+    {
+      "value": "custom",
+      "count": 73
+    },
+    {
+      "value": "khắc tên",
+      "count": 73
+    },
+    {
+      "value": "nhẫn nam",
+      "count": 72
+    },
+    {
+      "value": "Bạc",
+      "count": 72
+    },
+    {
+      "value": "CZ",
+      "count": 71
+    },
+    {
+      "value": "Kiềng tay",
+      "count": 66
+    },
+    {
+      "value": "mắt mèo",
+      "count": 65
+    },
+    {
+      "value": "mois",
+      "count": 61
+    },
+    {
+      "value": "đính đá CZ",
+      "count": 59
+    },
+    {
+      "value": "ví da",
+      "count": 55
+    },
+    {
+      "value": "chữ vạn",
+      "count": 55
+    },
+    {
+      "value": "mẫu",
+      "count": 55
+    },
+    {
+      "value": "da cá sấu",
+      "count": 54
+    },
+    {
+      "value": "kim cương thiên nhiên",
+      "count": 52
+    },
+    {
+      "value": "ví",
+      "count": 50
+    },
+    {
+      "value": "kim cương lab",
+      "count": 49
+    },
+    {
+      "value": "Nhẫn cặp",
+      "count": 48
+    },
+    {
+      "value": "kim cương trắng",
+      "count": 48
+    },
+    {
+      "value": "đá cz",
+      "count": 48
+    },
+    {
+      "value": "titan",
+      "count": 48
+    },
+    {
+      "value": "sao",
+      "count": 48
+    },
+    {
+      "value": "trơn",
+      "count": 46
+    },
+    {
+      "value": "rắn",
+      "count": 42
+    },
+    {
+      "value": "đá sapphire",
+      "count": 41
+    },
+    {
+      "value": "sapphire",
+      "count": 41
+    },
+    {
+      "value": "tỵ",
+      "count": 41
+    },
+    {
+      "value": "tròn",
+      "count": 40
+    },
+    {
+      "value": "Bạch Kim",
+      "count": 39
+    },
+    {
+      "value": "xoay",
+      "count": 39
+    },
+    {
+      "value": "xoắn",
+      "count": 36
+    }
+  ],
+  "samples": [
+    {
+      "id": 85744109,
+      "name": "(THIẾT KẾ) Thắt Lưng Nữ Da Bò BGD-2026.0762",
+      "alias": "thiet-ke-that-lung-nu-da-bo-bgd-2026-0762",
+      "vendor": "Vân Phong Các",
+      "product_type": "Thắt lưng nữ",
+      "meta_title": null,
+      "meta_description": null,
+      "summary": null,
+      "published_on": null,
+      "template_layout": "product",
+      "created_on": "2026-07-16T16:34:13Z",
+      "modified_on": "2026-07-16T17:02:07Z",
+      "content": "<p>- Chất liệu: Da bò epsom<br>- Kích thước:&nbsp;<br>- Màu: Đen</p>",
+      "tags": "da bò, thắt lưng nữ",
+      "status": "active",
+      "type": "normal",
+      "images": [
+        {
+          "id": 125860998,
+          "product_id": 85744109,
+          "position": 1,
+          "variant_ids": [
+            214792078
+          ],
+          "created_on": "2026-07-16T16:34:13Z",
+          "modified_on": "2026-07-16T16:34:13Z",
+          "src": "https://bizweb.dktcdn.net/100/561/898/products/c3a55d51-2102-4c79-9c54-dc98b7b22548.jpg?v=1784219653550",
+          "alt": null,
+          "filename": "c3a55d51-2102-4c79-9c54-dc98b7b22548.jpg",
+          "size": 23358,
+          "width": 554,
+          "height": 554
+        },
+        {
+          "id": 125860999,
+          "product_id": 85744109,
+          "position": 2,
+          "variant_ids": [],
+          "created_on": "2026-07-16T16:34:13Z",
+          "modified_on": "2026-07-16T16:34:13Z",
+          "src": "https://bizweb.dktcdn.net/100/561/898/products/270b6ad6-aa7d-4098-98da-5bc0935bcb5b.jpg?v=1784219653550",
+          "alt": null,
+          "filename": "270b6ad6-aa7d-4098-98da-5bc0935bcb5b.jpg",
+          "size": 53280,
+          "width": 875,
+          "height": 678
+        }
+      ],
+      "image": {
+        "id": 125860998,
+        "product_id": 85744109,
+        "position": 1,
+        "variant_ids": [
+          214792078
+        ],
+        "created_on": "2026-07-16T16:34:13Z",
+        "modified_on": "2026-07-16T16:34:13Z",
+        "src": "https://bizweb.dktcdn.net/100/561/898/products/c3a55d51-2102-4c79-9c54-dc98b7b22548.jpg?v=1784219653550",
+        "alt": null,
+        "filename": "c3a55d51-2102-4c79-9c54-dc98b7b22548.jpg",
+        "size": 23358,
+        "width": 554,
+        "height": 554
+      },
+      "variants": [
+        {
+          "id": 214792078,
+          "inventory_item_id": 214792076,
+          "barcode": "DL9005-00-B-02",
+          "sku": "DL9005-00-B-02",
+          "price": 3600000,
+          "compare_at_price": null,
+          "option1": "Default Title",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "continue",
+          "inventory_quantity": -1,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": "Chiếc",
+          "image_id": 125860998,
+          "position": 1,
+          "created_on": "2026-07-16T16:34:13Z",
+          "modified_on": "2026-07-16T17:02:07Z",
+          "title": "Default Title",
+          "grams": 0,
+          "product_id": 85744109,
+          "type": "normal",
+          "requires_components": false
+        }
+      ],
+      "options": [
+        {
+          "id": 143837533,
+          "name": "Title",
+          "position": 1,
+          "created_on": "2026-07-16T16:34:13Z",
+          "modified_on": "2026-07-16T16:34:13Z",
+          "values": [
+            "Default Title"
+          ]
+        }
+      ],
+      "vat_pit_category_code": null
+    },
+    {
+      "id": 85744005,
+      "name": "Bao Da Tai Nghe Da Bò Vân Epsom Hình Túi Xách",
+      "alias": "bao-da-tai-nghe-da-bo-van-epsom-hinh-tui-xach",
+      "vendor": "Vân Phong Các",
+      "product_type": "Bao da phụ kiện",
+      "meta_title": null,
+      "meta_description": null,
+      "summary": null,
+      "published_on": null,
+      "template_layout": "product",
+      "created_on": "2026-07-16T16:19:54Z",
+      "modified_on": "2026-07-16T16:26:15Z",
+      "content": "<p>- Chất liệu: Da Bò epsom<br>- Màu sắc:&nbsp;<br>- Kích thước: theo mẫu tai nghe</p>",
+      "tags": "da bò, bao da airpod, bao da",
+      "status": "active",
+      "type": "normal",
+      "images": [
+        {
+          "id": 125860892,
+          "product_id": 85744005,
+          "position": 1,
+          "variant_ids": [],
+          "created_on": "2026-07-16T16:19:54Z",
+          "modified_on": "2026-07-16T16:19:54Z",
+          "src": "https://bizweb.dktcdn.net/100/561/898/products/41427dc4-073a-405e-b834-bb96cbe28ea4.jpg?v=1784218794240",
+          "alt": null,
+          "filename": "41427dc4-073a-405e-b834-bb96cbe28ea4.jpg",
+          "size": 127302,
+          "width": 794,
+          "height": 718
+        }
+      ],
+      "image": {
+        "id": 125860892,
+        "product_id": 85744005,
+        "position": 1,
+        "variant_ids": [],
+        "created_on": "2026-07-16T16:19:54Z",
+        "modified_on": "2026-07-16T16:19:54Z",
+        "src": "https://bizweb.dktcdn.net/100/561/898/products/41427dc4-073a-405e-b834-bb96cbe28ea4.jpg?v=1784218794240",
+        "alt": null,
+        "filename": "41427dc4-073a-405e-b834-bb96cbe28ea4.jpg",
+        "size": 127302,
+        "width": 794,
+        "height": 718
+      },
+      "variants": [
+        {
+          "id": 214791919,
+          "inventory_item_id": 214791917,
+          "barcode": "BD003-01-B",
+          "sku": "BD003-01-B-02",
+          "price": 1800000,
+          "compare_at_price": null,
+          "option1": "Đen",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "continue",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": "Chiếc",
+          "image_id": null,
+          "position": 1,
+          "created_on": "2026-07-16T16:19:54Z",
+          "modified_on": "2026-07-16T16:26:14Z",
+          "title": "Đen",
+          "grams": 0,
+          "product_id": 85744005,
+          "type": "normal",
+          "requires_components": false
+        },
+        {
+          "id": 214791920,
+          "inventory_item_id": 214791918,
+          "barcode": null,
+          "sku": "BD003-01-B-20",
+          "price": 1800000,
+          "compare_at_price": null,
+          "option1": "Gold",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "continue",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": "Chiếc",
+          "image_id": null,
+          "position": 2,
+          "created_on": "2026-07-16T16:19:54Z",
+          "modified_on": "2026-07-16T16:26:14Z",
+          "title": "Gold",
+          "grams": 0,
+          "product_id": 85744005,
+          "type": "normal",
+          "requires_components": false
+        },
+        {
+          "id": 214791921,
+          "inventory_item_id": 214791919,
+          "barcode": null,
+          "sku": "BD003-01-B-03",
+          "price": 1800000,
+          "compare_at_price": null,
+          "option1": "Nâu",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "continue",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": "Chiếc",
+          "image_id": null,
+          "position": 3,
+          "created_on": "2026-07-16T16:19:54Z",
+          "modified_on": "2026-07-16T16:26:14Z",
+          "title": "Nâu",
+          "grams": 0,
+          "product_id": 85744005,
+          "type": "normal",
+          "requires_components": false
+        },
+        {
+          "id": 214791922,
+          "inventory_item_id": 214791920,
+          "barcode": null,
+          "sku": "BD003-01-B-27",
+          "price": 1800000,
+          "compare_at_price": null,
+          "option1": "Navy",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "continue",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": "Chiếc",
+          "image_id": null,
+          "position": 4,
+          "created_on": "2026-07-16T16:19:54Z",
+          "modified_on": "2026-07-16T16:26:14Z",
+          "title": "Navy",
+          "grams": 0,
+          "product_id": 85744005,
+          "type": "normal",
+          "requires_components": false
+        },
+        {
+          "id": 214791923,
+          "inventory_item_id": 214791921,
+          "barcode": null,
+          "sku": "BD003-01-B-04",
+          "price": 1800000,
+          "compare_at_price": null,
+          "option1": "Đỏ",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "continue",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": null,
+          "image_id": null,
+          "position": 5,
+          "created_on": "2026-07-16T16:19:54Z",
+          "modified_on": "2026-07-16T16:26:14Z",
+          "title": "Đỏ",
+          "grams": 0,
+          "product_id": 85744005,
+          "type": "normal",
+          "requires_components": false
+        },
+        {
+          "id": 214791924,
+          "inventory_item_id": 214791922,
+          "barcode": null,
+          "sku": "BD003-01-B-11",
+          "price": 1800000,
+          "compare_at_price": null,
+          "option1": "Vàng",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "continue",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": null,
+          "image_id": null,
+          "position": 6,
+          "created_on": "2026-07-16T16:19:54Z",
+          "modified_on": "2026-07-16T16:26:14Z",
+          "title": "Vàng",
+          "grams": 0,
+          "product_id": 85744005,
+          "type": "normal",
+          "requires_components": false
+        },
+        {
+          "id": 214791953,
+          "inventory_item_id": 214791951,
+          "barcode": "BD003-01-B-17",
+          "sku": "BD003-01-B-17",
+          "price": 1800000,
+          "compare_at_price": null,
+          "option1": "Cam Orange",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "deny",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": null,
+          "image_id": null,
+          "position": 7,
+          "created_on": "2026-07-16T16:26:14Z",
+          "modified_on": "2026-07-16T16:26:14Z",
+          "title": "Cam Orange",
+          "grams": 0,
+          "product_id": 85744005,
+          "type": "normal",
+          "requires_components": false
+        }
+      ],
+      "options": [
+        {
+          "id": 143837426,
+          "name": "Màu Sắc",
+          "position": 1,
+          "created_on": "2026-07-16T16:19:54Z",
+          "modified_on": "2026-07-16T16:19:54Z",
+          "values": [
+            "Đen",
+            "Gold",
+            "Nâu",
+            "Navy",
+            "Đỏ",
+            "Vàng",
+            "Cam Orange"
+          ]
+        }
+      ],
+      "vat_pit_category_code": null
+    },
+    {
+      "id": 85743987,
+      "name": "Bao Da Tai Nghe Da Bò Trơn Nappa Hình Túi Xách",
+      "alias": "bao-da-tai-nghe-da-bo-tron-nappa-hinh-tui-xach",
+      "vendor": "Vân Phong Các",
+      "product_type": "Bao chìa khóa ô tô",
+      "meta_title": null,
+      "meta_description": null,
+      "summary": null,
+      "published_on": null,
+      "template_layout": "product",
+      "created_on": "2026-07-16T16:16:06Z",
+      "modified_on": "2026-07-16T16:16:07Z",
+      "content": "<p>- Chất liệu: Da Bò Nappa<br>- Màu sắc:&nbsp;<br>- Kích thước: theo mẫu tai nghe</p>",
+      "tags": "da bò, bao da chìa khóa",
+      "status": "active",
+      "type": "normal",
+      "images": [
+        {
+          "id": 125860874,
+          "product_id": 85743987,
+          "position": 1,
+          "variant_ids": [],
+          "created_on": "2026-07-16T16:16:06Z",
+          "modified_on": "2026-07-16T16:16:06Z",
+          "src": "https://bizweb.dktcdn.net/100/561/898/products/48f5d9e4-4e18-4dcd-89c4-c9024e189bd8.jpg?v=1784218566227",
+          "alt": null,
+          "filename": "48f5d9e4-4e18-4dcd-89c4-c9024e189bd8.jpg",
+          "size": 127302,
+          "width": 794,
+          "height": 718
+        }
+      ],
+      "image": {
+        "id": 125860874,
+        "product_id": 85743987,
+        "position": 1,
+        "variant_ids": [],
+        "created_on": "2026-07-16T16:16:06Z",
+        "modified_on": "2026-07-16T16:16:06Z",
+        "src": "https://bizweb.dktcdn.net/100/561/898/products/48f5d9e4-4e18-4dcd-89c4-c9024e189bd8.jpg?v=1784218566227",
+        "alt": null,
+        "filename": "48f5d9e4-4e18-4dcd-89c4-c9024e189bd8.jpg",
+        "size": 127302,
+        "width": 794,
+        "height": 718
+      },
+      "variants": [
+        {
+          "id": 214791880,
+          "inventory_item_id": 214791878,
+          "barcode": "BD003-00-B",
+          "sku": "BD003-00-B-02",
+          "price": 1500000,
+          "compare_at_price": null,
+          "option1": "Đen",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "continue",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": "Chiếc",
+          "image_id": null,
+          "position": 1,
+          "created_on": "2026-07-16T16:16:06Z",
+          "modified_on": "2026-07-16T16:16:06Z",
+          "title": "Đen",
+          "grams": 0,
+          "product_id": 85743987,
+          "type": "normal",
+          "requires_components": false
+        },
+        {
+          "id": 214791881,
+          "inventory_item_id": 214791879,
+          "barcode": null,
+          "sku": "BD003-00-B-20",
+          "price": 1500000,
+          "compare_at_price": null,
+          "option1": "Gold",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "continue",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": "Chiếc",
+          "image_id": null,
+          "position": 2,
+          "created_on": "2026-07-16T16:16:06Z",
+          "modified_on": "2026-07-16T16:16:06Z",
+          "title": "Gold",
+          "grams": 0,
+          "product_id": 85743987,
+          "type": "normal",
+          "requires_components": false
+        },
+        {
+          "id": 214791882,
+          "inventory_item_id": 214791880,
+          "barcode": null,
+          "sku": "BD003-00-B-33",
+          "price": 1500000,
+          "compare_at_price": null,
+          "option1": "Umber Brown",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "continue",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": null,
+          "image_id": null,
+          "position": 3,
+          "created_on": "2026-07-16T16:16:06Z",
+          "modified_on": "2026-07-16T16:16:06Z",
+          "title": "Umber Brown",
+          "grams": 0,
+          "product_id": 85743987,
+          "type": "normal",
+          "requires_components": false
+        },
+        {
+          "id": 214791883,
+          "inventory_item_id": 214791881,
+          "barcode": null,
+          "sku": "BD003-00-B-04",
+          "price": 1500000,
+          "compare_at_price": null,
+          "option1": "Đỏ",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "deny",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": null,
+          "image_id": null,
+          "position": 4,
+          "created_on": "2026-07-16T16:16:06Z",
+          "modified_on": "2026-07-16T16:16:06Z",
+          "title": "Đỏ",
+          "grams": 0,
+          "product_id": 85743987,
+          "type": "normal",
+          "requires_components": false
+        }
+      ],
+      "options": [
+        {
+          "id": 143837408,
+          "name": "Màu sắc",
+          "position": 1,
+          "created_on": "2026-07-16T16:16:06Z",
+          "modified_on": "2026-07-16T16:16:06Z",
+          "values": [
+            "Đen",
+            "Gold",
+            "Umber Brown",
+            "Đỏ"
+          ]
+        }
+      ],
+      "vat_pit_category_code": null
+    },
+    {
+      "id": 85743953,
+      "name": "Bao Da Tai Nghe Da Bò Trơn Nappa",
+      "alias": "bao-da-tai-nghe-da-bo-tron-nappa",
+      "vendor": "Vân Phong Các",
+      "product_type": "Bao chìa khóa ô tô",
+      "meta_title": null,
+      "meta_description": null,
+      "summary": null,
+      "published_on": null,
+      "template_layout": "product",
+      "created_on": "2026-07-16T16:13:05Z",
+      "modified_on": "2026-07-16T16:13:06Z",
+      "content": "<p>- Chất liệu: Da Bò Nappa<br>- Màu sắc:&nbsp;<br>- Kích thước: theo mẫu tai nghe</p>",
+      "tags": "da bò, bao da chìa khóa",
+      "status": "active",
+      "type": "normal",
+      "images": [
+        {
+          "id": 125860861,
+          "product_id": 85743953,
+          "position": 1,
+          "variant_ids": [],
+          "created_on": "2026-07-16T16:13:05Z",
+          "modified_on": "2026-07-16T16:13:05Z",
+          "src": "https://bizweb.dktcdn.net/100/561/898/products/46ce912f-7e1c-4367-81dc-ffdda15c2202.jpg?v=1784218385670",
+          "alt": null,
+          "filename": "46ce912f-7e1c-4367-81dc-ffdda15c2202.jpg",
+          "size": 139957,
+          "width": 431,
+          "height": 431
+        }
+      ],
+      "image": {
+        "id": 125860861,
+        "product_id": 85743953,
+        "position": 1,
+        "variant_ids": [],
+        "created_on": "2026-07-16T16:13:05Z",
+        "modified_on": "2026-07-16T16:13:05Z",
+        "src": "https://bizweb.dktcdn.net/100/561/898/products/46ce912f-7e1c-4367-81dc-ffdda15c2202.jpg?v=1784218385670",
+        "alt": null,
+        "filename": "46ce912f-7e1c-4367-81dc-ffdda15c2202.jpg",
+        "size": 139957,
+        "width": 431,
+        "height": 431
+      },
+      "variants": [
+        {
+          "id": 214791834,
+          "inventory_item_id": 214791832,
+          "barcode": "BD002-00-B",
+          "sku": "BD002-00-B-02",
+          "price": 780000,
+          "compare_at_price": null,
+          "option1": "Đen",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "continue",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": "Chiếc",
+          "image_id": null,
+          "position": 1,
+          "created_on": "2026-07-16T16:13:05Z",
+          "modified_on": "2026-07-16T16:13:05Z",
+          "title": "Đen",
+          "grams": 0,
+          "product_id": 85743953,
+          "type": "normal",
+          "requires_components": false
+        },
+        {
+          "id": 214791835,
+          "inventory_item_id": 214791833,
+          "barcode": null,
+          "sku": "BD002-00-B-20",
+          "price": 780000,
+          "compare_at_price": null,
+          "option1": "Gold",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "continue",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": "Chiếc",
+          "image_id": null,
+          "position": 2,
+          "created_on": "2026-07-16T16:13:05Z",
+          "modified_on": "2026-07-16T16:13:05Z",
+          "title": "Gold",
+          "grams": 0,
+          "product_id": 85743953,
+          "type": "normal",
+          "requires_components": false
+        },
+        {
+          "id": 214791836,
+          "inventory_item_id": 214791834,
+          "barcode": null,
+          "sku": "BD002-00-B-33",
+          "price": 780000,
+          "compare_at_price": null,
+          "option1": "Umber Brown",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "continue",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": null,
+          "image_id": null,
+          "position": 3,
+          "created_on": "2026-07-16T16:13:05Z",
+          "modified_on": "2026-07-16T16:13:05Z",
+          "title": "Umber Brown",
+          "grams": 0,
+          "product_id": 85743953,
+          "type": "normal",
+          "requires_components": false
+        },
+        {
+          "id": 214791837,
+          "inventory_item_id": 214791835,
+          "barcode": null,
+          "sku": "BD002-00-B-04",
+          "price": 780000,
+          "compare_at_price": null,
+          "option1": "Đỏ",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "deny",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": null,
+          "image_id": null,
+          "position": 4,
+          "created_on": "2026-07-16T16:13:05Z",
+          "modified_on": "2026-07-16T16:13:05Z",
+          "title": "Đỏ",
+          "grams": 0,
+          "product_id": 85743953,
+          "type": "normal",
+          "requires_components": false
+        }
+      ],
+      "options": [
+        {
+          "id": 143837374,
+          "name": "Màu sắc",
+          "position": 1,
+          "created_on": "2026-07-16T16:13:05Z",
+          "modified_on": "2026-07-16T16:13:05Z",
+          "values": [
+            "Đen",
+            "Gold",
+            "Umber Brown",
+            "Đỏ"
+          ]
+        }
+      ],
+      "vat_pit_category_code": null
+    },
+    {
+      "id": 85743932,
+      "name": "Bao Da Tai Nghe Da Bò Vân Epsom",
+      "alias": "bao-da-tai-nghe-da-bo-epsom",
+      "vendor": "Vân Phong Các",
+      "product_type": "Bao chìa khóa ô tô",
+      "meta_title": null,
+      "meta_description": null,
+      "summary": null,
+      "published_on": null,
+      "template_layout": "product",
+      "created_on": "2026-07-16T16:09:18Z",
+      "modified_on": "2026-07-16T16:13:17Z",
+      "content": "<p>- Chất liệu: Da Bò epsom<br>- Màu sắc:&nbsp;<br>- Kích thước: theo mẫu tai nghe</p>",
+      "tags": "da bò, bao da chìa khóa",
+      "status": "active",
+      "type": "normal",
+      "images": [
+        {
+          "id": 125860834,
+          "product_id": 85743932,
+          "position": 1,
+          "variant_ids": [],
+          "created_on": "2026-07-16T16:09:17Z",
+          "modified_on": "2026-07-16T16:09:17Z",
+          "src": "https://bizweb.dktcdn.net/100/561/898/products/1f560044-a44e-4756-a674-e6592e270a78.jpg?v=1784218157980",
+          "alt": null,
+          "filename": "1f560044-a44e-4756-a674-e6592e270a78.jpg",
+          "size": 94510,
+          "width": 469,
+          "height": 269
+        }
+      ],
+      "image": {
+        "id": 125860834,
+        "product_id": 85743932,
+        "position": 1,
+        "variant_ids": [],
+        "created_on": "2026-07-16T16:09:17Z",
+        "modified_on": "2026-07-16T16:09:17Z",
+        "src": "https://bizweb.dktcdn.net/100/561/898/products/1f560044-a44e-4756-a674-e6592e270a78.jpg?v=1784218157980",
+        "alt": null,
+        "filename": "1f560044-a44e-4756-a674-e6592e270a78.jpg",
+        "size": 94510,
+        "width": 469,
+        "height": 269
+      },
+      "variants": [
+        {
+          "id": 214791799,
+          "inventory_item_id": 214791797,
+          "barcode": "BD002-01-B",
+          "sku": "BD002-01-B-02",
+          "price": 960000,
+          "compare_at_price": null,
+          "option1": "Đen",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "continue",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": "Chiếc",
+          "image_id": null,
+          "position": 1,
+          "created_on": "2026-07-16T16:09:18Z",
+          "modified_on": "2026-07-16T16:13:17Z",
+          "title": "Đen",
+          "grams": 0,
+          "product_id": 85743932,
+          "type": "normal",
+          "requires_components": false
+        },
+        {
+          "id": 214791800,
+          "inventory_item_id": 214791798,
+          "barcode": null,
+          "sku": "BD002-01-B-20",
+          "price": 960000,
+          "compare_at_price": null,
+          "option1": "Gold",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "continue",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": "Chiếc",
+          "image_id": null,
+          "position": 2,
+          "created_on": "2026-07-16T16:09:18Z",
+          "modified_on": "2026-07-16T16:13:17Z",
+          "title": "Gold",
+          "grams": 0,
+          "product_id": 85743932,
+          "type": "normal",
+          "requires_components": false
+        },
+        {
+          "id": 214791801,
+          "inventory_item_id": 214791799,
+          "barcode": null,
+          "sku": "BD002-01-B-03",
+          "price": 960000,
+          "compare_at_price": null,
+          "option1": "Nâu",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "continue",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": "Chiếc",
+          "image_id": null,
+          "position": 3,
+          "created_on": "2026-07-16T16:09:18Z",
+          "modified_on": "2026-07-16T16:13:17Z",
+          "title": "Nâu",
+          "grams": 0,
+          "product_id": 85743932,
+          "type": "normal",
+          "requires_components": false
+        },
+        {
+          "id": 214791802,
+          "inventory_item_id": 214791800,
+          "barcode": null,
+          "sku": "BD002-01-B-27",
+          "price": 960000,
+          "compare_at_price": null,
+          "option1": "Navy",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "continue",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": "Chiếc",
+          "image_id": null,
+          "position": 4,
+          "created_on": "2026-07-16T16:09:18Z",
+          "modified_on": "2026-07-16T16:13:17Z",
+          "title": "Navy",
+          "grams": 0,
+          "product_id": 85743932,
+          "type": "normal",
+          "requires_components": false
+        },
+        {
+          "id": 214791803,
+          "inventory_item_id": 214791801,
+          "barcode": null,
+          "sku": "BD002-01-B-04",
+          "price": 960000,
+          "compare_at_price": null,
+          "option1": "Đỏ",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "continue",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": null,
+          "image_id": null,
+          "position": 5,
+          "created_on": "2026-07-16T16:09:18Z",
+          "modified_on": "2026-07-16T16:13:17Z",
+          "title": "Đỏ",
+          "grams": 0,
+          "product_id": 85743932,
+          "type": "normal",
+          "requires_components": false
+        },
+        {
+          "id": 214791804,
+          "inventory_item_id": 214791802,
+          "barcode": null,
+          "sku": "BD002-01-B-11",
+          "price": 960000,
+          "compare_at_price": null,
+          "option1": "Vàng",
+          "option2": null,
+          "option3": null,
+          "taxable": false,
+          "inventory_management": "bizweb",
+          "inventory_policy": "continue",
+          "inventory_quantity": 0,
+          "lot_management": false,
+          "requires_shipping": true,
+          "weight": 0,
+          "weight_unit": "g",
+          "unit": null,
+          "image_id": null,
+          "position": 6,
+          "created_on": "2026-07-16T16:09:18Z",
+          "modified_on": "2026-07-16T16:13:17Z",
+          "title": "Vàng",
+          "grams": 0,
+          "product_id": 85743932,
+          "type": "normal",
+          "requires_components": false
+        }
+      ],
+      "options": [
+        {
+          "id": 143837353,
+          "name": "Màu Sắc",
+          "position": 1,
+          "created_on": "2026-07-16T16:09:18Z",
+          "modified_on": "2026-07-16T16:09:18Z",
+          "values": [
+            "Đen",
+            "Gold",
+            "Nâu",
+            "Navy",
+            "Đỏ",
+            "Vàng"
+          ]
+        }
+      ],
+      "vat_pit_category_code": null
+    }
+  ]
+}

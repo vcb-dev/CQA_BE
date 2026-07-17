@@ -32,6 +32,11 @@ import {
   type InboxMessagePayload,
 } from './cskh-inbox-realtime.service';
 import {
+  inboxRtTraceDone,
+  inboxRtTraceMark,
+  inboxRtTraceStart,
+} from './inbox-realtime-debug.util';
+import {
   capIntentMessages,
   inboxToIntentMessages,
   intentMessagesSignature,
@@ -46,7 +51,7 @@ import { findInboxConversationById,
   isInboxSchemaMigrationError,
   isPrismaPoolTimeout,
 } from './cskh-inbox-conversation.util';
-import { getCskhRunMode, isCskhWorkerProcess } from '../cskh-run-mode';
+import { getCskhRunMode, isCskhApiProcess, isCskhWorkerProcess } from '../cskh-run-mode';
 
 type WebhookMessagingEvent = {
   sender?: { id?: string };
@@ -90,8 +95,17 @@ export class CskhInboxService {
   private readonly allPagesSyncCooldownMs = Number(
     process.env.CSKH_INBOX_ALL_PAGES_SYNC_COOLDOWN_MS || 45_000,
   );
+  /** Redis tắt — quét nhiều page hơn / cooldown ngắn hơn để bù webhook. */
+  private readonly redisOffSyncBatch = Number(process.env.CSKH_INBOX_REDIS_OFF_SYNC_BATCH || 4);
+  private readonly redisOffSyncCooldownMs = Number(
+    process.env.CSKH_INBOX_REDIS_OFF_SYNC_COOLDOWN_MS || 20_000,
+  );
+  private readonly redisOffListSyncCooldownMs = Number(
+    process.env.CSKH_INBOX_REDIS_OFF_LIST_SYNC_COOLDOWN_MS || 25_000,
+  );
   private allPagesSyncCursor = 0;
   private lastAllPagesRotatingSync = 0;
+  private backgroundInboxSyncRunning = false;
   /** Tắt mặc định — tránh quét inbox nền khi mở danh sách (chỉ bật khi CSKH_INBOX_ROTATING_SYNC_ENABLED=true). */
   private readonly rotatingSyncEnabled =
     process.env.CSKH_INBOX_ROTATING_SYNC_ENABLED === 'true';
@@ -122,6 +136,9 @@ export class CskhInboxService {
   private readonly conversationStatsTtlMs = Number(
     process.env.CSKH_CONVERSATION_STATS_TTL_MS || 90_000,
   );
+  /** Giới hạn webhook xử lý inline trên API khi worker chết — tránh treo web. */
+  private inlineWebhookInflight = 0;
+  private readonly maxInlineWebhook = Number(process.env.CSKH_WEBHOOK_INLINE_MAX || 3);
   /** Tối đa thời gian quét 1 kênh — tránh treo vô hạn trên page lớn. */
   private readonly backfillPageTimeoutMs = Number(
     process.env.CSKH_BACKFILL_PAGE_TIMEOUT_MS || 1_200_000,
@@ -451,6 +468,8 @@ export class CskhInboxService {
     const now = Date.now();
     if (now - this.lastActivityMarkAt < 120_000) return;
     this.lastActivityMarkAt = now;
+    // Không Redis → không đánh dấu "inbox hot" (tránh chặn sync bù tin webhook mất).
+    if (!this.redisQueue.isRedisQueueEnabled()) return;
     void this.redisQueue.markInboxActivity(120);
   }
 
@@ -520,7 +539,16 @@ export class CskhInboxService {
   ): void {
     if (!messages.length) return;
     const startPublish = Date.now();
+    const last = messages[messages.length - 1];
     this.logger.log(`[Realtime Publish Start] messagesCount=${messages.length} conversationId=${conversationId}`);
+    const publishTrace = inboxRtTraceStart('publish-realtime', {
+      conversationId,
+      pageId,
+      messageCount: messages.length,
+      messagePreview: last.text?.slice(0, 80),
+      sentAt: last.sentAt?.toISOString?.() ?? String(last.sentAt),
+      hasConversationRow: Boolean(conversation),
+    });
 
     void (async () => {
       const freshConv =
@@ -528,6 +556,7 @@ export class CskhInboxService {
         (await this.prisma.cskhInboxConversation.findUnique({
           where: { id: conversationId },
         }));
+      const dbLookupMs = Date.now() - startPublish;
       const finalTenantId = tenantId || freshConv?.tenantId || undefined;
       const convPayload = freshConv ? this.formatConversationRow(freshConv) : undefined;
 
@@ -545,9 +574,17 @@ export class CskhInboxService {
           : undefined,
         tenantId: finalTenantId,
       });
+      const publishMs = Date.now() - startPublish;
       this.logger.log(
-        `[Realtime Publish Done] conversationId=${conversationId} took ${Date.now() - startPublish}ms`,
+        `[Realtime Publish Done] conversationId=${conversationId} took ${publishMs}ms`,
       );
+      inboxRtTraceDone(publishTrace, {
+        conversationId,
+        dbLookupMs,
+        publishMs,
+        lastMessageAt: convPayload?.lastMessageAt ?? null,
+        tenantId: finalTenantId ?? null,
+      });
 
       if (analyzeIntent && messages.some((m) => m.senderType === 'customer')) {
         void this.redisQueue.enqueueIntent(conversationId, finalTenantId).catch((e) => {
@@ -762,6 +799,9 @@ export class CskhInboxService {
 
   async handleWebhookPayload(payload: unknown) {
     const startWebhook = Date.now();
+    const trace = inboxRtTraceStart('webhook-payload', {
+      redisQueue: this.redisQueue.isRedisQueueEnabled(),
+    });
     const body = payload as {
       object?: string;
       entry?: Array<{
@@ -770,45 +810,56 @@ export class CskhInboxService {
       }>;
     };
     if (body.object !== 'page' || !Array.isArray(body.entry)) return { ok: true };
-    const workerAlive = await this.redisQueue.isAuditWorkerAlive();
+
     let eventCount = 0;
-    let queuedCount = 0;
     let inlineCount = 0;
     for (const entry of body.entry) {
       const pageId = String(entry.id || '');
       if (!pageId) continue;
       for (const event of entry.messaging ?? []) {
         eventCount++;
-        // Worker sống → xếp hàng Redis (không block API). Worker chết → xử lý ngay trên API để SSE realtime không đứt.
-        let queued = false;
-        if (workerAlive) {
-          queued = await this.redisQueue.enqueueWebhookMessaging(
-            pageId,
-            event as unknown as Record<string, unknown>,
-          );
-        }
-        if (queued) {
-          queuedCount++;
-        } else {
-          inlineCount++;
-          void this.ingestMessagingEvent(pageId, event).catch((err) => {
-            this.logger.error(
-              `Failed to ingest webhook messaging event page=${pageId}: ${err.message}`,
-              err.stack,
-            );
-          });
-        }
+        // Luôn lưu DB inline — Redis queue chỉ là tùy chọn, không được chặn luồng chính.
+        this.scheduleWebhookIngestInline(pageId, event);
+        inlineCount++;
       }
     }
     this.logger.log(
-      `[Webhook] ${eventCount} events (queued=${queuedCount}, inline=${inlineCount}, worker=${workerAlive ? 'up' : 'down'}), ${Date.now() - startWebhook}ms`,
+      `[Webhook] ${eventCount} events (inline=${inlineCount}, redis=${this.redisQueue.isRedisQueueEnabled() ? 'on' : 'off'}), ${Date.now() - startWebhook}ms`,
     );
+    inboxRtTraceDone(trace, { eventCount, inlineCount, ackMs: Date.now() - startWebhook });
     return { ok: true };
+  }
+
+  /** Lưu tin webhook vào DB ngay — fallback khi Redis/worker không dùng được. */
+  private scheduleWebhookIngestInline(pageId: string, event: WebhookMessagingEvent): void {
+    if (this.inlineWebhookInflight >= this.maxInlineWebhook) {
+      this.logger.warn(
+        `[Webhook] inline backlog ${this.inlineWebhookInflight}/${this.maxInlineWebhook} — vẫn xử lý (không bỏ event)`,
+      );
+    }
+    this.inlineWebhookInflight++;
+    void this.ingestMessagingEvent(pageId, event)
+      .catch((err) => {
+        this.logger.error(
+          `Failed to ingest webhook messaging event page=${pageId}: ${err.message}`,
+          err.stack,
+        );
+      })
+      .finally(() => {
+        this.inlineWebhookInflight = Math.max(0, this.inlineWebhookInflight - 1);
+      });
   }
 
   async ingestMessagingEvent(pageId: string, event: WebhookMessagingEvent) {
     const startIngest = Date.now();
-    await this.redisQueue.markInboxActivity();
+    // Meta gửi optin (đăng ký nhận thông báo) — không phải tin nhắn, bỏ qua sớm.
+    if ((event as { optin?: unknown }).optin) {
+      this.logger.debug(`[Webhook] optin page=${pageId} — bỏ qua`);
+      return;
+    }
+    if (this.redisQueue.isRedisQueueEnabled()) {
+      await this.redisQueue.markInboxActivity();
+    }
     const senderId = event.sender?.id;
     this.logger.log(`[Webhook Worker Ingest Start] pageId=${pageId} sender=${senderId}`);
     const msg = event.message;
@@ -893,8 +944,18 @@ export class CskhInboxService {
     if (!senderPsid) return;
 
     const isEcho = Boolean(msg.is_echo);
+    const trace = inboxRtTraceStart('webhook-message', {
+      pageId,
+      senderPsid,
+      fbMid: msg.mid ?? null,
+      textPreview: (msg.text ?? '').slice(0, 80),
+      fbTimestamp: event.timestamp ?? null,
+      isEcho,
+      redisQueue: this.redisQueue.isRedisQueueEnabled(),
+    });
 
     const config = await this.getCachedPageConfig(pageId);
+    inboxRtTraceMark(trace, 'page-config-loaded', { pageName: config?.pageName ?? null });
     const pageName = config?.pageName ?? null;
 
     const prelimCustomer = resolveMessengerCustomerPsid(senderPsid, recipientPsid, pageId, {
@@ -941,6 +1002,12 @@ export class CskhInboxService {
         tenantId: config?.tenantId || undefined,
       },
     });
+    inboxRtTraceMark(trace, 'conversation-upserted', {
+      conversationId: conv.id,
+      customerName: conv.customerName,
+      lastMessageAt: conv.lastMessageAt?.toISOString() ?? null,
+      unreadCount: conv.unreadCount,
+    });
 
     // Asynchronously fetch profile for new conversations in the background
     if (!existingConv && !isFromPage && config?.pageAccessToken) {
@@ -971,6 +1038,7 @@ export class CskhInboxService {
           conv.tenantId || undefined,
           conv,
         );
+        inboxRtTraceDone(trace, { conversationId: conv.id, path: 'duplicate-fb-mid' });
         return;
       }
     }
@@ -1093,6 +1161,11 @@ export class CskhInboxService {
       conv.tenantId || undefined,
       conv,
     );
+    inboxRtTraceMark(trace, 'realtime-published', {
+      conversationId: conv.id,
+      messageCount: createdMessages.length,
+      lastMessageAt: conv.lastMessageAt?.toISOString() ?? null,
+    });
 
     if (needsBackgroundMedia && msg.mid && config?.pageAccessToken) {
       void this.resolveWebhookMediaInBackground(
@@ -1106,6 +1179,12 @@ export class CskhInboxService {
       });
     }
 
+    inboxRtTraceDone(trace, {
+      conversationId: conv.id,
+      pageId,
+      senderId,
+      ingestMs: Date.now() - startIngest,
+    });
     this.logger.log(`[Webhook Worker Ingest Done] pageId=${pageId} sender=${senderId} took ${Date.now() - startIngest}ms`);
   }
 
@@ -1370,9 +1449,12 @@ export class CskhInboxService {
     };
 
     if (!isScrollPage && !hasListFilter) {
-      void this.maybeBackfillAdReferralsFromDb(tenantId).catch((e) => {
-        this.logger.warn(`Ad referral backfill failed: ${(e as Error).message}`);
-      });
+      const redisOff = !this.redisQueue.isRedisQueueEnabled();
+      if (!redisOff && !this.backgroundInboxSyncRunning) {
+        void this.maybeBackfillAdReferralsFromDb(tenantId).catch((e) => {
+          this.logger.warn(`Ad referral backfill failed: ${(e as Error).message}`);
+        });
+      }
       void this.maybeTriggerListSync(pageId, tenantId).catch((e) => {
         this.logger.warn(`Background list sync trigger failed: ${(e as Error).message}`);
       });
@@ -1537,7 +1619,10 @@ export class CskhInboxService {
 
   /** Quét DB gắn fromAd cho hội thoại có tin hệ thống "vào từ quảng cáo" (kể cả tiếng Thái). */
   async backfillAdReferralsFromDb(tenantId?: string): Promise<{ updated: number }> {
-    if (await this.redisQueue.isInboxHot()) {
+    if (this.backgroundInboxSyncRunning) {
+      return { updated: 0 };
+    }
+    if (await this.redisQueue.shouldDeferInboxSync()) {
       return { updated: 0 };
     }
     let updated = 0;
@@ -1612,7 +1697,14 @@ export class CskhInboxService {
 
   /** Kích hoạt sync nhẹ từ Graph sau khi trả danh sách — không block request. */
   private async maybeTriggerListSync(pageId?: string, tenantId?: string): Promise<void> {
-    if (!this.rotatingSyncEnabled) return;
+    const redisOff = !this.redisQueue.isRedisQueueEnabled();
+    if (!this.rotatingSyncEnabled && !redisOff) return;
+
+    if (redisOff) {
+      await this.maybeCatchUpSyncWithoutRedis(pageId, tenantId);
+      return;
+    }
+
     if (pageId) {
       const auditRunning = await this.isAuditJobRunning(tenantId);
       const inboxHot = await this.redisQueue.isInboxHot();
@@ -1630,6 +1722,23 @@ export class CskhInboxService {
     await this.maybeRotatingSyncAllPages(tenantId);
   }
 
+  /**
+   * Redis/worker tắt — quét nhẹ vài page từ Graph để bù tin webhook bị mất (Meta không retry mãi).
+   */
+  private async maybeCatchUpSyncWithoutRedis(pageId?: string, tenantId?: string): Promise<void> {
+    if (this.backgroundInboxSyncRunning) return;
+    if (pageId) {
+      const syncKey = `${pageId}:${tenantId ?? ''}`;
+      const lastSync = this.lastListSync.get(syncKey) ?? 0;
+      if (Date.now() - lastSync < this.redisOffListSyncCooldownMs) return;
+      this.lastListSync.set(syncKey, Date.now());
+      this.logger.log(`[catch-up-sync] Redis off — quét nhẹ page ${pageId}`);
+      await this.syncFromGraph(pageId, tenantId, { lightweight: true });
+      return;
+    }
+    await this.maybeRotatingSyncAllPages(tenantId, { forceWithoutRedis: true });
+  }
+
   private async isAuditJobRunning(tenantId?: string): Promise<boolean> {
     const running = await this.prisma.cskhJobRun.findFirst({
       where: {
@@ -1645,12 +1754,18 @@ export class CskhInboxService {
   /**
    * Xem "Tất cả Page": quét luân phiên vài page/lần (~45s) để bắt tin mới mà không quét 87 page cùng lúc.
    */
-  private async maybeRotatingSyncAllPages(tenantId?: string): Promise<void> {
-    if (Date.now() - this.lastAllPagesRotatingSync < this.allPagesSyncCooldownMs) return;
+  private async maybeRotatingSyncAllPages(
+    tenantId?: string,
+    opts?: { forceWithoutRedis?: boolean },
+  ): Promise<void> {
+    const redisOff = opts?.forceWithoutRedis === true || !this.redisQueue.isRedisQueueEnabled();
+    if (this.backgroundInboxSyncRunning) return;
+    const cooldownMs = redisOff ? this.redisOffSyncCooldownMs : this.allPagesSyncCooldownMs;
+    if (Date.now() - this.lastAllPagesRotatingSync < cooldownMs) return;
     if (await this.isAuditJobRunning(tenantId)) return;
-    if (await this.redisQueue.isInboxHot()) return;
-    if (await this.redisQueue.isInboxSyncActive()) return;
-    if ((await this.redisQueue.getWebhookQueueDepth()) > 0) return;
+    if (!redisOff && (await this.redisQueue.isInboxHot())) return;
+    if (!redisOff && (await this.redisQueue.isInboxSyncActive())) return;
+    if (!redisOff && (await this.redisQueue.getWebhookQueueDepth()) > 0) return;
 
     const where: Prisma.FacebookCskhConfigWhereInput = {
       pageAccessToken: { not: '' },
@@ -1664,7 +1779,8 @@ export class CskhInboxService {
     if (!pages.length) return;
 
     this.lastAllPagesRotatingSync = Date.now();
-    const batchSize = Math.min(this.allPagesSyncBatch, pages.length);
+    const batchCap = redisOff ? this.redisOffSyncBatch : this.allPagesSyncBatch;
+    const batchSize = Math.min(Math.max(batchCap, 1), pages.length);
     const batch: typeof pages = [];
     for (let i = 0; i < batchSize; i++) {
       batch.push(pages[(this.allPagesSyncCursor + i) % pages.length]);
@@ -1672,14 +1788,15 @@ export class CskhInboxService {
     this.allPagesSyncCursor = (this.allPagesSyncCursor + batchSize) % pages.length;
 
     this.logger.log(
-      `[rotating-sync] Quét ${batch.length}/${pages.length} page (bắt đầu từ ${batch[0]?.pageName || batch[0]?.pageId})`,
+      `[rotating-sync] Quét ${batch.length}/${pages.length} page (bắt đầu từ ${batch[0]?.pageName || batch[0]?.pageId})${redisOff ? ' [redis-off]' : ''}`,
     );
 
+    this.backgroundInboxSyncRunning = true;
     this.graphCoordinator.beginInboxSync();
     await this.redisQueue.markInboxSyncActive();
     try {
       for (const page of batch) {
-        if (await this.redisQueue.isInboxHot()) {
+        if (!redisOff && (await this.redisQueue.isInboxHot())) {
           this.logger.log('[rotating-sync] Dừng — webhook/inbox ưu tiên');
           break;
         }
@@ -1697,6 +1814,7 @@ export class CskhInboxService {
         }
       }
     } finally {
+      this.backgroundInboxSyncRunning = false;
       this.graphCoordinator.endInboxSync();
       await this.redisQueue.clearInboxSyncActive();
     }
@@ -1864,7 +1982,7 @@ export class CskhInboxService {
     forceRefresh = false,
     limit?: number,
     tenantId?: string,
-    viewerUserId?: number,
+    viewerUserId?: bigint | number,
   ) {
     this.touchUserActivity();
 
@@ -2048,7 +2166,7 @@ export class CskhInboxService {
     tenantId?: string,
     options?: { bypassHotGuard?: boolean },
   ) {
-    if (!options?.bypassHotGuard && (await this.redisQueue.isInboxHot())) {
+    if (!options?.bypassHotGuard && (await this.redisQueue.shouldDeferInboxSync())) {
       return;
     }
     try {
@@ -2181,7 +2299,7 @@ export class CskhInboxService {
     token: string,
     customerPsid?: string,
   ) {
-    if (await this.redisQueue.isInboxHot()) return;
+    if (await this.redisQueue.shouldDeferInboxSync()) return;
     const missing = await this.prisma.cskhInboxMessage.findMany({
       where: {
         conversationId,
@@ -2276,13 +2394,18 @@ export class CskhInboxService {
     }
 
     const result = [...rows];
-    const batchSize = 40;
+    const batchSize = Number(process.env.CSKH_MEDIA_BACKFILL_BATCH || 6);
+    const mediaConcurrency = Number(process.env.CSKH_MEDIA_BACKFILL_CONCURRENCY || 3);
     for (let round = 0; round < 3; round++) {
       const missing = result.filter((r) => this.needsMediaBackfill(r)).slice(0, batchSize);
       if (!missing.length) break;
       let progress = false;
-      await Promise.all(
-        missing.map(async (row) => {
+      let next = 0;
+      const workers = Array.from({ length: Math.min(mediaConcurrency, missing.length) }, async () => {
+        while (true) {
+          const idx = next++;
+          if (idx >= missing.length) return;
+          const row = missing[idx];
           try {
             const resolved = await this.graph.resolveMessageMediaUrl(
               row.fbMessageId!,
@@ -2300,22 +2423,24 @@ export class CskhInboxService {
                 text: newText,
               },
             });
-            const idx = result.findIndex((r) => r.id === row.id);
-            if (idx >= 0) {
-              result[idx] = {
-                ...result[idx],
+            const resultIdx = result.findIndex((r) => r.id === row.id);
+            if (resultIdx >= 0) {
+              result[resultIdx] = {
+                ...result[resultIdx],
                 attachmentUrl: resolved.url,
                 messageType: resolved.messageType ?? row.messageType,
                 text: newText,
               };
             }
-            // Phát sóng SSE cập nhật media thời gian thực cho FE hiển thị hình ảnh ngay khi vừa resolve xong
             this.publishMessageRealtime(pageId, conversationId, [updated]);
           } catch (e) {
-            this.logger.warn(`Failed to resolve media URL for message ${row.id}: ${(e as Error).message}`);
+            this.logger.debug(
+              `backfillMissingMediaUrls ${row.id}: ${(e as Error).message}`,
+            );
           }
-        }),
-      );
+        }
+      });
+      await Promise.all(workers);
       if (!progress) break;
     }
     return result;
@@ -2860,7 +2985,7 @@ export class CskhInboxService {
   }
 
   /** Đánh dấu đã đọc — chỉ khi đã gán nhãn; nếu chưa gán nhãn thì ghi nhận xem và giữ chờ xử lý. */
-  async markAsRead(conversationId: string, tenantId?: string, viewerUserId?: number) {
+  async markAsRead(conversationId: string, tenantId?: string, viewerUserId?: bigint | number) {
     if (viewerUserId) {
       const viewed = await this.inboxLabels.recordConversationView(
         conversationId,
@@ -2925,6 +3050,40 @@ export class CskhInboxService {
     return { markedAsRead: updated.count };
   }
 
+  async markAsUnread(conversationId: string, tenantId?: string) {
+    const conv = await findInboxConversationById(this.prisma, conversationId, tenantId);
+    if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
+
+    const updatedConv = await this.prisma.cskhInboxConversation.update({
+      where: { id: conversationId },
+      data: { unreadCount: 1 },
+    });
+
+    const lastInbound = await this.prisma.cskhInboxMessage.findFirst({
+      where: {
+        conversationId,
+        direction: 'inbound',
+      },
+      orderBy: { sentAt: 'desc' },
+    });
+    if (lastInbound) {
+      await this.prisma.cskhInboxMessage.update({
+        where: { id: lastInbound.id },
+        data: { status: 'delivered' },
+      });
+    }
+
+    this.realtime.publish({
+      type: 'conversation',
+      pageId: conv.pageId,
+      conversationId,
+      conversation: this.formatConversationRow(updatedConv),
+      tenantId: conv.tenantId || undefined,
+    });
+
+    return { markedAsUnread: 1 };
+  }
+
   /**
    * Đồng bộ inbox từ Graph API (khi chưa có webhook hoặc refresh).
    * options.full = true → quét ĐẦY ĐỦ: lấy hết hội thoại và hết tin nhắn mỗi hội thoại
@@ -2935,7 +3094,8 @@ export class CskhInboxService {
     tenantId?: string,
     options?: { full?: boolean; lightweight?: boolean },
   ) {
-    if (await this.redisQueue.isInboxHot()) {
+    const redisOff = !this.redisQueue.isRedisQueueEnabled();
+    if (!redisOff && (await this.redisQueue.isInboxHot())) {
       this.logger.log('[syncFromGraph] Bỏ qua — inbox/webhook đang ưu tiên');
       return { synced: 0, pageCount: 0, okPages: 0, failedPages: [] as Array<{ page: string; error: string }> };
     }
@@ -2960,6 +3120,7 @@ export class CskhInboxService {
   ) {
     const full = options?.full === true;
     const lightweight = options?.lightweight === true;
+    const redisOff = !this.redisQueue.isRedisQueueEnabled();
     const where: any = {};
     if (pageId) where.pageId = pageId;
     if (tenantId) where.tenantId = tenantId;
@@ -2969,7 +3130,7 @@ export class CskhInboxService {
     let okPages = 0;
     const failedPages: Array<{ page: string; error: string }> = [];
     for (const page of pages) {
-      if (await this.redisQueue.isInboxHot()) {
+      if (!redisOff && (await this.redisQueue.isInboxHot())) {
         this.logger.log('[syncFromGraph] Dừng giữa chừng — nhường webhook/inbox');
         break;
       }
@@ -3056,7 +3217,7 @@ export class CskhInboxService {
     tenantId?: string,
   ): Promise<void> {
     if (!conv.fbConversationId || !conv.participantPsid) return;
-    if (await this.redisQueue.isInboxHot()) return;
+    if (await this.redisQueue.shouldDeferInboxSync()) return;
 
     const config = await this.prisma.facebookCskhConfig.findUnique({
       where: { pageId: conv.pageId },
@@ -3288,24 +3449,12 @@ export class CskhInboxService {
     const jobId = this.backfillJobId!;
     const queued = await this.redisQueue.enqueueBackfillJob({ jobId });
     if (!queued) {
-      if (getCskhRunMode() === 'all') {
-        void this.executeBackfillJob(jobId).catch((e) => {
-          this.logger.error(`[backfill] inline job lỗi: ${(e as Error).message}`);
-        });
-      } else {
-        await this.prisma.cskhJobRun.update({
-          where: { id: jobId },
-          data: {
-            status: 'failed',
-            error: 'Không xếp hàng được — kiểm tra REDIS_URL và worker (CSKH_RUN_MODE=worker)',
-            finishedAt: new Date(),
-          },
-        });
-        this.backfillJobId = null;
-        throw new BadRequestException(
-          'Không thể xếp hàng quét đầy đủ (Redis). Kiểm tra REDIS_URL và worker service.',
-        );
-      }
+      this.logger.warn(
+        `[backfill] Redis queue unavailable — chạy inline (job ${jobId.slice(0, 8)})`,
+      );
+      void this.executeBackfillJob(jobId).catch((e) => {
+        this.logger.error(`[backfill] inline job lỗi: ${(e as Error).message}`);
+      });
     }
 
     const jobRow = await this.prisma.cskhJobRun.findUnique({ where: { id: jobId } });
@@ -3334,11 +3483,17 @@ export class CskhInboxService {
   /** Worker gọi — thực thi job quét đầy đủ đã xếp hàng. */
   async executeBackfillJob(jobId: string): Promise<void> {
     const mode = getCskhRunMode();
-    if (!isCskhWorkerProcess() && mode !== 'all') {
+    const redisOff = !this.redisQueue.isRedisQueueEnabled();
+    if (!isCskhWorkerProcess() && mode !== 'all' && !redisOff) {
       this.logger.error(
         `[backfill] executeBackfillJob bị từ chối trên process CSKH_RUN_MODE=${mode} — chỉ chạy trên worker`,
       );
       return;
+    }
+    if (!isCskhWorkerProcess() && mode !== 'all' && redisOff) {
+      this.logger.warn(
+        `[backfill] Chạy inline trên API (redis-off, job ${jobId.slice(0, 8)})`,
+      );
     }
     this.logger.log(`[backfill] WORKER bắt đầu job ${jobId.slice(0, 8)} (CSKH_RUN_MODE=${mode})`);
 
@@ -3538,22 +3693,11 @@ export class CskhInboxService {
     void this.syncPageAdSpendAfterBackfill();
   }
 
-  /** Sau quét đầy đủ — đồng bộ chi tiêu QC hôm qua + hôm nay (VN), chỉ khi không còn quét. */
+  /** Sau quét đầy đủ — mỗi kênh đã sync QC riêng; bỏ qua quét toàn bộ để tránh rate limit Meta. */
   private async syncPageAdSpendAfterBackfill(): Promise<void> {
-    try {
-      const today = this.cskh.vietnamCalendarDate(0);
-      const yesterday = this.cskh.vietnamCalendarDate(-1);
-      this.logger.log(`[backfill] Đồng bộ chi tiêu QC Page/Kênh — ${yesterday}, ${today}`);
-      const result = await this.cskh.syncAllPagesAdSpend(
-        [yesterday, today],
-        this.backfillTenantId,
-      );
-      this.logger.log(
-        `[backfill] Chi tiêu QC xong: ${result.synced} bản ghi / ${result.pages} kênh × ${result.dates.length} ngày`,
-      );
-    } catch (e) {
-      this.logger.warn(`[backfill] Đồng bộ chi tiêu QC lỗi: ${(e as Error).message}`);
-    }
+    this.logger.log(
+      '[backfill] Bỏ qua sync QC toàn bộ — đã đồng bộ từng kênh trong quá trình quét',
+    );
   }
 
   /** Quét 1 page từ Graph. Tách riêng để cô lập lỗi từng page trong syncFromGraph. */
@@ -3572,8 +3716,8 @@ export class CskhInboxService {
       if (options?.shouldStop?.()) return 0;
       if (backfillMode && (await this.isBackfillCancelledNow())) return 0;
       if (backfillMode && (await this.isBackfillPauseRequestedNow())) return 0;
-      if (!backfillMode) {
-        if (await this.redisQueue.isInboxHot()) return 0;
+      if (!backfillMode && (await this.redisQueue.shouldDeferInboxSync())) return 0;
+      if (!backfillMode && this.redisQueue.isRedisQueueEnabled()) {
         if ((await this.redisQueue.getWebhookQueueDepth()) > 2) return 0;
       }
       try {
@@ -3710,25 +3854,26 @@ export class CskhInboxService {
             page.tenantId,
             customerPsid,
           );
-          if (
-            !backfillMode &&
-            added > 0 &&
-            (lastMsgChanged || isNewConv) &&
-            newestNorm
-          ) {
+          if (!backfillMode && added > 0) {
             const latest = await this.prisma.cskhInboxMessage.findFirst({
               where: { conversationId: conv.id },
               orderBy: { sentAt: 'desc' },
             });
             if (latest) {
-              this.publishMessageRealtime(
-                page.pageId,
-                conv.id,
-                [latest],
-                latest.senderType === 'customer',
-                page.tenantId || undefined,
-                conv,
-              );
+              const bumped = await this.prisma.cskhInboxConversation.update({
+                where: { id: conv.id },
+                data: {
+                  lastMessageAt: latest.sentAt,
+                  lastMessage: latest.text || conv.lastMessage,
+                },
+              });
+              this.realtime.publish({
+                type: 'conversation',
+                conversationId: bumped.id,
+                pageId: bumped.pageId,
+                conversation: this.formatConversationRow(bumped),
+                tenantId: bumped.tenantId || undefined,
+              });
             }
           }
           return added;
@@ -3802,7 +3947,7 @@ export class CskhInboxService {
       if (options?.shouldStop?.()) return 'stop';
       if (backfillMode && (await this.isBackfillCancelledNow())) return 'stop';
       if (backfillMode && (await this.isBackfillPauseRequestedNow())) return 'stop';
-      if (!backfillMode && (await this.redisQueue.isInboxHot())) return 'stop';
+      if (!backfillMode && (await this.redisQueue.shouldDeferInboxSync())) return 'stop';
       for (const fbConv of batch) {
         if (options?.shouldStop?.()) return 'stop';
         if (backfillMode && (await this.isBackfillCancelledNow())) return 'stop';
@@ -3852,7 +3997,7 @@ export class CskhInboxService {
     for (const fbConv of convs) {
       if (options?.shouldStop?.()) break;
       if (backfillMode && (await this.isBackfillPauseRequestedNow())) break;
-      if (!backfillMode && (await this.redisQueue.isInboxHot())) {
+      if (!backfillMode && (await this.redisQueue.shouldDeferInboxSync())) {
         this.logger.log(
           `[syncFromGraph] Dừng quét page ${page.pageName || page.pageId} — nhường inbox realtime`,
         );

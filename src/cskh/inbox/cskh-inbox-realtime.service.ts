@@ -1,13 +1,20 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MessageEvent } from '@nestjs/common';
-import Redis from 'ioredis';
+import type Redis from 'ioredis';
 import {
   isRedisCircuitOpen,
   isRedisQuotaError,
   onRedisQuotaTripped,
 } from '../redis/cskh-redis-circuit';
+import {
+  connectCskhRedis,
+  createCskhRedisClient,
+  isRedisDisabledByEnv,
+  resolveRedisConnectionConfig,
+} from '../redis/cskh-redis-client';
 import { Observable, Subject } from 'rxjs';
+import { inboxRtLog, inboxRtWarn } from './inbox-realtime-debug.util';
 
 export type InboxMessagePayload = {
   id: string;
@@ -106,48 +113,67 @@ export class CskhInboxRealtimeService implements OnModuleInit, OnModuleDestroy {
   private publisher: Redis | null = null;
   private subscriber: Redis | null = null;
   private redisEnabled = false;
+  /** Tránh duplicate SSE khi vừa emit local vừa nhận echo từ Redis subscriber. */
+  private readonly recentLocalEmitAt = new Map<string, number>();
 
   constructor(private readonly configService: ConfigService) {}
 
-  onModuleInit() {
-    const cleanValue = (val: unknown) => {
-      if (typeof val !== 'string') return val;
-      return val.trim().replace(/^['"]|['"]$/g, '');
-    };
+  async onModuleInit() {
+    if (isRedisDisabledByEnv()) {
+      this.logger.warn('CSKH_REDIS_ENABLED=false — realtime chỉ local process');
+      return;
+    }
 
-    const redisUrl = cleanValue(this.configService.get<string>('REDIS_URL'));
-    const host = cleanValue(this.configService.get<string>('REDIS_HOST')) || 'localhost';
-    const port = Number(this.configService.get<number>('REDIS_PORT')) || 6379;
-    const password =
-      cleanValue(
-        this.configService.get<string>('REDIS_PASSWORD') ||
-          this.configService.get<string>('REDISPASSWORD'),
-      ) || undefined;
-
+    const cfg = resolveRedisConnectionConfig(this.configService);
     try {
-      if (redisUrl) {
-        this.publisher = new Redis(redisUrl as string);
-        this.subscriber = new Redis(redisUrl as string);
-      } else {
-        const cfg = { host: host as string, port, password: password as string | undefined };
-        this.publisher = new Redis(cfg);
-        this.subscriber = new Redis(cfg);
+      this.publisher = createCskhRedisClient(cfg, {
+        logger: this.logger,
+        label: 'realtime-pub',
+      });
+      this.subscriber = createCskhRedisClient(cfg, {
+        logger: this.logger,
+        label: 'realtime-sub',
+      });
+
+      const pubOk = await connectCskhRedis(this.publisher, {
+        logger: this.logger,
+        label: 'realtime-pub',
+      });
+      const subOk = await connectCskhRedis(this.subscriber, {
+        logger: this.logger,
+        label: 'realtime-sub',
+      });
+
+      if (!pubOk || !subOk) {
+        this.publisher = null;
+        this.subscriber = null;
+        this.logger.warn(
+          'Redis pub/sub unavailable — realtime chỉ local process (Upstash quota hoặc lỗi kết nối)',
+        );
+        return;
       }
 
-      this.subscriber.on('message', (_channel, raw) => {
+      const subscriber = this.subscriber;
+      const publisher = this.publisher;
+      if (!subscriber || !publisher) return;
+
+      subscriber.on('message', (_channel, raw) => {
         try {
           const payload = JSON.parse(raw) as InboxRealtimePayload;
-          this.bus.next({ data: payload });
+          this.emit(payload, 'redis');
         } catch (e) {
           this.logger.warn(`Invalid realtime payload: ${(e as Error).message}`);
         }
       });
 
-      void this.subscriber.subscribe(REALTIME_CHANNEL).then(() => {
-        this.redisEnabled = true;
-        this.logger.log('Inbox realtime Redis pub/sub enabled');
-      });
+      await subscriber.subscribe(REALTIME_CHANNEL);
+      this.redisEnabled = true;
+      this.logger.log('Inbox realtime Redis pub/sub enabled');
+      inboxRtLog('Redis pub/sub ready', { channel: REALTIME_CHANNEL });
     } catch (e) {
+      if (isRedisQuotaError(e)) onRedisQuotaTripped(this.logger);
+      this.publisher = null;
+      this.subscriber = null;
       this.logger.warn(
         `Redis pub/sub unavailable — realtime chỉ local process: ${(e as Error).message}`,
       );
@@ -161,16 +187,85 @@ export class CskhInboxRealtimeService implements OnModuleInit, OnModuleDestroy {
     ]);
   }
 
-  publish(payload: InboxRealtimePayload) {
-    if (this.redisEnabled && this.publisher && !isRedisCircuitOpen()) {
-      void this.publisher.publish(REALTIME_CHANNEL, JSON.stringify(payload)).catch((e) => {
-        if (isRedisQuotaError(e)) onRedisQuotaTripped(this.logger);
-        this.logger.warn(`Realtime Redis publish failed: ${(e as Error).message}`);
-        this.bus.next({ data: payload });
-      });
-      return;
+  private dedupeKey(payload: InboxRealtimePayload): string {
+    const msgId = payload.messages?.[0]?.id;
+    if (msgId) return `msg:${msgId}`;
+    if (payload.conversationId) {
+      return `${payload.type ?? 'event'}:${payload.conversationId}:${payload.conversation?.lastMessageAt ?? ''}`;
     }
+    return `${payload.type ?? 'event'}:${Date.now()}`;
+  }
+
+  private pruneRecentEmitKeys(now: number) {
+    if (this.recentLocalEmitAt.size < 400) return;
+    for (const [key, at] of this.recentLocalEmitAt) {
+      if (now - at > 10_000) this.recentLocalEmitAt.delete(key);
+    }
+  }
+
+  private emit(payload: InboxRealtimePayload, source: 'local' | 'redis') {
+    const key = this.dedupeKey(payload);
+    const now = Date.now();
+    if (source === 'redis') {
+      const localAt = this.recentLocalEmitAt.get(key);
+      if (localAt != null && now - localAt < 5000) {
+        inboxRtLog('emit skip duplicate (redis echo)', {
+          type: payload.type,
+          conversationId: payload.conversationId,
+          dedupeKey: key,
+          echoLagMs: now - localAt,
+        });
+        return;
+      }
+    } else {
+      this.recentLocalEmitAt.set(key, now);
+      this.pruneRecentEmitKeys(now);
+    }
+    const lastMsg = payload.messages?.[payload.messages.length - 1];
+    inboxRtLog(`emit → SSE bus (${source})`, {
+      type: payload.type,
+      conversationId: payload.conversationId,
+      pageId: payload.pageId,
+      tenantId: payload.tenantId ?? null,
+      messagePreview: lastMsg?.text?.slice(0, 80),
+      messageSentAt: lastMsg?.sentAt,
+      lastMessageAt: payload.conversation?.lastMessageAt,
+      redisEnabled: this.redisEnabled,
+    });
     this.bus.next({ data: payload });
+  }
+
+  publish(payload: InboxRealtimePayload) {
+    const publishStartedAt = Date.now();
+    // Luôn push SSE trên process hiện tại — không phụ thuộc 100% Redis subscriber echo.
+    this.emit(payload, 'local');
+    if (this.redisEnabled && this.publisher && !isRedisCircuitOpen()) {
+      void this.publisher
+        .publish(REALTIME_CHANNEL, JSON.stringify(payload))
+        .then((subscriberCount) => {
+          inboxRtLog('Redis publish ok', {
+            type: payload.type,
+            conversationId: payload.conversationId,
+            subscribers: subscriberCount,
+            tookMs: Date.now() - publishStartedAt,
+          });
+        })
+        .catch((e) => {
+          if (isRedisQuotaError(e)) onRedisQuotaTripped(this.logger);
+          inboxRtWarn('Redis publish failed', {
+            type: payload.type,
+            conversationId: payload.conversationId,
+            error: (e as Error).message,
+          });
+        });
+    } else {
+      inboxRtLog('Redis publish skipped', {
+        type: payload.type,
+        conversationId: payload.conversationId,
+        redisEnabled: this.redisEnabled,
+        circuitOpen: isRedisCircuitOpen(),
+      });
+    }
   }
 
   stream(): Observable<MessageEvent> {

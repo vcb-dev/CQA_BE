@@ -5,7 +5,6 @@ import {
   Delete,
   Param,
   Body,
-  ParseIntPipe,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
@@ -15,6 +14,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { UserRole } from './entities/user.entity';
+import { toPublicUser } from './user-role.util';
 
 @ApiTags('users')
 @ApiBearerAuth('JWT-auth')
@@ -23,7 +23,6 @@ import { UserRole } from './entities/user.entity';
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
-  // GET /users
   @Get()
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   async findAll() {
@@ -33,34 +32,30 @@ export class UsersController {
     };
   }
 
-  // GET /users/:id
   @Get(':id')
   @Roles(UserRole.ADMIN)
-  async findOne(@Param('id', ParseIntPipe) id: number) {
+  async findOne(@Param('id') id: string) {
+    const user = await this.usersService.findById(id);
     return {
       success: true,
-      data: await this.usersService.findById(id),
+      data: user ? toPublicUser(user) : null,
     };
   }
 
-  // PATCH /users/:id
   @Patch(':id')
   @Roles(UserRole.ADMIN)
-  async update(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() updateUserDto: UpdateUserDto,
-  ) {
+  async update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
+    const user = await this.usersService.update(id, updateUserDto);
     return {
       success: true,
       message: 'Cập nhật thành công',
-      data: await this.usersService.update(id, updateUserDto),
+      data: toPublicUser(user),
     };
   }
 
-  // DELETE /users/:id
   @Delete(':id')
   @Roles(UserRole.ADMIN)
-  async remove(@Param('id', ParseIntPipe) id: number) {
+  async remove(@Param('id') id: string) {
     await this.usersService.remove(id);
     return {
       success: true,

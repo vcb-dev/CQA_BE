@@ -1,11 +1,18 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import Redis from 'ioredis';
+import type Redis from 'ioredis';
 import {
   isRedisCircuitOpen,
   isRedisQuotaError,
   onRedisQuotaTripped,
 } from './cskh-redis-circuit';
+import {
+  connectCskhRedis,
+  createCskhRedisClient,
+  isRedisClientReady,
+  isRedisDisabledByEnv,
+  resolveRedisConnectionConfig,
+} from './cskh-redis-client';
 import { getCskhRunMode, isCskhApiProcess } from '../cskh-run-mode';
 
 const INBOX_HOT_KEY = 'cskh:inbox:hot';
@@ -34,36 +41,42 @@ export class CskhRedisSignalsService implements OnModuleInit, OnModuleDestroy {
   private auditPauseLocal = new Map<string, number>();
   private pageStatsBustLocal = 0;
 
+  private readonly checkCache = new Map<string, { value: any; expiresAt: number }>();
+
   private remoteSignalsCheckedAt = 0;
   private remoteInboxHot = false;
   private remoteInboxSync = false;
 
+  private async getCachedSignal(key: string, ttlMs = 3000, fetchFn: () => Promise<boolean>): Promise<boolean> {
+    const cached = this.checkCache.get(key);
+    const now = Date.now();
+    if (cached && now < cached.expiresAt) {
+      return cached.value;
+    }
+    const val = await fetchFn();
+    this.checkCache.set(key, { value: val, expiresAt: now + ttlMs });
+    return val;
+  }
+
   constructor(private readonly configService: ConfigService) {}
 
-  onModuleInit() {
-    const cleanValue = (val: unknown) => {
-      if (typeof val !== 'string') return val;
-      return val.trim().replace(/^['"]|['"]$/g, '');
-    };
-
-    const redisUrl = cleanValue(this.configService.get<string>('REDIS_URL'));
-    const host = cleanValue(this.configService.get<string>('REDIS_HOST')) || 'localhost';
-    const port = Number(this.configService.get<number>('REDIS_PORT')) || 6379;
-    const password =
-      cleanValue(
-        this.configService.get<string>('REDIS_PASSWORD') ||
-          this.configService.get<string>('REDISPASSWORD'),
-      ) || undefined;
-
-    if (redisUrl) {
-      this.redis = new Redis(redisUrl as string, { maxRetriesPerRequest: 2 });
-    } else {
-      this.redis = new Redis({
-        host: host as string,
-        port,
-        password: password as string | undefined,
-        maxRetriesPerRequest: 2,
-      });
+  async onModuleInit() {
+    if (isRedisDisabledByEnv()) {
+      this.logger.warn('CSKH_REDIS_ENABLED=false — signals chạy in-memory only');
+      return;
+    }
+    const cfg = resolveRedisConnectionConfig(this.configService);
+    this.redis = createCskhRedisClient(cfg, {
+      logger: this.logger,
+      label: 'redis-signals',
+    });
+    const ok = await connectCskhRedis(this.redis, {
+      logger: this.logger,
+      label: 'redis-signals',
+    });
+    if (!ok) {
+      this.redis = null;
+      this.logger.warn('Redis signals unavailable — dùng fallback in-memory');
     }
   }
 
@@ -72,7 +85,15 @@ export class CskhRedisSignalsService implements OnModuleInit, OnModuleDestroy {
   }
 
   private canUseRedis(): boolean {
-    return !!this.redis && !isRedisCircuitOpen();
+    return isRedisClientReady(this.redis);
+  }
+
+  /**
+   * Redis tắt/hết quota → không dùng hot/sync để chặn quét Graph hay lưu inbox vào DB.
+   * Đây là luồng chính; Redis chỉ là tùy chọn phối hợp worker.
+   */
+  private coordinationEnabled(): boolean {
+    return !isRedisDisabledByEnv() && !isRedisCircuitOpen() && this.canUseRedis();
   }
 
   /** API-only deploy: không cần đọc Redis — NV dùng inbox trên cùng process. */
@@ -101,8 +122,8 @@ export class CskhRedisSignalsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async markInboxActivity(ttlSeconds = 90): Promise<void> {
+    if (!this.coordinationEnabled()) return;
     this.inboxHotUntil = Date.now() + ttlSeconds * 1000;
-    if (!this.canUseRedis()) return;
     const now = Date.now();
     if (now - this.lastInboxHotRedisWrite < 60_000) return;
     this.lastInboxHotRedisWrite = now;
@@ -114,6 +135,7 @@ export class CskhRedisSignalsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async isInboxHot(): Promise<boolean> {
+    if (!this.coordinationEnabled()) return false;
     if (Date.now() < this.inboxHotUntil) return true;
     if (this.isApiMemoryOnly()) return false;
     await this.refreshRemoteSignals();
@@ -121,8 +143,8 @@ export class CskhRedisSignalsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async markInboxSyncActive(ttlSeconds = 120): Promise<void> {
+    if (!this.coordinationEnabled()) return;
     this.inboxSyncUntil = Date.now() + ttlSeconds * 1000;
-    if (!this.canUseRedis()) return;
     const now = Date.now();
     if (now - this.lastInboxSyncRedisWrite < 60_000) return;
     this.lastInboxSyncRedisWrite = now;
@@ -134,6 +156,7 @@ export class CskhRedisSignalsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async isInboxSyncActive(): Promise<boolean> {
+    if (!this.coordinationEnabled()) return false;
     if (Date.now() < this.inboxSyncUntil) return true;
     if (this.isApiMemoryOnly()) return false;
     await this.refreshRemoteSignals();
@@ -152,6 +175,7 @@ export class CskhRedisSignalsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async shouldYieldGraphToInbox(): Promise<boolean> {
+    if (!this.coordinationEnabled()) return false;
     if (Date.now() < this.inboxHotUntil || Date.now() < this.inboxSyncUntil) return true;
     if (this.isApiMemoryOnly()) return false;
     await this.refreshRemoteSignals();
@@ -168,6 +192,7 @@ export class CskhRedisSignalsService implements OnModuleInit, OnModuleDestroy {
 
   async setAuditPauseRequested(jobId: string): Promise<void> {
     this.auditPauseLocal.set(jobId, Date.now() + 86_400_000);
+    this.checkCache.set(`audit-pause:${jobId}`, { value: true, expiresAt: Date.now() + 86_400_000 });
     if (!this.canUseRedis()) return;
     try {
       await this.redis!.set(`${AUDIT_PAUSE_PREFIX}${jobId}`, '1', 'EX', 86_400);
@@ -180,17 +205,26 @@ export class CskhRedisSignalsService implements OnModuleInit, OnModuleDestroy {
     const local = this.auditPauseLocal.get(jobId);
     if (local && local > Date.now()) return true;
     if (local) this.auditPauseLocal.delete(jobId);
-    if (!this.canUseRedis()) return false;
-    try {
-      return !!(await this.redis!.get(`${AUDIT_PAUSE_PREFIX}${jobId}`));
-    } catch (e) {
-      this.handleRedisError(e);
-      return false;
-    }
+
+    const cacheKey = `audit-pause:${jobId}`;
+    return this.getCachedSignal(cacheKey, 3000, async () => {
+      if (!this.canUseRedis()) return false;
+      try {
+        const val = !!(await this.redis!.get(`${AUDIT_PAUSE_PREFIX}${jobId}`));
+        if (val) {
+          this.auditPauseLocal.set(jobId, Date.now() + 86_400_000);
+        }
+        return val;
+      } catch (e) {
+        this.handleRedisError(e);
+        return false;
+      }
+    });
   }
 
   async clearAuditPauseRequested(jobId: string): Promise<void> {
     this.auditPauseLocal.delete(jobId);
+    this.checkCache.delete(`audit-pause:${jobId}`);
     if (!this.canUseRedis()) return;
     try {
       await this.redis!.del(`${AUDIT_PAUSE_PREFIX}${jobId}`);
@@ -200,6 +234,7 @@ export class CskhRedisSignalsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async setBackfillPauseRequested(jobId: string): Promise<void> {
+    this.checkCache.set(`backfill-pause:${jobId}`, { value: true, expiresAt: Date.now() + 86_400_000 });
     if (!this.canUseRedis()) return;
     try {
       await this.redis!.set(`${BACKFILL_PAUSE_PREFIX}${jobId}`, '1', 'EX', 86_400);
@@ -209,16 +244,20 @@ export class CskhRedisSignalsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async isBackfillPauseRequested(jobId: string): Promise<boolean> {
-    if (!this.canUseRedis()) return false;
-    try {
-      return !!(await this.redis!.get(`${BACKFILL_PAUSE_PREFIX}${jobId}`));
-    } catch (e) {
-      this.handleRedisError(e);
-      return false;
-    }
+    const cacheKey = `backfill-pause:${jobId}`;
+    return this.getCachedSignal(cacheKey, 3000, async () => {
+      if (!this.canUseRedis()) return false;
+      try {
+        return !!(await this.redis!.get(`${BACKFILL_PAUSE_PREFIX}${jobId}`));
+      } catch (e) {
+        this.handleRedisError(e);
+        return false;
+      }
+    });
   }
 
   async clearBackfillPauseRequested(jobId: string): Promise<void> {
+    this.checkCache.delete(`backfill-pause:${jobId}`);
     if (!this.canUseRedis()) return;
     try {
       await this.redis!.del(`${BACKFILL_PAUSE_PREFIX}${jobId}`);
@@ -228,6 +267,7 @@ export class CskhRedisSignalsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async setBackfillCancelRequested(jobId: string): Promise<void> {
+    this.checkCache.set(`backfill-cancel:${jobId}`, { value: true, expiresAt: Date.now() + 86_400_000 });
     if (!this.canUseRedis()) return;
     try {
       await this.redis!.set(`${BACKFILL_CANCEL_PREFIX}${jobId}`, '1', 'EX', 86_400);
@@ -237,16 +277,20 @@ export class CskhRedisSignalsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async isBackfillCancelRequested(jobId: string): Promise<boolean> {
-    if (!this.canUseRedis()) return false;
-    try {
-      return !!(await this.redis!.get(`${BACKFILL_CANCEL_PREFIX}${jobId}`));
-    } catch (e) {
-      this.handleRedisError(e);
-      return false;
-    }
+    const cacheKey = `backfill-cancel:${jobId}`;
+    return this.getCachedSignal(cacheKey, 3000, async () => {
+      if (!this.canUseRedis()) return false;
+      try {
+        return !!(await this.redis!.get(`${BACKFILL_CANCEL_PREFIX}${jobId}`));
+      } catch (e) {
+        this.handleRedisError(e);
+        return false;
+      }
+    });
   }
 
   async clearBackfillCancelRequested(jobId: string): Promise<void> {
+    this.checkCache.delete(`backfill-cancel:${jobId}`);
     if (!this.canUseRedis()) return;
     try {
       await this.redis!.del(`${BACKFILL_CANCEL_PREFIX}${jobId}`);
@@ -259,6 +303,8 @@ export class CskhRedisSignalsService implements OnModuleInit, OnModuleDestroy {
   async bumpPageStatsCache(tenantId?: string): Promise<void> {
     const now = Date.now();
     this.pageStatsBustLocal = now;
+    this.checkCache.set(`page-stats-bust:${tenantId ?? '__all__'}`, { value: now, expiresAt: now + 5000 });
+    this.checkCache.set(`page-stats-bust:__all__`, { value: now, expiresAt: now + 5000 });
     if (!this.canUseRedis()) return;
     try {
       const payload = String(now);
@@ -273,6 +319,12 @@ export class CskhRedisSignalsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async getPageStatsCacheBustAt(tenantId?: string): Promise<number> {
+    const cacheKey = `page-stats-bust:${tenantId ?? '__all__'}`;
+    const now = Date.now();
+    const cached = this.checkCache.get(cacheKey);
+    if (cached && now < cached.expiresAt) {
+      return Number(cached.value) || 0;
+    }
     let bust = this.pageStatsBustLocal;
     if (!this.canUseRedis()) return bust;
     try {
@@ -285,6 +337,7 @@ export class CskhRedisSignalsService implements OnModuleInit, OnModuleDestroy {
         const n = v ? Number(v) : 0;
         if (Number.isFinite(n) && n > bust) bust = n;
       }
+      this.checkCache.set(cacheKey, { value: bust, expiresAt: now + 5000 });
     } catch (e) {
       this.handleRedisError(e);
     }

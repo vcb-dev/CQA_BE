@@ -17,10 +17,11 @@ import {
   Sse,
   MessageEvent,
   Header,
+  Logger,
 } from '@nestjs/common';
 import type { Response, Request } from 'express';
 import type { RawBodyRequest } from '@nestjs/common';
-import { merge, interval, map, filter, Observable } from 'rxjs';
+import { merge, interval, map, filter, Observable, tap, finalize } from 'rxjs';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CskhService } from './cskh.service';
 import { CskhInsightService } from './cskh-insight.service';
@@ -30,12 +31,13 @@ import {
   CskhInboxRealtimeService,
   type InboxRealtimePayload,
 } from './inbox/cskh-inbox-realtime.service';
+import { inboxRtLog, inboxRtWarn } from './inbox/inbox-realtime-debug.util';
 import { RedisQueueService } from './redis/redis-queue.service';
-import { getCskhRunMode } from './cskh-run-mode';
 import { verifyFacebookWebhookSignature } from './facebook/facebook-oauth.util';
 import { parseMediaProxyUrlFromRequest } from './facebook/facebook-message.util';
 import { SapoOAuthService } from './sapo/sapo-oauth.service';
 import { SapoProductService } from './sapo/sapo-product.service';
+import { SapoOrderService } from './sapo/sapo-order.service';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtService } from '@nestjs/jwt';
 import { UsersService } from '../users/users.service';
@@ -47,6 +49,8 @@ import type { User } from '@prisma/client';
 @ApiBearerAuth('JWT-auth')
 @Controller('cskh')
 export class CskhController {
+  private readonly logger = new Logger(CskhController.name);
+
   constructor(
     private readonly cskh: CskhService,
     private readonly insights: CskhInsightService,
@@ -56,6 +60,7 @@ export class CskhController {
     private readonly redisQueue: RedisQueueService,
     private readonly sapoOAuth: SapoOAuthService,
     private readonly sapoProducts: SapoProductService,
+    private readonly sapoOrders: SapoOrderService,
     private readonly jwtService: JwtService,
     private readonly usersService: UsersService,
     private readonly configService: ConfigService,
@@ -259,20 +264,101 @@ export class CskhController {
   @Get('sapo/status')
   @UseGuards(JwtAuthGuard)
   async sapoStatus() {
-    const oauthReady = this.sapoOAuth.isOAuthConfigured();
-    const apiReady = this.sapoProducts.isConfigured();
-    let variantCount = 0;
-    if (apiReady) {
-      const catalog = await this.sapoProducts.getCatalog();
-      variantCount = catalog.length;
-    }
+    const catalogSource = this.sapoProducts.catalogSource();
+    const ordersReady = this.sapoOrders.isConfigured();
+    const catalog = await this.sapoProducts.getCatalog();
+    const variantCount = catalog.length;
+
     return {
-      oauthReady,
-      apiReady,
-      redirectUri: oauthReady ? this.sapoOAuth.getRedirectUri() : null,
-      authorizeUrl: oauthReady ? this.sapoOAuth.getOAuthStartUrl() : null,
+      oauthReady: false,
+      apiReady: false,
+      ordersReady,
+      dbCatalogReady: variantCount > 0,
+      catalogSource: catalogSource ?? (variantCount > 0 ? 'db' : null),
+      authMode: null,
+      redirectUri: null,
+      authorizeUrl: null,
+      oauthStartUrl: null,
       variantCount,
+      mode: 'db_only',
     };
+  }
+
+  @Get('sapo/catalog')
+  @UseGuards(JwtAuthGuard)
+  async sapoCatalog() {
+    const items = await this.sapoProducts.getCatalog();
+    return {
+      source: this.sapoProducts.catalogSource(),
+      items: items.map((v) => {
+        const variantTitle =
+          v.variantTitle && !/^default/i.test(v.variantTitle) ? v.variantTitle : '';
+        // Tên sạch = tên sản phẩm; biến thể (size/màu) tách riêng ở variantTitle.
+        const name = variantTitle ? `${v.productTitle} · ${variantTitle}` : v.productTitle;
+        const price = parseFloat(v.price) || 0;
+        return {
+          productId: v.productId,
+          variantId: v.variantId,
+          name,
+          productTitle: v.productTitle,
+          variantTitle,
+          category: v.category,
+          material: v.material,
+          unit: v.unit,
+          price,
+          priceLabel: `${Math.round(price).toLocaleString('vi-VN')}đ`,
+          sku: v.sku,
+          imageUrl: v.imageUrl,
+          inStock: v.inventoryQuantity == null ? true : v.inventoryQuantity > 0,
+          inventoryQuantity: v.inventoryQuantity,
+        };
+      }),
+    };
+  }
+
+  @Post('sapo/catalog/sync')
+  @UseGuards(JwtAuthGuard)
+  async sapoCatalogSync() {
+    return this.sapoProducts.syncCatalogToDb();
+  }
+
+  /** Import sản phẩm từ Sapo API → bảng products / product_variants. */
+  @Post('products/import-from-sapo')
+  @UseGuards(JwtAuthGuard)
+  async importProductsFromSapo() {
+    return this.sapoProducts.syncCatalogToDb();
+  }
+
+  @Post('sapo/orders')
+  @UseGuards(JwtAuthGuard)
+  createSapoOrder(
+    @Body()
+    body: {
+      customerName?: string;
+      phone?: string;
+      address?: string;
+      note?: string;
+      psid?: string;
+      conversationId?: string;
+      lineItems?: Array<{ variantId?: number; quantity?: number }>;
+    },
+  ) {
+    const lineItems = (body.lineItems ?? [])
+      .map((item) => ({
+        variantId: Number(item.variantId),
+        quantity: Number(item.quantity ?? 1),
+      }))
+      .filter((item) => Number.isFinite(item.variantId) && item.variantId > 0);
+
+    return this.sapoOrders.createOrder({
+      customerName: (body.customerName ?? '').trim() || 'Khách Messenger',
+      phone: body.phone,
+      address: body.address,
+      note: body.note,
+      psid: body.psid,
+      conversationId: body.conversationId,
+      lineItems,
+    });
   }
 
   @Get('monitor/latest')
@@ -348,13 +434,10 @@ export class CskhController {
     };
     const queued = await this.redisQueue.enqueueAuditJob({ jobId: job.id, options: auditOptions });
     if (!queued) {
-      if (getCskhRunMode() === 'all') {
-        void this.cskh.runAuditJob(job.id, auditOptions);
-      } else {
-        throw new BadRequestException(
-          'Không thể xếp hàng chấm CSKH (Redis). Kiểm tra REDIS_URL và worker service.',
-        );
-      }
+      this.logger.warn(
+        `[audit] Redis queue unavailable — chạy inline trên API (job ${job.id.slice(0, 8)})`,
+      );
+      void this.cskh.runAuditJob(job.id, auditOptions);
     }
     const workerOnline = await this.redisQueue.isAuditWorkerAlive();
     return {
@@ -623,14 +706,48 @@ export class CskhController {
       map(() => ({ data: { type: 'ping' } }) as MessageEvent),
     );
     const tenantId = user.tenantId || undefined;
+    const userId = user.id.toString();
+    inboxRtLog('SSE client subscribed', {
+      userId,
+      email: user.email,
+      tenantId: tenantId ?? null,
+    });
     const filteredStream = this.inboxRealtime.stream().pipe(
       filter((event) => {
         const payload = event.data as InboxRealtimePayload | undefined;
-        if (!payload?.tenantId || !tenantId) return true;
-        return payload.tenantId === tenantId;
+        if (!payload || payload.type === 'ping') return false;
+        if (!payload.tenantId || !tenantId) return true;
+        if (payload.tenantId === tenantId) return true;
+        inboxRtWarn('SSE event blocked (tenant mismatch)', {
+          userId,
+          userTenantId: tenantId ?? null,
+          eventTenantId: payload.tenantId,
+          type: payload.type,
+          conversationId: payload.conversationId,
+        });
+        return false;
+      }),
+      tap((event) => {
+        const payload = event.data as InboxRealtimePayload;
+        const lastMsg = payload.messages?.[payload.messages.length - 1];
+        const messageLagMs =
+          lastMsg?.sentAt != null ? Date.now() - new Date(lastMsg.sentAt).getTime() : undefined;
+        inboxRtLog('SSE out → browser', {
+          userId,
+          type: payload.type,
+          conversationId: payload.conversationId,
+          messagePreview: lastMsg?.text?.slice(0, 80),
+          messageSentAt: lastMsg?.sentAt,
+          lastMessageAt: payload.conversation?.lastMessageAt,
+          messageLagMs,
+        });
       }),
     );
-    return merge(filteredStream, heartbeat);
+    return merge(filteredStream, heartbeat).pipe(
+      finalize(() => {
+        inboxRtLog('SSE client disconnected', { userId, email: user.email });
+      }),
+    );
   }
 
   @Get('inbox/conversations/:id/messages')
@@ -672,8 +789,13 @@ export class CskhController {
 
   @Get('inbox/conversations/:id/ad-insights')
   @UseGuards(JwtAuthGuard)
-  getInboxAdInsights(@CurrentUser() user: User, @Param('id') id: string) {
-    return this.cskh.getConversationAdInsights(id.trim(), user.tenantId || undefined);
+  getInboxAdInsights(
+    @CurrentUser() user: User,
+    @Param('id') id: string,
+    @Query('refresh') refresh?: string,
+  ) {
+    const bypassCache = refresh === 'true';
+    return this.cskh.getConversationAdInsights(id.trim(), user.tenantId || undefined, bypassCache);
   }
 
   @Post('inbox/conversations/:id/send')
@@ -698,16 +820,33 @@ export class CskhController {
     return this.inbox.markAsRead(id, user.tenantId || undefined, user.id);
   }
 
+  @Post('inbox/conversations/:id/mark-as-unread')
+  @UseGuards(JwtAuthGuard)
+  markInboxAsUnread(@CurrentUser() user: User, @Param('id') id: string) {
+    return this.inbox.markAsUnread(id, user.tenantId || undefined);
+  }
+
   @Post('inbox/sync')
   @UseGuards(JwtAuthGuard)
   syncInbox(
     @CurrentUser() user: User,
     @Body() body: { pageId?: string; full?: boolean },
   ) {
-    return this.inbox.syncFromGraph(body.pageId?.trim(), user.tenantId || undefined, {
-      full: body.full === true,
-      lightweight: body.full !== true,
-    });
+    const pageId = body.pageId?.trim();
+    const tenantId = user.tenantId || undefined;
+    const options = { full: body.full === true, lightweight: body.full !== true };
+
+    // Quét nhiều kênh — chạy nền, không block HTTP (tránh treo web)
+    if (!pageId) {
+      void this.inbox.syncFromGraph(undefined, tenantId, options).catch(() => undefined);
+      return {
+        started: true,
+        syncing: true,
+        message: 'Đang đồng bộ nền — làm mới danh sách sau vài phút',
+      };
+    }
+
+    return this.inbox.syncFromGraph(pageId, tenantId, options);
   }
 
   /** Bắt đầu / tiếp tục "Quét đầy đủ" chạy nền. Tự bỏ qua kênh đã quét nếu có job paused. */

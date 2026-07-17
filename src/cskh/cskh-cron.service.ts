@@ -3,7 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { CskhService } from './cskh.service';
 import { CskhInboxService } from './inbox/cskh-inbox.service';
 import { RedisQueueService } from './redis/redis-queue.service';
-import { getCskhRunMode, isCskhApiProcess } from './cskh-run-mode';
+import { isCskhApiProcess } from './cskh-run-mode';
 
 @Injectable()
 export class CskhCronService {
@@ -37,28 +37,9 @@ export class CskhCronService {
   }
 
   /**
-   * 2:00 AM VN — đồng bộ chi tiêu QC theo Page (hôm qua + hôm nay) vào DB cho màn Page/Kênh.
-   * Tắt: CSKH_PAGE_AD_SYNC_CRON_ENABLED=false
+   * 2:30 AM VN — audit ban đêm (xếp hàng worker, không chờ từng job trên API).
    */
-  @Cron(CronExpression.EVERY_DAY_AT_2AM, { timeZone: 'Asia/Ho_Chi_Minh' })
-  async scheduledPageAdSpendSync() {
-    if (!isCskhApiProcess()) return;
-    if (process.env.CSKH_PAGE_AD_SYNC_CRON_ENABLED === 'false') return;
-    try {
-      const today = this.cskh.vietnamCalendarDate(0);
-      const yesterday = this.cskh.vietnamCalendarDate(-1);
-      this.logger.log(`[cron] Đồng bộ chi tiêu QC Page/Kênh — ${yesterday}, ${today}`);
-      const result = await this.cskh.syncAllPagesAdSpend([yesterday, today]);
-      this.logger.log(
-        `[cron] Chi tiêu QC xong: ${result.synced} bản ghi / ${result.pages} kênh × ${result.dates.length} ngày`,
-      );
-    } catch (e) {
-      this.logger.error(`[cron] Đồng bộ chi tiêu QC Page/Kênh lỗi: ${(e as Error).message}`);
-    }
-  }
-
-  /** 2:00 AM — quét 30 cuộc hội thoại gần nhất / kênh (30 ngày gần nhất). */
-  @Cron(CronExpression.EVERY_DAY_AT_2AM, { timeZone: 'Asia/Ho_Chi_Minh' })
+  @Cron('0 30 2 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async scheduledAudit() {
     if (!isCskhApiProcess()) return;
     if (process.env.CSKH_CRON_ENABLED !== 'true') return;
@@ -79,69 +60,74 @@ export class CskhCronService {
 
       this.logger.log(`Found ${connectedPages.length} connected pages to audit.`);
 
+      let enqueued = 0;
       for (const page of connectedPages) {
-        // Check if there is any other running audit job in the database (which would be a manual job)
         const activeJob = await this.cskh.findRunningJob('audit');
         if (activeJob) {
           this.logger.log(`Detected another running audit job (${activeJob.id}). Aborting nightly cron loop.`);
           break;
         }
 
-        let jobId = '';
         try {
           const job = await this.cskh.createJob('audit', page.tenantId || undefined);
-          jobId = job.id;
-          this.logger.log(
-            `Nightly audit started for page=${page.pageName || page.pageId} job=${job.id}`,
-          );
-
-          await this.redisQueue.enqueueAuditJob({
+          const auditOpts = {
+            auditDateFrom,
+            auditDateTo,
+            pageId: page.pageId,
+            maxConversations,
+            force: true,
+          };
+          const queued = await this.redisQueue.enqueueAuditJob({
             jobId: job.id,
-            options: {
-              auditDateFrom,
-              auditDateTo,
-              pageId: page.pageId,
-              maxConversations,
-              force: true,
-            },
+            options: auditOpts,
           });
-
-          while (true) {
-            const j = await this.cskh.getJob(job.id);
-            if (!j || j.status !== 'running') break;
-            await new Promise((resolve) => setTimeout(resolve, 5000));
+          if (!queued) {
+            this.logger.warn(
+              `[cron] Redis queue off — audit inline job ${job.id.slice(0, 8)} page=${page.pageId}`,
+            );
+            void this.cskh.runAuditJob(job.id, auditOpts);
           }
-
+          enqueued++;
           this.logger.log(
-            `Nightly audit completed for page=${page.pageName || page.pageId} job=${job.id}`,
+            `Nightly audit enqueued for page=${page.pageName || page.pageId} job=${job.id}`,
           );
-
-          // Check if this job was cancelled by user manually
-          const finalJob = await this.cskh.getJob(job.id);
-          if (finalJob && finalJob.status === 'failed' && finalJob.error === 'Đã hủy bởi người dùng') {
-            this.logger.log(`Nightly audit job ${job.id} was cancelled by user. Aborting remaining pages.`);
-            break;
-          }
         } catch (err) {
           this.logger.error(
-            `Failed to audit page ${page.pageId}: ${(err as Error).message}`,
+            `Failed to enqueue audit for page ${page.pageId}: ${(err as Error).message}`,
           );
-          if (jobId) {
-            const finalJob = await this.cskh.getJob(jobId);
-            if (finalJob && finalJob.status === 'failed' && finalJob.error === 'Đã hủy bởi người dùng') {
-              this.logger.log(`Nightly audit job ${jobId} was cancelled by user (caught error). Aborting remaining pages.`);
-              break;
-            }
-          }
         }
 
-        // Nghỉ giữa các kênh để tránh quá tải AI / Meta API
-        await new Promise((resolve) => setTimeout(resolve, 5000));
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
       }
 
-      this.logger.log('Nightly scheduled audit finished successfully.');
+      this.logger.log(`Nightly scheduled audit enqueued ${enqueued} job(s).`);
     } catch (e) {
       this.logger.error(`Scheduled audit failed: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * 4:00 AM VN — đồng bộ chi tiêu QC theo Page (hôm qua + hôm nay).
+   * Tách khỏi 2AM để không tranh backfill/audit. Tắt: CSKH_PAGE_AD_SYNC_CRON_ENABLED=false
+   */
+  @Cron('0 0 4 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  async scheduledPageAdSpendSync() {
+    if (!isCskhApiProcess()) return;
+    if (process.env.CSKH_PAGE_AD_SYNC_CRON_ENABLED === 'false') return;
+    if (await this.redisQueue.shouldDeferInboxSync()) {
+      this.logger.log('[cron] Bỏ qua chi tiêu QC — inbox đang bận');
+      return;
+    }
+    try {
+      const today = this.cskh.vietnamCalendarDate(0);
+      const yesterday = this.cskh.vietnamCalendarDate(-1);
+      this.logger.log(`[cron] Đồng bộ chi tiêu QC Page/Kênh — ${yesterday}, ${today}`);
+      const result = await this.cskh.syncAllPagesAdSpend([yesterday, today]);
+      this.logger.log(
+        `[cron] Chi tiêu QC xong: ${result.synced} bản ghi / ${result.pages} kênh × ${result.dates.length} ngày`,
+      );
+    } catch (e) {
+      this.logger.error(`[cron] Đồng bộ chi tiêu QC Page/Kênh lỗi: ${(e as Error).message}`);
     }
   }
 }

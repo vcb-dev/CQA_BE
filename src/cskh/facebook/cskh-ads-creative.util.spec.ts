@@ -49,5 +49,11 @@ describe('cskh-ads-creative.util', () => {
     it('page_id trực tiếp', () => {
       expect(extractPageIdFromPromotedObject({ page_id: PAGE })).toBe(PAGE);
     });
+
+    it('page_id dạng number (Meta Graph)', () => {
+      expect(extractPageIdFromPromotedObject({ promoted_object: { page_id: Number(PAGE) } })).toBe(
+        PAGE,
+      );
+    });
   });
 });

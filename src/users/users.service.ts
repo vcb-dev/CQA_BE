@@ -3,44 +3,38 @@ import { PrismaService } from '../prisma/prisma.service';
 import { User } from '@prisma/client';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { parseUserId, prismaRolesFromCqaRole, toPublicUser } from './user-role.util';
 
 @Injectable()
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  // ─── Create ──────────────────────────────────────────────────────────────────
   async create(createUserDto: CreateUserDto): Promise<User> {
+    const { fullName, password, phoneNumber, role, ...rest } = createUserDto;
     return this.prisma.user.create({
-      data: createUserDto,
-    });
-  }
-
-  // ─── Find All ─────────────────────────────────────────────────────────────────
-  async findAll(): Promise<Omit<User, 'password'>[]> {
-    return this.prisma.user.findMany({
-      select: {
-        id: true,
-        fullName: true,
-        email: true,
-        role: true,
-        isActive: true,
-        avatarUrl: true,
-        phoneNumber: true,
-        tenantId: true,
-        createdAt: true,
-        updatedAt: true,
+      data: {
+        ...rest,
+        name: fullName,
+        passwordHash: password,
+        phone: phoneNumber,
+        roles: role ? prismaRolesFromCqaRole(role) : ['sales'],
       },
     });
   }
 
-  // ─── Find by ID ───────────────────────────────────────────────────────────────
-  async findById(id: number): Promise<User | null> {
+  async findAll() {
+    const users = await this.prisma.user.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+    return users.map(toPublicUser);
+  }
+
+  async findById(id: string | number | bigint): Promise<User | null> {
     return this.prisma.user.findUnique({
-      where: { id },
+      where: { id: parseUserId(id) },
     });
   }
 
-  // ─── Find by Email ────────────────────────────────────────────────────────────
   async findByEmail(email: string): Promise<User | null> {
     const normalized = email.trim().toLowerCase();
     return this.prisma.user.findFirst({
@@ -48,26 +42,34 @@ export class UsersService {
     });
   }
 
-  // ─── Update ──────────────────────────────────────────────────────────────────
-  async update(id: number, updateUserDto: UpdateUserDto): Promise<User> {
-    const user = await this.findById(id);
+  async update(id: string | number | bigint, updateUserDto: UpdateUserDto): Promise<User> {
+    const userId = parseUserId(id);
+    const user = await this.findById(userId);
     if (!user) {
       throw new NotFoundException(`Không tìm thấy người dùng với id ${id}`);
     }
+
+    const { fullName, password, phoneNumber, role, ...rest } = updateUserDto;
     return this.prisma.user.update({
-      where: { id },
-      data: updateUserDto,
+      where: { id: userId },
+      data: {
+        ...rest,
+        ...(fullName !== undefined ? { name: fullName } : {}),
+        ...(password !== undefined ? { passwordHash: password } : {}),
+        ...(phoneNumber !== undefined ? { phone: phoneNumber } : {}),
+        ...(role !== undefined ? { roles: prismaRolesFromCqaRole(role) } : {}),
+      },
     });
   }
 
-  // ─── Remove ──────────────────────────────────────────────────────────────────
-  async remove(id: number): Promise<void> {
-    const user = await this.findById(id);
+  async remove(id: string | number | bigint): Promise<void> {
+    const userId = parseUserId(id);
+    const user = await this.findById(userId);
     if (!user) {
       throw new NotFoundException(`Không tìm thấy người dùng với id ${id}`);
     }
     await this.prisma.user.delete({
-      where: { id },
+      where: { id: userId },
     });
   }
 }

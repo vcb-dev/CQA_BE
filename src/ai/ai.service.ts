@@ -92,7 +92,7 @@ export class AiService {
     httpsAgent: new https.Agent({ keepAlive: true, maxSockets: 64 }),
   });
   /** Cache userId theo tên NV trong một batch chấm điểm — tránh 1000+ query User. */
-  private auditAgentUserCache = new Map<string, number | null>();
+  private auditAgentUserCache = new Map<string, bigint | null>();
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -103,13 +103,13 @@ export class AiService {
   private async resolveAuditUserId(
     email?: string,
     agentName?: string,
-  ): Promise<number | null> {
+  ): Promise<bigint | null> {
     const key = (email?.trim().toLowerCase() || agentName?.trim().toLowerCase() || '').trim();
     if (!key || key === 'nhân viên') return null;
     if (this.auditAgentUserCache.has(key)) {
       return this.auditAgentUserCache.get(key) ?? null;
     }
-    let user: { id: number } | null = null;
+    let user: { id: bigint } | null = null;
     if (email?.trim()) {
       user = await this.prisma.user.findFirst({
         where: { email: { contains: email.trim(), mode: 'insensitive' } },
@@ -117,7 +117,7 @@ export class AiService {
       });
     } else if (agentName?.trim() && agentName.trim() !== 'Nhân viên') {
       user = await this.prisma.user.findFirst({
-        where: { fullName: { contains: agentName.trim(), mode: 'insensitive' } },
+        where: { name: { contains: agentName.trim(), mode: 'insensitive' } },
         select: { id: true },
       });
     }

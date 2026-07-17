@@ -14,9 +14,9 @@ export class GraphApiCoordinatorService {
   private activeLow = 0;
   private inboxSyncDepth = 0;
 
-  private readonly maxHigh = Number(process.env.CSKH_GRAPH_MAX_HIGH || 4);
+  private readonly maxHigh = Number(process.env.CSKH_GRAPH_MAX_HIGH || 3);
   private readonly maxLow = Number(process.env.CSKH_GRAPH_MAX_LOW || 2);
-  private readonly maxTotal = Number(process.env.CSKH_GRAPH_MAX_TOTAL || 6);
+  private readonly maxTotal = Number(process.env.CSKH_GRAPH_MAX_TOTAL || 5);
 
   get inboxSyncActive(): boolean {
     return this.inboxSyncDepth > 0;

@@ -8,7 +8,10 @@ import { CskhInboxRealtimeService } from './inbox/cskh-inbox-realtime.service';
 import { FacebookGraphService } from './facebook/facebook-graph.service';
 import { FacebookAdsService } from './facebook/facebook-ads.service';
 import { SapoProductService } from './sapo/sapo-product.service';
+import { SapoProductImportService } from './sapo/sapo-product-import.service';
 import { SapoOAuthService } from './sapo/sapo-oauth.service';
+import { SapoCatalogDbService } from './sapo/sapo-catalog-db.service';
+import { SapoOrderService } from './sapo/sapo-order.service';
 import { CskhCronService } from './cskh-cron.service';
 import { GraphApiCoordinatorService } from './facebook/graph-api-coordinator.service';
 import { CskhRedisSignalsService } from './redis/cskh-redis-signals.service';
@@ -31,7 +34,10 @@ import { UsersModule } from '../users/users.module';
     FacebookGraphService,
     FacebookAdsService,
     SapoProductService,
+    SapoCatalogDbService,
+    SapoProductImportService,
     SapoOAuthService,
+    SapoOrderService,
     CskhCronService,
     RedisQueueService,
   ],

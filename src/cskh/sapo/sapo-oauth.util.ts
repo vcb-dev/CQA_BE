@@ -2,6 +2,10 @@ import axios from 'axios';
 
 export const SAPO_DEFAULT_SCOPES = 'read_products,read_inventory';
 
+/** Dùng SAPO_OAUTH_SCOPES khi cần tạo đơn từ inbox. */
+export const SAPO_ORDER_SCOPES =
+  'read_products,read_inventory,read_customers,read_orders,write_orders';
+
 /** vienchibao → vienchibao.mysapo.net */
 export function normalizeSapoStoreHost(store: string): string {
   const raw = store.trim();

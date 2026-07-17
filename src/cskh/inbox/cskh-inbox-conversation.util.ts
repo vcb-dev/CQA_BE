@@ -17,6 +17,16 @@ export function isPrismaPoolTimeout(e: unknown): boolean {
   return /connection pool/i.test(msg) || /Timed out fetching a new connection/i.test(msg);
 }
 
+export function isPrismaStatementTimeout(e: unknown): boolean {
+  const msg = String((e as Error)?.message ?? e ?? '');
+  return /statement timeout/i.test(msg) || /\b57014\b/.test(msg);
+}
+
+/** Pool đầy hoặc query vượt statement_timeout — nên retry / trả 503. */
+export function isPrismaRetryableDbError(e: unknown): boolean {
+  return isPrismaPoolTimeout(e) || isPrismaStatementTimeout(e);
+}
+
 export const CONVERSATION_ACCESS_SELECT_LEGACY = {
   id: true,
   pageId: true,

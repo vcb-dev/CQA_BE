@@ -34,6 +34,7 @@ COPY package*.json ./
 
 # Copy the generated prisma client, pruned node_modules, and compiled dist files
 COPY --from=builder /usr/src/app/prisma ./prisma/
+COPY --from=builder /usr/src/app/scripts ./scripts/
 COPY --from=builder /usr/src/app/node_modules ./node_modules
 COPY --from=builder /usr/src/app/dist ./dist
 
@@ -46,4 +47,4 @@ EXPOSE 3000
 # Auto-migrate trước khi start API (idempotent; Prisma advisory lock nếu nhiều replica)
 # DIRECT_URL optional — fallback DATABASE_URL nếu Railway chỉ set 1 biến
 # Worker: override Start Command = node dist/worker.js (không migrate lại)
-CMD ["sh", "-c", "export DIRECT_URL=\"${DIRECT_URL:-$DATABASE_URL}\" && npx prisma migrate deploy && node dist/main.js"]
+CMD ["sh", "-c", "export DIRECT_URL=\"${DIRECT_URL:-$DATABASE_URL}\" && node scripts/ensure-migration-baseline.js && npx prisma migrate deploy && node dist/main.js"]

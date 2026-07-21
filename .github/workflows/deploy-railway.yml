@@ -70,6 +70,8 @@ jobs:
             ')"
             echo "DIRECT_URL không có secret — dùng bản derive từ DATABASE_URL"
           fi
+          # DB đã có bảng → chỉ đánh dấu migration cũ, không chạy lại SQL
+          node scripts/ensure-migration-baseline.js
           npx prisma migrate deploy
 
   build-and-push:

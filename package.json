@@ -22,7 +22,8 @@
     "postinstall": "prisma generate",
     "seed:user1": "npx ts-node -r tsconfig-paths/register scripts/seed-user1.ts",
     "db:migrate:deploy": "prisma migrate deploy",
-    "db:baseline:shared": "node scripts/baseline-shared-migrations.js"
+    "db:baseline:shared": "node scripts/baseline-shared-migrations.js",
+    "db:baseline:ensure": "node scripts/ensure-migration-baseline.js"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

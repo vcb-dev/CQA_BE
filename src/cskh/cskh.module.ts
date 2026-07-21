@@ -13,6 +13,7 @@ import { SapoOAuthService } from './sapo/sapo-oauth.service';
 import { SapoCatalogDbService } from './sapo/sapo-catalog-db.service';
 import { SapoOrderService } from './sapo/sapo-order.service';
 import { ProductAnalyticsService } from './product-analytics.service';
+import { CustomerAnalyticsService } from './customer-analytics.service';
 import { CskhCronService } from './cskh-cron.service';
 import { GraphApiCoordinatorService } from './facebook/graph-api-coordinator.service';
 import { CskhRedisSignalsService } from './redis/cskh-redis-signals.service';
@@ -40,6 +41,7 @@ import { UsersModule } from '../users/users.module';
     SapoOAuthService,
     SapoOrderService,
     ProductAnalyticsService,
+    CustomerAnalyticsService,
     CskhCronService,
     RedisQueueService,
   ],

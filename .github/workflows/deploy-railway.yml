@@ -25,13 +25,52 @@ env:
   IMAGE: viejhaf/cqa-be:latest
 
 jobs:
+  migrate:
+    name: Prisma migrate deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Validate DB secrets
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ] || [ -z "$DIRECT_URL" ]; then
+            echo "::error::Thiếu GitHub secrets DATABASE_URL và/hoặc DIRECT_URL (cần để migrate trước deploy)"
+            exit 1
+          fi
+          echo "DB secrets OK"
+
+      - name: Migrate deploy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+        run: npx prisma migrate deploy
+
   build-and-push:
     name: Build & Push Docker Hub
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    needs: [migrate]
     if: |
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.skip_docker_push != 'true')
+      always() &&
+      needs.migrate.result == 'success' &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' && github.event.inputs.skip_docker_push != 'true'))
 
     steps:
       - name: Checkout
@@ -61,9 +100,10 @@ jobs:
     name: Redeploy Railway
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [build-and-push]
+    needs: [migrate, build-and-push]
     if: |
       always() &&
+      needs.migrate.result == 'success' &&
       (needs.build-and-push.result == 'success' || needs.build-and-push.result == 'skipped') &&
       (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
 

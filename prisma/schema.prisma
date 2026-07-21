@@ -55,6 +55,9 @@ enum MovementType {
   incoming_po
   incoming_receipt
   incoming_cancel
+  incoming_transfer
+  transfer_reserve
+  transfer_release
 }
 
 enum PoStatus {
@@ -67,17 +70,26 @@ enum PoStatus {
 enum GoodsReceiptStatus {
   chua_nhap
   da_nhap
+  huy
 }
 
 enum PaymentStatus {
   chua_thanh_toan
+  mot_phan
   da_thanh_toan
 }
 
 enum StockTransferStatus {
+  nhap
+  cho_chuyen
   dang_chuyen
   da_nhan
   huy
+}
+
+enum RefundStatus {
+  chua_hoan_tien
+  da_hoan_tien
 }
 
 enum CategoryConditionType {
@@ -128,15 +140,15 @@ model Tenant {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  users       User[]
-  chatAudits  ChatAudit[]
-  configs     FacebookCskhConfig[]
-  sessions    FacebookOAuthSession[]
-  jobs        CskhJobRun[]
-  monitors    CskhMonitorItem[]
-  convs       CskhInboxConversation[]
-  messages    CskhInboxMessage[]
-  inboxLabels CskhInboxLabel[]
+  users        User[]
+  chatAudits   ChatAudit[]
+  configs      FacebookCskhConfig[]
+  sessions     FacebookOAuthSession[]
+  jobs         CskhJobRun[]
+  monitors     CskhMonitorItem[]
+  convs        CskhInboxConversation[]
+  messages     CskhInboxMessage[]
+  inboxLabels  CskhInboxLabel[]
 
   @@map("tenants")
 }
@@ -161,22 +173,24 @@ model User {
   warehouseRoles         UserWarehouseRole[]
   permissionOverrides    UserPermissionOverride[]
   invitations            UserInvitation[]
-  inventoryMoves         InventoryMovement[]         @relation("MovementCreatedBy")
+  inventoryMoves         InventoryMovement[]      @relation("MovementCreatedBy")
   activityLogs           ActivityLog[]
-  assignedSuppliers      Supplier[]                  @relation("SupplierAssignedTo")
-  purchaseOrders         PurchaseOrder[]             @relation("PoCreatedBy")
-  goodsReceipts          GoodsReceipt[]              @relation("ReiCreatedBy")
-  goodsReceiptsAssigned  GoodsReceipt[]              @relation("ReiAssignedTo")
-  stockTransfersCreated  StockTransfer[]             @relation("StnCreatedBy")
-  stockTransfersReceived StockTransfer[]             @relation("StnReceivedBy")
-  purchaseReturns        PurchaseReturn[]            @relation("PvnCreatedBy")
-  ordersCreated          Order[]                     @relation("OrderCreatedBy")
-  ordersAssigned         Order[]                     @relation("OrderAssignedTo")
-  orderReturns           OrderReturn[]               @relation("OrderReturnCreatedBy")
-  draftOrders            DraftOrder[]                @relation("DraftOrderCreatedBy")
-  vouchersCreated        Voucher[]                   @relation("VoucherCreatedBy")
-  conversationsAssigned  Conversation[]              @relation("ConversationAssignedTo")
-  conversationMessages   ConversationMessage[]       @relation("ConversationMessageAuthor")
+  assignedSuppliers      Supplier[]               @relation("SupplierAssignedTo")
+  purchaseOrders         PurchaseOrder[]          @relation("PoCreatedBy")
+  goodsReceipts          GoodsReceipt[]           @relation("ReiCreatedBy")
+  goodsReceiptsAssigned  GoodsReceipt[]           @relation("ReiAssignedTo")
+  stockTransfersCreated  StockTransfer[]          @relation("StnCreatedBy")
+  stockTransfersReceived StockTransfer[]          @relation("StnReceivedBy")
+  purchaseReturns        PurchaseReturn[]         @relation("PvnCreatedBy")
+  ordersCreated          Order[]                  @relation("OrderCreatedBy")
+  ordersAssigned         Order[]                  @relation("OrderAssignedTo")
+  orderReturns           OrderReturn[]            @relation("OrderReturnCreatedBy")
+  draftOrders            DraftOrder[]             @relation("DraftOrderCreatedBy")
+  vouchersCreated        Voucher[]                @relation("VoucherCreatedBy")
+  supplierLedgerEntries  SupplierLedgerEntry[]    @relation("SupplierLedgerCreatedBy")
+  customerLedgerEntries  CustomerLedgerEntry[]    @relation("CustomerLedgerCreatedBy")
+  conversationsAssigned  Conversation[]           @relation("ConversationAssignedTo")
+  conversationMessages   ConversationMessage[]    @relation("ConversationMessageAuthor")
   chatAudits             ChatAudit[]
   inboxLabels            CskhInboxLabel[]
   inboxConvViews         CskhInboxConversationView[]
@@ -438,6 +452,7 @@ model ProductVariant {
   orderReturnItems OrderReturnItem[]
   sapoInboxItems   SapoInboxOrderItem[]
 
+  @@index([productId])
   @@map("product_variants")
 }
 
@@ -450,6 +465,7 @@ model VariantOptionValue {
   option  ProductOption  @relation(fields: [optionId], references: [id], onDelete: Cascade)
 
   @@id([variantId, optionId])
+  @@index([optionId])
   @@map("variant_option_values")
 }
 
@@ -481,6 +497,7 @@ model ProductCategory {
   category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
 
   @@id([productId, categoryId])
+  @@index([categoryId])
   @@map("product_categories")
 }
 
@@ -546,6 +563,7 @@ model InventoryLevel {
 
   // PK (variant_id, warehouse_id) — index T046
   @@id([variantId, warehouseId])
+  @@index([warehouseId])
   @@map("inventory_levels")
 }
 
@@ -630,8 +648,36 @@ model Supplier {
   purchaseOrders  PurchaseOrder[]
   goodsReceipts   GoodsReceipt[]
   purchaseReturns PurchaseReturn[]
+  ledgerEntries   SupplierLedgerEntry[]
 
   @@map("suppliers")
+}
+
+enum SupplierLedgerReferenceType {
+  goods_receipt
+  payment
+  purchase_return
+  refund
+  adjustment
+}
+
+// Sổ công nợ NCC — amount: âm = tăng nợ phải trả NCC, dương = giảm nợ phải trả NCC
+model SupplierLedgerEntry {
+  id               BigInt                      @id @default(autoincrement())
+  supplierId       BigInt                      @map("supplier_id")
+  referenceType    SupplierLedgerReferenceType @map("reference_type")
+  referenceCode    String?                     @map("reference_code")
+  transactionLabel String                      @map("transaction_label")
+  reason           String?
+  amount           Decimal                     @db.Decimal(18, 2)
+  createdById      BigInt                      @map("created_by")
+  createdAt        DateTime                    @default(now()) @map("created_at")
+
+  supplier  Supplier @relation(fields: [supplierId], references: [id])
+  createdBy User     @relation("SupplierLedgerCreatedBy", fields: [createdById], references: [id])
+
+  @@index([supplierId, createdAt])
+  @@map("supplier_ledger_entries")
 }
 
 // --- Đặt hàng nhập & Nhập hàng (US2) ---
@@ -645,17 +691,22 @@ model PurchaseOrder {
   status        PoStatus @default(don_nhap)
   totalQuantity Int      @default(0) @map("total_quantity")
   totalAmount   Decimal  @default(0) @map("total_amount") @db.Decimal(18, 2)
+  depositAmount Decimal  @default(0) @map("deposit_amount") @db.Decimal(18, 2)
   createdById   BigInt   @map("created_by")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
-  supplier      Supplier            @relation(fields: [supplierId], references: [id])
-  branch        Branch              @relation(fields: [branchId], references: [id])
-  warehouse     Warehouse           @relation(fields: [warehouseId], references: [id])
-  createdBy     User                @relation("PoCreatedBy", fields: [createdById], references: [id])
-  items         PurchaseOrderItem[]
-  goodsReceipts GoodsReceipt[]
+  supplier          Supplier            @relation(fields: [supplierId], references: [id])
+  branch            Branch              @relation(fields: [branchId], references: [id])
+  warehouse         Warehouse           @relation(fields: [warehouseId], references: [id])
+  createdBy         User                @relation("PoCreatedBy", fields: [createdById], references: [id])
+  items             PurchaseOrderItem[]
+  goodsReceipts     GoodsReceipt[]
+  goodsReceiptItems GoodsReceiptItem[]
 
+  @@index([supplierId, createdAt])
+  @@index([status, createdAt])
+  @@index([createdAt])
   @@map("purchase_orders")
 }
 
@@ -671,6 +722,7 @@ model PurchaseOrderItem {
   variant       ProductVariant @relation(fields: [variantId], references: [id])
 
   @@unique([purchaseOrderId, variantId])
+  @@index([variantId])
   @@map("purchase_order_items")
 }
 
@@ -683,39 +735,51 @@ model GoodsReceipt {
   status            GoodsReceiptStatus @default(chua_nhap)
   paymentStatus     PaymentStatus      @default(chua_thanh_toan) @map("payment_status")
   amountDue         Decimal            @default(0) @map("amount_due") @db.Decimal(18, 2)
+  paidAmount        Decimal            @default(0) @map("paid_amount") @db.Decimal(18, 2)
   discountAmount    Decimal            @default(0) @map("discount_amount") @db.Decimal(18, 2)
   extraCost         Decimal            @default(0) @map("extra_cost") @db.Decimal(18, 2)
+  depositApplied    Decimal            @default(0) @map("deposit_applied") @db.Decimal(18, 2)
   assignedToId      BigInt?            @map("assigned_to")
   expectedReceiptAt DateTime?          @map("expected_receipt_at")
   invoiceAt         DateTime?          @map("invoice_at")
+  invoiceSymbol     String?            @map("invoice_symbol")
   orderCode         String?            @map("order_code")
   referenceCode     String?            @map("reference_code")
   createdById       BigInt             @map("created_by")
   createdAt         DateTime           @default(now()) @map("created_at")
   receivedAt        DateTime?          @map("received_at")
 
-  supplier      Supplier           @relation(fields: [supplierId], references: [id])
-  warehouse     Warehouse          @relation(fields: [warehouseId], references: [id])
-  purchaseOrder PurchaseOrder?     @relation(fields: [purchaseOrderId], references: [id])
-  createdBy     User               @relation("ReiCreatedBy", fields: [createdById], references: [id])
-  assignedTo    User?              @relation("ReiAssignedTo", fields: [assignedToId], references: [id])
-  items         GoodsReceiptItem[]
+  supplier        Supplier           @relation(fields: [supplierId], references: [id])
+  warehouse       Warehouse          @relation(fields: [warehouseId], references: [id])
+  purchaseOrder   PurchaseOrder?     @relation(fields: [purchaseOrderId], references: [id])
+  createdBy       User               @relation("ReiCreatedBy", fields: [createdById], references: [id])
+  assignedTo      User?              @relation("ReiAssignedTo", fields: [assignedToId], references: [id])
+  items           GoodsReceiptItem[]
+  purchaseReturns PurchaseReturn[]
 
+  @@index([supplierId, createdAt])
+  @@index([status, createdAt])
+  @@index([createdAt])
+  @@index([purchaseOrderId])
   @@map("goods_receipts")
 }
 
 model GoodsReceiptItem {
-  id             BigInt  @id @default(autoincrement())
-  goodsReceiptId BigInt  @map("goods_receipt_id")
-  variantId      BigInt  @map("variant_id")
-  lotId          BigInt  @map("lot_id")
-  quantity       Int
-  unitPrice      Decimal @map("unit_price") @db.Decimal(18, 2)
+  id              BigInt  @id @default(autoincrement())
+  goodsReceiptId  BigInt  @map("goods_receipt_id")
+  variantId       BigInt  @map("variant_id")
+  purchaseOrderId BigInt? @map("purchase_order_id")
+  lotId           BigInt? @map("lot_id")
+  quantity        Int
+  unitPrice       Decimal @map("unit_price") @db.Decimal(18, 2)
 
-  goodsReceipt GoodsReceipt   @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
-  variant      ProductVariant @relation(fields: [variantId], references: [id])
-  lot          Lot            @relation(fields: [lotId], references: [id])
+  goodsReceipt  GoodsReceipt   @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
+  variant       ProductVariant @relation(fields: [variantId], references: [id])
+  purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  lot           Lot?           @relation(fields: [lotId], references: [id])
 
+  @@index([goodsReceiptId])
+  @@index([variantId])
   @@map("goods_receipt_items")
 }
 
@@ -726,11 +790,12 @@ model StockTransfer {
   code            String              @unique
   fromWarehouseId BigInt              @map("from_warehouse_id")
   toWarehouseId   BigInt              @map("to_warehouse_id")
-  status          StockTransferStatus @default(dang_chuyen)
+  status          StockTransferStatus @default(nhap)
   note            String?
   totalQuantity   Int                 @default(0) @map("total_quantity")
   createdById     BigInt              @map("created_by")
   createdAt       DateTime            @default(now()) @map("created_at")
+  shippedAt       DateTime?           @map("shipped_at")
   receivedAt      DateTime?           @map("received_at")
   receivedById    BigInt?             @map("received_by")
 
@@ -740,40 +805,53 @@ model StockTransfer {
   receivedBy    User?               @relation("StnReceivedBy", fields: [receivedById], references: [id])
   items         StockTransferItem[]
 
+  @@index([fromWarehouseId])
+  @@index([toWarehouseId])
+  @@index([createdAt])
   @@map("stock_transfers")
 }
 
 model StockTransferItem {
-  id              BigInt @id @default(autoincrement())
-  stockTransferId BigInt @map("stock_transfer_id")
-  variantId       BigInt @map("variant_id")
-  lotId           BigInt @map("lot_id")
+  id              BigInt  @id @default(autoincrement())
+  stockTransferId BigInt  @map("stock_transfer_id")
+  variantId       BigInt  @map("variant_id")
+  lotId           BigInt? @map("lot_id")
   quantity        Int
 
   stockTransfer StockTransfer  @relation(fields: [stockTransferId], references: [id], onDelete: Cascade)
   variant       ProductVariant @relation(fields: [variantId], references: [id])
-  lot           Lot            @relation(fields: [lotId], references: [id])
+  lot           Lot?           @relation(fields: [lotId], references: [id])
 
+  @@index([stockTransferId])
+  @@index([variantId])
   @@map("stock_transfer_items")
 }
 
 // --- Trả hàng nhập (US4) ---
 
 model PurchaseReturn {
-  id            BigInt   @id @default(autoincrement())
-  code          String   @unique
-  supplierId    BigInt   @map("supplier_id")
-  warehouseId   BigInt   @map("warehouse_id")
-  totalQuantity Int      @default(0) @map("total_quantity")
-  totalAmount   Decimal  @default(0) @map("total_amount") @db.Decimal(18, 2)
-  createdById   BigInt   @map("created_by")
-  createdAt     DateTime @default(now()) @map("created_at")
+  id             BigInt       @id @default(autoincrement())
+  code           String       @unique
+  supplierId     BigInt       @map("supplier_id")
+  warehouseId    BigInt       @map("warehouse_id")
+  // Đơn nhập hàng gốc — có giá trị khi tạo phiếu trả "theo đơn", null khi trả tự do
+  goodsReceiptId BigInt?      @map("goods_receipt_id")
+  totalQuantity  Int          @default(0) @map("total_quantity")
+  totalAmount    Decimal      @default(0) @map("total_amount") @db.Decimal(18, 2)
+  refundStatus   RefundStatus @default(chua_hoan_tien) @map("refund_status")
+  refundedAt     DateTime?    @map("refunded_at")
+  createdById    BigInt       @map("created_by")
+  createdAt      DateTime     @default(now()) @map("created_at")
 
-  supplier  Supplier             @relation(fields: [supplierId], references: [id])
-  warehouse Warehouse            @relation(fields: [warehouseId], references: [id])
-  createdBy User                 @relation("PvnCreatedBy", fields: [createdById], references: [id])
-  items     PurchaseReturnItem[]
+  supplier     Supplier             @relation(fields: [supplierId], references: [id])
+  warehouse    Warehouse            @relation(fields: [warehouseId], references: [id])
+  goodsReceipt GoodsReceipt?        @relation(fields: [goodsReceiptId], references: [id])
+  createdBy    User                 @relation("PvnCreatedBy", fields: [createdById], references: [id])
+  items        PurchaseReturnItem[]
 
+  @@index([supplierId, createdAt])
+  @@index([goodsReceiptId])
+  @@index([createdAt])
   @@map("purchase_returns")
 }
 
@@ -781,14 +859,16 @@ model PurchaseReturnItem {
   id               BigInt  @id @default(autoincrement())
   purchaseReturnId BigInt  @map("purchase_return_id")
   variantId        BigInt  @map("variant_id")
-  lotId            BigInt  @map("lot_id")
+  lotId            BigInt? @map("lot_id")
   quantity         Int
   unitPrice        Decimal @map("unit_price") @db.Decimal(18, 2)
 
   purchaseReturn PurchaseReturn @relation(fields: [purchaseReturnId], references: [id], onDelete: Cascade)
   variant        ProductVariant @relation(fields: [variantId], references: [id])
-  lot            Lot            @relation(fields: [lotId], references: [id])
+  lot            Lot?           @relation(fields: [lotId], references: [id])
 
+  @@index([purchaseReturnId])
+  @@index([variantId])
   @@map("purchase_return_items")
 }
 
@@ -808,34 +888,64 @@ model Customer {
   orders        Order[]
   draftOrders   DraftOrder[]
   conversations Conversation[]
+  ledgerEntries CustomerLedgerEntry[]
 
   @@index([phone])
   @@map("customers")
 }
 
+enum CustomerLedgerReferenceType {
+  order
+  payment
+  order_return
+  refund
+  adjustment
+}
+
+// Sổ công nợ KH — amount: dương = tăng nợ phải thu (khách nợ thêm), âm = giảm nợ phải thu
+model CustomerLedgerEntry {
+  id               BigInt                      @id @default(autoincrement())
+  customerId       BigInt                      @map("customer_id")
+  referenceType    CustomerLedgerReferenceType @map("reference_type")
+  referenceCode    String?                     @map("reference_code")
+  transactionLabel String                      @map("transaction_label")
+  reason           String?
+  amount           Decimal                     @db.Decimal(18, 2)
+  createdById      BigInt                      @map("created_by")
+  createdAt        DateTime                    @default(now()) @map("created_at")
+
+  customer  Customer @relation(fields: [customerId], references: [id])
+  createdBy User     @relation("CustomerLedgerCreatedBy", fields: [createdById], references: [id])
+
+  @@index([customerId, createdAt])
+  @@map("customer_ledger_entries")
+}
+
 model Order {
-  id                 BigInt      @id @default(autoincrement())
-  code               String      @unique
-  customerId         BigInt?     @map("customer_id")
-  branchId           BigInt      @map("branch_id")
-  source             OrderSource @default(other)
-  status             OrderStatus @default(ordered)
-  assignedToId       BigInt?     @map("assigned_to")
-  createdById        BigInt      @map("created_by")
+  id                 BigInt        @id @default(autoincrement())
+  code               String        @unique
+  customerId         BigInt?       @map("customer_id")
+  branchId           BigInt        @map("branch_id")
+  source             OrderSource   @default(other)
+  status             OrderStatus   @default(ordered)
+  assignedToId       BigInt?       @map("assigned_to")
+  createdById        BigInt        @map("created_by")
   email              String?
   phone              String?
-  subtotal           Decimal     @default(0) @db.Decimal(18, 2)
-  discountTotal      Decimal     @default(0) @map("discount_total") @db.Decimal(18, 2)
-  taxTotal           Decimal     @default(0) @map("tax_total") @db.Decimal(18, 2)
-  shippingFee        Decimal     @default(0) @map("shipping_fee") @db.Decimal(18, 2)
-  totalAmount        Decimal     @default(0) @map("total_amount") @db.Decimal(18, 2)
-  totalQuantity      Int         @default(0) @map("total_quantity")
-  note               String?     @db.Text
-  tags               String[]    @default([])
-  orderedAt          DateTime    @default(now()) @map("ordered_at")
-  expectedDeliveryAt DateTime?   @map("expected_delivery_at")
-  createdAt          DateTime    @default(now()) @map("created_at")
-  updatedAt          DateTime    @updatedAt @map("updated_at")
+  subtotal           Decimal       @default(0) @db.Decimal(18, 2)
+  discountTotal      Decimal       @default(0) @map("discount_total") @db.Decimal(18, 2)
+  taxTotal           Decimal       @default(0) @map("tax_total") @db.Decimal(18, 2)
+  shippingFee        Decimal       @default(0) @map("shipping_fee") @db.Decimal(18, 2)
+  totalAmount        Decimal       @default(0) @map("total_amount") @db.Decimal(18, 2)
+  totalQuantity      Int           @default(0) @map("total_quantity")
+  paymentStatus      PaymentStatus @default(chua_thanh_toan) @map("payment_status")
+  paidAmount         Decimal       @default(0) @map("paid_amount") @db.Decimal(18, 2)
+  note               String?       @db.Text
+  tags               String[]      @default([])
+  orderedAt          DateTime      @default(now()) @map("ordered_at")
+  expectedDeliveryAt DateTime?     @map("expected_delivery_at")
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
 
   customer   Customer?     @relation(fields: [customerId], references: [id])
   branch     Branch        @relation(fields: [branchId], references: [id])
@@ -846,6 +956,9 @@ model Order {
   fromDraft  DraftOrder?   @relation("DraftConverted")
 
   @@index([branchId, status, orderedAt])
+  @@index([orderedAt])
+  @@index([customerId])
+  @@index([assignedToId])
   @@map("orders")
 }
 
@@ -865,6 +978,9 @@ model OrderItem {
   variant   ProductVariant @relation(fields: [variantId], references: [id])
   warehouse Warehouse      @relation(fields: [warehouseId], references: [id])
 
+  @@index([orderId])
+  @@index([variantId])
+  @@index([warehouseId])
   @@map("order_items")
 }
 
@@ -895,6 +1011,8 @@ model DraftOrder {
   convertedOrder Order?           @relation("DraftConverted", fields: [convertedOrderId], references: [id])
   items          DraftOrderItem[]
 
+  @@index([status, createdAt])
+  @@index([customerId])
   @@map("draft_orders")
 }
 
@@ -913,6 +1031,9 @@ model DraftOrderItem {
   variant    ProductVariant @relation(fields: [variantId], references: [id])
   warehouse  Warehouse      @relation(fields: [warehouseId], references: [id])
 
+  @@index([draftOrderId])
+  @@index([variantId])
+  @@index([warehouseId])
   @@map("draft_order_items")
 }
 
@@ -930,6 +1051,8 @@ model OrderReturn {
   createdBy User              @relation("OrderReturnCreatedBy", fields: [createdById], references: [id])
   items     OrderReturnItem[]
 
+  @@index([orderId])
+  @@index([createdAt])
   @@map("order_returns")
 }
 
@@ -948,6 +1071,9 @@ model OrderReturnItem {
   variant     ProductVariant @relation(fields: [variantId], references: [id])
   warehouse   Warehouse      @relation(fields: [warehouseId], references: [id])
 
+  @@index([orderReturnId])
+  @@index([variantId])
+  @@index([warehouseId])
   @@map("order_return_items")
 }
 
@@ -1111,7 +1237,7 @@ model CskhInboxConversation {
   adTitle            String?                      @map("ad_title") @db.VarChar
   referralSource     String?                      @map("referral_source") @db.VarChar
   referralAt         DateTime?                    @map("referral_at") @db.Timestamptz(6)
-  /** Ngôn ngữ khách (ISO 639-1) — dùng khi NV bật tự dịch khi gửi. Persist ở BE. */
+  // Ngôn ngữ khách (ISO 639-1) — dùng khi NV bật tự dịch khi gửi. Persist ở BE.
   customerLang       String?                      @map("customer_lang") @db.VarChar(16)
   customerLangLabel  String?                      @map("customer_lang_label") @db.VarChar(64)
   tenantId           String?                      @map("tenant_id") @db.Uuid
@@ -1135,13 +1261,13 @@ model CskhInboxMessage {
   fbMessageId    String?               @unique @map("fb_message_id") @db.VarChar
   direction      String
   senderType     String                @map("sender_type")
-  /** Nội dung gửi/nhận trên Facebook (ngôn ngữ khách nếu đã dịch outbound). */
+  // Nội dung gửi/nhận trên Facebook (ngôn ngữ khách nếu đã dịch outbound).
   text           String                @db.Text
-  /** Bản gốc NV gõ (thường VI) khi auto-translate outbound. */
+  // Bản gốc NV gõ (thường VI) khi auto-translate outbound.
   originalText   String?               @map("original_text") @db.Text
-  /** Bản dịch tiếng Việt để NV đọc (inbound), hoặc mirror originalText (outbound). */
+  // Bản dịch tiếng Việt để NV đọc (inbound), hoặc mirror originalText (outbound).
   translatedText String?               @map("translated_text") @db.Text
-  /** Ngôn ngữ của `text` (ISO 639-1). */
+  // Ngôn ngữ của `text` (ISO 639-1).
   sourceLang     String?               @map("source_lang") @db.VarChar(16)
   messageType    String                @default("text") @map("message_type")
   attachmentUrl  String?               @map("attachment_url") @db.Text
@@ -1226,6 +1352,18 @@ model CskhPageAdSpendDaily {
   @@index([statDate])
   @@index([tenantId, statDate])
   @@map("cskh_page_ad_spend_daily")
+}
+
+/// Cache tổng tin nhắn theo Page (manual SQL / Page-Kênh) — giữ trong schema để db push không drop.
+model CskhPageMessageTotals {
+  pageId                   String   @id @map("page_id")
+  messageCount             BigInt   @default(0) @map("message_count")
+  conversationCount        BigInt   @default(0) @map("conversation_count")
+  unreadConversationCount  BigInt   @default(0) @map("unread_conversation_count")
+  refreshedAt              DateTime @default(now()) @map("refreshed_at") @db.Timestamptz(6)
+
+  @@index([refreshedAt])
+  @@map("cskh_page_message_totals")
 }
 
 // --- Sapo catalog mirror (test / offline) + inbox orders ---

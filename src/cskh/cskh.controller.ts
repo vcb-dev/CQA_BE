@@ -39,6 +39,7 @@ import { SapoOAuthService } from './sapo/sapo-oauth.service';
 import { SapoProductService } from './sapo/sapo-product.service';
 import { SapoOrderService } from './sapo/sapo-order.service';
 import { ProductAnalyticsService } from './product-analytics.service';
+import { CustomerAnalyticsService } from './customer-analytics.service';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtService } from '@nestjs/jwt';
 import { UsersService } from '../users/users.service';
@@ -63,6 +64,7 @@ export class CskhController {
     private readonly sapoProducts: SapoProductService,
     private readonly sapoOrders: SapoOrderService,
     private readonly productAnalytics: ProductAnalyticsService,
+    private readonly customerAnalytics: CustomerAnalyticsService,
     private readonly jwtService: JwtService,
     private readonly usersService: UsersService,
     private readonly configService: ConfigService,
@@ -336,6 +338,27 @@ export class CskhController {
     return this.productAnalytics.getDashboard({
       q,
       category,
+      page: page ? Number(page) : 1,
+      pageSize: pageSize ? Number(pageSize) : 20,
+    });
+  }
+
+  /** Danh sách khách đã chốt đơn inbox — filter theo kênh (page) / trạng thái hội thoại. */
+  @Get('customers')
+  @UseGuards(JwtAuthGuard)
+  listCustomers(
+    @CurrentUser() user: User,
+    @Query('q') q?: string,
+    @Query('pageId') pageId?: string,
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.customerAnalytics.listCustomers({
+      tenantId: user.tenantId || undefined,
+      q,
+      pageId,
+      status,
       page: page ? Number(page) : 1,
       pageSize: pageSize ? Number(pageSize) : 20,
     });

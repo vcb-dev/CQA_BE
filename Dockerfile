@@ -24,6 +24,9 @@ FROM node:20-alpine AS runner
 
 WORKDIR /usr/src/app
 
+# Prisma migrate cần openssl trên Alpine
+RUN apk add --no-cache openssl
+
 ENV NODE_ENV=production
 
 # Copy package configurations
@@ -40,5 +43,6 @@ ENV CSKH_RUN_MODE=api
 
 EXPOSE 3000
 
-# API. Worker service: Start Command = node dist/worker.js , CSKH_RUN_MODE=worker
-CMD ["node", "dist/main.js"]
+# Auto-migrate trước khi start API (idempotent; Prisma advisory lock nếu nhiều replica)
+# Worker: override Start Command = node dist/worker.js (không migrate lại)
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main.js"]

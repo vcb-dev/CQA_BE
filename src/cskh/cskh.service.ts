@@ -559,7 +559,7 @@ export class CskhService implements OnModuleInit {
       select: { fbUserId: true, fbUserName: true, tokenExpiresAt: true, updatedAt: true, metadata: true },
     });
 
-    const [pageStats, inboundStatsMap, oauth] = await Promise.all([
+    const [pageStats, inboundStatsMap, dayTotalMessageMap, oauth] = await Promise.all([
       pageIds.length
         ? this.loadPageStatsBundleCached(tenantId, pageIds, {
             allowStaleDuringBackfill: true,
@@ -579,12 +579,16 @@ export class CskhService implements OnModuleInit {
               pageIds,
             )
           : Promise.resolve(new Map<string, number>()),
+      inboundDate && pageIds.length
+        ? this.loadPageDayTotalMessageStatsForRange(inboundDate, inboundDate, pageIds)
+        : Promise.resolve(new Map<string, number>()),
       oauthPromise,
     ]);
 
     const convCountMap = pageStats.convMap;
     const unreadCountMap = pageStats.unreadMap;
-    const totalMessageStatsMap = pageStats.messageMap;
+    // Khi chọn ngày: cột TIN NHẮN = tổng tin trong ngày (không dùng lifetime).
+    const totalMessageStatsMap = inboundDate ? dayTotalMessageMap : pageStats.messageMap;
 
     const missingPictureIds = rows
       .filter((r) => !this.pagePictureUrl(r.metadata))
@@ -658,11 +662,17 @@ export class CskhService implements OnModuleInit {
         if (
           adCostPerConversation == null &&
           ad?.spend != null &&
-          ad.spend > 0 &&
-          inboundCount != null &&
-          inboundCount > 0
+          ad.spend > 0
         ) {
-          adCostPerConversation = ad.spend / inboundCount;
+          const denom =
+            ad.messagingConversations != null && ad.messagingConversations > 0
+              ? ad.messagingConversations
+              : inboundCount != null && inboundCount > 0
+                ? inboundCount
+                : null;
+          if (denom != null) {
+            adCostPerConversation = ad.spend / denom;
+          }
         }
         if (ad?.spend != null && ad.spend > 0) {
           totalAdSpend += ad.spend;
@@ -797,13 +807,20 @@ export class CskhService implements OnModuleInit {
     void this.bumpPageStatsCaches(tenantId);
   }
 
-  /** Đồng bộ chi tiêu QC 1 kênh vừa quét xong (hôm qua + hôm nay VN). */
-  async syncPageAdSpendAfterBackfillPage(pageId: string, tenantId?: string) {
+  /** Đồng bộ chi tiêu QC 1 kênh vừa quét xong (mặc định hôm qua + hôm nay VN; hoặc ngày chỉ định). */
+  async syncPageAdSpendAfterBackfillPage(
+    pageId: string,
+    tenantId?: string,
+    dates?: string[],
+  ) {
     if (!(await this.isPageAdSpendSchemaAvailable())) return;
     const today = this.vietnamCalendarDate(0);
     const yesterday = this.vietnamCalendarDate(-1);
+    const targets = (dates?.length ? dates : [yesterday, today]).filter((d) =>
+      /^\d{4}-\d{2}-\d{2}$/.test(d),
+    );
     const delayMs = Number(process.env.CSKH_PAGE_AD_SYNC_DELAY_MS || 2_500);
-    for (const statDate of [yesterday, today]) {
+    for (const statDate of targets) {
       try {
         const res = await this.syncPageAdSpendDaily(pageId, statDate, tenantId);
         if (res.ok) {
@@ -1848,6 +1865,29 @@ export class CskhService implements OnModuleInit {
       FROM cskh_inbox_messages m
       INNER JOIN cskh_inbox_conversations c ON c.id = m.conversation_id
       WHERE c.page_id IN (${Prisma.join(pageIds)})
+      GROUP BY c.page_id
+    `;
+    return new Map(rows.map((r) => [r.pageId, r.totalCount]));
+  }
+
+  /** Tổng số tin nhắn (mọi chiều) theo page trong khoảng ngày lịch VN. */
+  private async loadPageDayTotalMessageStatsForRange(
+    from: string,
+    to: string,
+    pageIds: string[],
+  ) {
+    if (!pageIds.length) return new Map<string, number>();
+    const { start, end } = this.graph.vietnamDateRange(from, to);
+    type StatRow = { pageId: string; totalCount: number };
+    const rows = await this.prisma.$queryRaw<StatRow[]>`
+      SELECT
+        c.page_id AS "pageId",
+        COUNT(*)::int AS "totalCount"
+      FROM cskh_inbox_messages m
+      INNER JOIN cskh_inbox_conversations c ON c.id = m.conversation_id
+        AND c.page_id IN (${Prisma.join(pageIds)})
+      WHERE m.sent_at >= ${start}
+        AND m.sent_at <= ${end}
       GROUP BY c.page_id
     `;
     return new Map(rows.map((r) => [r.pageId, r.totalCount]));

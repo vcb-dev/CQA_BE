@@ -204,6 +204,8 @@ export class CskhInboxService {
     startedAt: string | null;
     finishedAt: string | null;
     jobId: string | null;
+    /** Quét tin theo ngày VN (YYYY-MM-DD). Null = quét toàn bộ lịch sử. */
+    scanDate: string | null;
   } = {
     running: false,
     paused: false,
@@ -218,6 +220,7 @@ export class CskhInboxService {
     startedAt: null,
     finishedAt: null,
     jobId: null,
+    scanDate: null,
   };
 
   private toBackfillResponse() {
@@ -226,6 +229,7 @@ export class CskhInboxService {
 
   private jobSummaryToState(summary: Record<string, unknown> | null | undefined) {
     const s = summary ?? {};
+    const scanDateRaw = typeof s.scanDate === 'string' ? s.scanDate.trim() : '';
     return {
       scope: (s.scope as 'empty' | 'all') ?? '',
       total: Number(s.total ?? 0),
@@ -236,6 +240,7 @@ export class CskhInboxService {
       okPages: Number(s.okPages ?? 0),
       errorPages: (s.errorPages as Array<{ page: string; error: string; pageId?: string }>) ?? [],
       completedPageIds: (s.completedPageIds as string[]) ?? [],
+      scanDate: /^\d{4}-\d{2}-\d{2}$/.test(scanDateRaw) ? scanDateRaw : null,
     };
   }
 
@@ -300,6 +305,7 @@ export class CskhInboxService {
       okPages: parsed.okPages,
       errorPages: parsed.errorPages,
       completedPageIds: parsed.completedPageIds,
+      scanDate: parsed.scanDate,
       startedAt: job.startedAt.toISOString(),
       finishedAt: job.finishedAt?.toISOString() ?? null,
       jobId: job.id,
@@ -449,6 +455,7 @@ export class CskhInboxService {
       okPages: this.backfillState.okPages,
       errorPages: this.backfillState.errorPages,
       completedPageIds,
+      scanDate: this.backfillState.scanDate,
       paused: status === 'paused',
       pauseRequested: status === 'running' && this.backfillPauseRequested,
     };
@@ -3699,6 +3706,7 @@ export class CskhInboxService {
       startedAt: null,
       finishedAt: new Date().toISOString(),
       jobId: null,
+      scanDate: null,
     };
     this.backfillJobId = null;
     this.backfillTenantId = undefined;
@@ -3730,7 +3738,7 @@ export class CskhInboxService {
   async startBackfill(
     scope: 'empty' | 'all',
     tenantId?: string,
-    options?: { force?: boolean },
+    options?: { force?: boolean; date?: string },
   ) {
     const runningJob = await this.findRunningBackfillJob(tenantId);
     if (runningJob) {
@@ -3742,6 +3750,9 @@ export class CskhInboxService {
     this.backfillPauseRequested = false;
     this.backfillCancelRequested = false;
 
+    const dateRaw = options?.date?.trim() ?? '';
+    const requestedScanDate = /^\d{4}-\d{2}-\d{2}$/.test(dateRaw) ? dateRaw : null;
+
     let completedPageIds: string[] = [];
     let resumeFromJob = false;
     let initialDone = 0;
@@ -3749,6 +3760,7 @@ export class CskhInboxService {
     let initialOk = 0;
     let initialErrors: Array<{ page: string; error: string; pageId?: string }> = [];
     let totalAllPages = 0;
+    let scanDate: string | null = requestedScanDate;
 
     const tenantFilter = tenantId
       ? Prisma.sql`AND cfg.tenant_id = ${tenantId}::uuid`
@@ -3771,6 +3783,7 @@ export class CskhInboxService {
       initialAdded = parsed.addedMessages;
       initialOk = parsed.okPages;
       initialErrors = [...parsed.errorPages];
+      scanDate = parsed.scanDate ?? requestedScanDate;
       this.backfillJobId = pausedJob.id;
       resumeFromJob = true;
       await this.prisma.cskhJobRun.update({
@@ -3797,11 +3810,14 @@ export class CskhInboxService {
             addedMessages: 0,
             okPages: 0,
             errorPages: [],
+            scanDate,
           } as unknown as Prisma.InputJsonValue,
         },
       });
       this.backfillJobId = job.id;
     }
+
+    this.backfillState.scanDate = scanDate;
 
     const jobId = this.backfillJobId!;
     const queued = await this.redisQueue.enqueueBackfillJob({ jobId });
@@ -3829,6 +3845,7 @@ export class CskhInboxService {
       addedMessages: initialAdded,
       okPages: initialOk,
       errorPages: initialErrors,
+      scanDate,
       startedAt: resumeFromJob
         ? (pausedJob!.startedAt.toISOString())
         : new Date().toISOString(),
@@ -3897,6 +3914,7 @@ export class CskhInboxService {
       startedAt: job.startedAt.toISOString(),
       finishedAt: null,
       jobId,
+      scanDate: parsed.scanDate,
     };
 
     const pages = await this.buildBackfillPageList(scope, tenantId, parsed.completedPageIds);
@@ -3923,8 +3941,11 @@ export class CskhInboxService {
   }
 
   private async runBackfillJob(pages: Array<{ pageId: string; pageName: string | null }>) {
+    const scanDate = this.backfillState.scanDate;
     this.logger.log(
-      `[backfill] bắt đầu quét ${pages.length} kênh còn lại — tuần tự từng kênh, xong hết mới sang kênh tiếp (scope=${this.backfillState.scope}, đã xong ${this.backfillCompletedPageIds.length})`,
+      `[backfill] bắt đầu quét ${pages.length} kênh còn lại — tuần tự từng kênh` +
+        (scanDate ? ` (chỉ ngày ${scanDate})` : ' (toàn bộ lịch sử)') +
+        ` — xong hết mới sang kênh tiếp (scope=${this.backfillState.scope}, đã xong ${this.backfillCompletedPageIds.length})`,
     );
     for (const row of pages) {
       if (await this.isBackfillCancelledNow()) {
@@ -3942,7 +3963,8 @@ export class CskhInboxService {
       this.backfillState.pageConvsDone = 0;
       await this.persistBackfillJob('running', this.backfillCompletedPageIds, { force: true });
       this.logger.log(
-        `[backfill] (${this.backfillState.done + 1}/${this.backfillState.total}) bắt đầu kênh: ${row.pageName || row.pageId}`,
+        `[backfill] (${this.backfillState.done + 1}/${this.backfillState.total}) bắt đầu kênh: ${row.pageName || row.pageId}` +
+          (scanDate ? ` · ngày ${scanDate}` : ''),
       );
 
       let pageCompleted = false;
@@ -3955,6 +3977,7 @@ export class CskhInboxService {
             this.syncSinglePageFromGraph(page, true, true, {
               backfillMode: true,
               shouldStop: () => this.backfillCancelRequested,
+              scanDate: scanDate ?? undefined,
             }),
             new Promise<number>((_, reject) => {
               setTimeout(
@@ -4004,7 +4027,11 @@ export class CskhInboxService {
           try {
             await this.cskh.bumpPageStatsCaches(this.backfillTenantId, { inboundOnly: true });
             void this.cskh
-              .syncPageAdSpendAfterBackfillPage(row.pageId, this.backfillTenantId)
+              .syncPageAdSpendAfterBackfillPage(
+                row.pageId,
+                this.backfillTenantId,
+                scanDate ? [scanDate] : undefined,
+              )
               .catch((e) => {
                 this.logger.warn(
                   `[backfill] QC sync ${row.pageName || row.pageId}: ${(e as Error).message}`,
@@ -4045,7 +4072,8 @@ export class CskhInboxService {
     await this.persistBackfillJob('completed', this.backfillCompletedPageIds);
     this.logger.log(
       `[backfill] XONG: ${this.backfillState.okPages}/${this.backfillState.total} page OK, ` +
-        `+${this.backfillState.addedMessages} tin, ${this.backfillState.errorPages.length} page lỗi`,
+        `+${this.backfillState.addedMessages} tin, ${this.backfillState.errorPages.length} page lỗi` +
+        (scanDate ? ` (ngày ${scanDate})` : ''),
     );
     void this.syncPageAdSpendAfterBackfill();
   }
@@ -4062,11 +4090,16 @@ export class CskhInboxService {
     page: FacebookCskhConfig,
     full: boolean,
     lightweight = false,
-    options?: { backfillMode?: boolean; shouldStop?: () => boolean },
+    options?: { backfillMode?: boolean; shouldStop?: () => boolean; scanDate?: string },
   ): Promise<number> {
     let synced = 0;
     const backfillMode = options?.backfillMode === true;
     const monitorMode = !full && lightweight && !backfillMode;
+    const scanDate =
+      options?.scanDate && /^\d{4}-\d{2}-\d{2}$/.test(options.scanDate)
+        ? options.scanDate
+        : undefined;
+    const dateScopedBackfill = backfillMode && Boolean(scanDate);
 
     const processConv = async (fbConv: FbConversation): Promise<number> => {
       const run = async (): Promise<number> => {
@@ -4082,24 +4115,27 @@ export class CskhInboxService {
         const customer = participants.find((p) => String(p.id) !== String(page.pageId));
         if (!customer?.id) return 0;
 
-        const rawMsgs = backfillMode
-          ? await this.graph.fetchAllMessagesFromInline(
-              fbConv.messages?.data,
-              fbConv.messages?.paging?.next,
-              page.pageAccessToken,
-              {
-                shouldStop: () =>
-                  Boolean(options?.shouldStop?.() || this.backfillPauseRequested),
-                maxPages: this.backfillMsgMaxPages,
-              },
-            )
-          : monitorMode
-            ? (fbConv.messages?.data ?? [])
-            : await this.graph.fetchMessages(
-                fbConv.id,
+        const rawMsgs = dateScopedBackfill
+          ? this.graph.filterMessagesByDay(fbConv.messages?.data ?? [], scanDate!)
+          : backfillMode
+            ? await this.graph.fetchAllMessagesFromInline(
+                fbConv.messages?.data,
+                fbConv.messages?.paging?.next,
                 page.pageAccessToken,
-                full ? 0 : this.msgLimit,
-              );
+                {
+                  shouldStop: () =>
+                    Boolean(options?.shouldStop?.() || this.backfillPauseRequested),
+                  maxPages: this.backfillMsgMaxPages,
+                },
+              )
+            : monitorMode
+              ? (fbConv.messages?.data ?? [])
+              : await this.graph.fetchMessages(
+                  fbConv.id,
+                  page.pageAccessToken,
+                  full ? 0 : this.msgLimit,
+                );
+        if (dateScopedBackfill && rawMsgs.length === 0) return 0;
         const customerName = this.graph.resolveCustomerName(
           fbConv.participants,
           page.pageId,
@@ -4313,6 +4349,44 @@ export class CskhInboxService {
       }
       return 'continue';
     };
+
+    if (backfillMode && full && dateScopedBackfill && scanDate) {
+      const convs = await this.graph.fetchConversationsForAuditByDate(
+        page.pageId,
+        page.pageAccessToken,
+        scanDate,
+        scanDate,
+        this.msgLimit,
+        async (_scanned, matched) => {
+          this.backfillState.pageConvsDone = matched;
+          await this.persistBackfillJob('running', this.backfillCompletedPageIds);
+        },
+        6,
+        () =>
+          Boolean(
+            options?.shouldStop?.() ||
+              this.backfillPauseRequested ||
+              this.backfillCancelRequested,
+          ),
+      );
+      for (const fbConv of convs) {
+        if (options?.shouldStop?.()) break;
+        if (await this.isBackfillCancelledNow()) break;
+        if (await this.isBackfillPauseRequestedNow()) break;
+        const dayMsgs = this.graph.filterMessagesByDay(
+          fbConv.messages?.data ?? [],
+          scanDate,
+        );
+        synced += await processConv({
+          ...fbConv,
+          messages: { data: dayMsgs },
+        });
+      }
+      this.logger.log(
+        `[backfill] ${page.pageName || page.pageId}: ngày ${scanDate} — ${convs.length} hội thoại, +${synced} tin`,
+      );
+      return synced;
+    }
 
     if (backfillMode && full) {
       const total = await this.graph.streamConversationsForBackfill(

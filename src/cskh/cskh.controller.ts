@@ -896,11 +896,13 @@ export class CskhController {
   @UseGuards(JwtAuthGuard)
   startBackfill(
     @CurrentUser() user: User,
-    @Body() body: { scope?: 'empty' | 'all'; force?: boolean },
+    @Body() body: { scope?: 'empty' | 'all'; force?: boolean; date?: string },
   ) {
     const scope = body.scope === 'empty' ? 'empty' : 'all';
+    const date = body.date?.trim();
     return this.inbox.startBackfill(scope, user.tenantId || undefined, {
       force: body.force === true,
+      date: date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : undefined,
     });
   }
 

@@ -44,5 +44,6 @@ ENV CSKH_RUN_MODE=api
 EXPOSE 3000
 
 # Auto-migrate trước khi start API (idempotent; Prisma advisory lock nếu nhiều replica)
+# DIRECT_URL optional — fallback DATABASE_URL nếu Railway chỉ set 1 biến
 # Worker: override Start Command = node dist/worker.js (không migrate lại)
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main.js"]
+CMD ["sh", "-c", "export DIRECT_URL=\"${DIRECT_URL:-$DATABASE_URL}\" && npx prisma migrate deploy && node dist/main.js"]

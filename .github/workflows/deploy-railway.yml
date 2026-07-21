@@ -44,22 +44,33 @@ jobs:
       - name: Install deps
         run: npm ci
 
-      - name: Validate DB secrets
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DIRECT_URL: ${{ secrets.DIRECT_URL }}
-        run: |
-          if [ -z "$DATABASE_URL" ] || [ -z "$DIRECT_URL" ]; then
-            echo "::error::Thiếu GitHub secrets DATABASE_URL và/hoặc DIRECT_URL (cần để migrate trước deploy)"
-            exit 1
-          fi
-          echo "DB secrets OK"
-
       - name: Migrate deploy
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # Optional — nếu không có thì derive từ DATABASE_URL
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
-        run: npx prisma migrate deploy
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::Thiếu GitHub secret DATABASE_URL"
+            exit 1
+          fi
+          if [ -z "$DIRECT_URL" ]; then
+            # Schema Prisma cần DIRECT_URL; fallback từ pooler URL (6543 → 5432)
+            export DIRECT_URL="$(node -e '
+              const u = process.env.DATABASE_URL;
+              try {
+                const x = new URL(u);
+                if (x.port === "6543") x.port = "5432";
+                x.searchParams.delete("pgbouncer");
+                x.searchParams.delete("connection_limit");
+                process.stdout.write(x.toString());
+              } catch {
+                process.stdout.write(u);
+              }
+            ')"
+            echo "DIRECT_URL không có secret — dùng bản derive từ DATABASE_URL"
+          fi
+          npx prisma migrate deploy
 
   build-and-push:
     name: Build & Push Docker Hub

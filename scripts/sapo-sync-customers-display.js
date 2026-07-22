@@ -1,30 +1,17 @@
 /**
- * Sync Sapo customers → sapo_customers (bảng hiển thị, cột tách sẵn).
+ * Sync Sapo customers → sapo_customers (display table).
  * Usage: node scripts/sapo-sync-customers-display.js
  */
-const fs = require('fs');
-const path = require('path');
-const axios = require('axios');
-const { PrismaClient, Prisma } = require('@prisma/client');
-
-function loadEnv() {
-  const file = path.resolve(__dirname, '../.env');
-  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-    const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
-    if (!m || process.env[m[1]]) continue;
-    process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
-  }
-}
-loadEnv();
-// Pooler transaction mode thường read-only — ưu tiên DIRECT_URL khi sync ghi.
-if (process.env.DIRECT_URL) {
-  process.env.DATABASE_URL = process.env.DIRECT_URL;
-}
-
-function hostOf(store) {
-  const s = (store || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-  return s.includes('mysapo.net') ? s : `${s}.mysapo.net`;
-}
+const { Prisma } = require('@prisma/client');
+const {
+  log,
+  createWritablePrisma,
+  ensureWritable,
+  sapoAuth,
+  sapoHost,
+  errInfo,
+  fetchSapoListPages,
+} = require('./lib/sapo-sync-common');
 
 function parseDate(raw) {
   if (!raw) return null;
@@ -34,11 +21,12 @@ function parseDate(raw) {
 
 function tagsOf(raw) {
   if (Array.isArray(raw)) return raw.map(String).filter(Boolean);
-  if (typeof raw === 'string')
+  if (typeof raw === 'string') {
     return raw
       .split(',')
       .map((t) => t.trim())
       .filter(Boolean);
+  }
   return [];
 }
 
@@ -46,121 +34,95 @@ function fullName(first, last) {
   return [first, last].filter(Boolean).join(' ').trim() || null;
 }
 
-async function main() {
-  const prisma = new PrismaClient();
-  await prisma.$executeRawUnsafe('SET default_transaction_read_only = off');
-  await prisma.$executeRawUnsafe('SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE');
-  const host = hostOf(process.env.SAPO_STORE);
-  const auth = {
-    username: process.env.SAPO_API_KEY || process.env.SAPO_PRIVATE_API_KEY,
-    password: process.env.SAPO_API_SECRET || process.env.SAPO_PRIVATE_API_SECRET,
+function customerPayload(raw) {
+  const addr = raw.default_address || (raw.addresses || [])[0] || {};
+  const firstName = raw.first_name?.trim() || null;
+  const lastName = raw.last_name?.trim() || null;
+  return {
+    email: raw.email?.trim() || null,
+    phone: raw.phone?.trim() || null,
+    firstName,
+    lastName,
+    fullName: fullName(firstName, lastName) || addr.name || null,
+    gender: raw.gender != null ? String(raw.gender) : null,
+    dob: parseDate(raw.dob),
+    company: addr.company || null,
+    acceptsMarketing: Boolean(raw.accepts_marketing),
+    verifiedEmail: Boolean(raw.verified_email),
+    state: raw.state || null,
+    ordersCount: Number(raw.orders_count || 0),
+    totalSpent: new Prisma.Decimal(String(raw.total_spent || 0)),
+    lastOrderSapoId: raw.last_order_id ? BigInt(raw.last_order_id) : null,
+    lastOrderName: raw.last_order_name || null,
+    tags: tagsOf(raw.tags),
+    note: raw.note || null,
+    addressName: addr.name || null,
+    addressPhone: addr.phone || null,
+    address1: addr.address1 || null,
+    address2: addr.address2 || null,
+    ward: addr.ward || null,
+    district: addr.district || null,
+    city: addr.city || null,
+    province: addr.province || null,
+    provinceCode: addr.province_code || null,
+    districtCode: addr.district_code || null,
+    wardCode: addr.ward_code || null,
+    country: addr.country || addr.country_name || null,
+    countryCode: addr.country_code || null,
+    zip: addr.zip || null,
+    sapoCreatedAt: parseDate(raw.created_on),
+    sapoModifiedAt: parseDate(raw.modified_on),
+    syncedAt: new Date(),
   };
+}
+
+async function main() {
+  const prisma = await createWritablePrisma();
+  const host = sapoHost();
+  const auth = sapoAuth();
 
   let fetched = 0;
   let upserted = 0;
+  let failed = 0;
 
-  for (let page = 1; page <= 500; page++) {
-    const { data } = await axios.get(`https://${host}/admin/customers.json`, {
-      auth,
-      params: { limit: 250, page },
-      timeout: 90_000,
-    });
-    const batch = data.customers || [];
-    if (!batch.length) break;
-    fetched += batch.length;
+  await fetchSapoListPages({
+    host,
+    auth,
+    path: '/admin/customers.json',
+    rootKey: 'customers',
+    delayMs: 50,
+    onPage: async ({ batch, page }) => {
+      await ensureWritable(prisma);
+      fetched += batch.length;
 
-    for (const raw of batch) {
-      const sapoId = raw.id;
-      if (!sapoId) continue;
-      const addr = raw.default_address || (raw.addresses || [])[0] || {};
-      const firstName = raw.first_name?.trim() || null;
-      const lastName = raw.last_name?.trim() || null;
+      for (const raw of batch) {
+        const sapoId = raw.id;
+        if (!sapoId) continue;
+        const payload = customerPayload(raw);
+        try {
+          await prisma.sapoCustomer.upsert({
+            where: { sapoId: BigInt(sapoId) },
+            create: { sapoId: BigInt(sapoId), ...payload },
+            update: payload,
+          });
+          upserted++;
+        } catch (e) {
+          failed++;
+          if (failed <= 20 || failed % 50 === 0) {
+            log(JSON.stringify({ fail: sapoId, ...errInfo(e) }));
+          }
+          if (String(e.message || '').includes('read-only')) {
+            await ensureWritable(prisma);
+          }
+        }
+      }
 
-      await prisma.sapoCustomer.upsert({
-        where: { sapoId: BigInt(sapoId) },
-        create: {
-          sapoId: BigInt(sapoId),
-          email: raw.email?.trim() || null,
-          phone: raw.phone?.trim() || null,
-          firstName,
-          lastName,
-          fullName: fullName(firstName, lastName) || addr.name || null,
-          gender: raw.gender != null ? String(raw.gender) : null,
-          dob: parseDate(raw.dob),
-          company: addr.company || null,
-          acceptsMarketing: Boolean(raw.accepts_marketing),
-          verifiedEmail: Boolean(raw.verified_email),
-          state: raw.state || null,
-          ordersCount: Number(raw.orders_count || 0),
-          totalSpent: new Prisma.Decimal(String(raw.total_spent || 0)),
-          lastOrderSapoId: raw.last_order_id ? BigInt(raw.last_order_id) : null,
-          lastOrderName: raw.last_order_name || null,
-          tags: tagsOf(raw.tags),
-          note: raw.note || null,
-          addressName: addr.name || null,
-          addressPhone: addr.phone || null,
-          address1: addr.address1 || null,
-          address2: addr.address2 || null,
-          ward: addr.ward || null,
-          district: addr.district || null,
-          city: addr.city || null,
-          province: addr.province || null,
-          provinceCode: addr.province_code || null,
-          districtCode: addr.district_code || null,
-          wardCode: addr.ward_code || null,
-          country: addr.country || addr.country_name || null,
-          countryCode: addr.country_code || null,
-          zip: addr.zip || null,
-          sapoCreatedAt: parseDate(raw.created_on),
-          sapoModifiedAt: parseDate(raw.modified_on),
-          syncedAt: new Date(),
-        },
-        update: {
-          email: raw.email?.trim() || null,
-          phone: raw.phone?.trim() || null,
-          firstName,
-          lastName,
-          fullName: fullName(firstName, lastName) || addr.name || null,
-          gender: raw.gender != null ? String(raw.gender) : null,
-          dob: parseDate(raw.dob),
-          company: addr.company || null,
-          acceptsMarketing: Boolean(raw.accepts_marketing),
-          verifiedEmail: Boolean(raw.verified_email),
-          state: raw.state || null,
-          ordersCount: Number(raw.orders_count || 0),
-          totalSpent: new Prisma.Decimal(String(raw.total_spent || 0)),
-          lastOrderSapoId: raw.last_order_id ? BigInt(raw.last_order_id) : null,
-          lastOrderName: raw.last_order_name || null,
-          tags: tagsOf(raw.tags),
-          note: raw.note || null,
-          addressName: addr.name || null,
-          addressPhone: addr.phone || null,
-          address1: addr.address1 || null,
-          address2: addr.address2 || null,
-          ward: addr.ward || null,
-          district: addr.district || null,
-          city: addr.city || null,
-          province: addr.province || null,
-          provinceCode: addr.province_code || null,
-          districtCode: addr.district_code || null,
-          wardCode: addr.ward_code || null,
-          country: addr.country || addr.country_name || null,
-          countryCode: addr.country_code || null,
-          zip: addr.zip || null,
-          sapoCreatedAt: parseDate(raw.created_on),
-          sapoModifiedAt: parseDate(raw.modified_on),
-          syncedAt: new Date(),
-        },
-      });
-      upserted++;
-    }
+      log(JSON.stringify({ page, fetched, upserted, failed }));
+    },
+  });
 
-    console.log(JSON.stringify({ page, fetched, upserted }));
-    if (batch.length < 250) break;
-    await new Promise((r) => setTimeout(r, 50));
-  }
-
-  console.log(JSON.stringify({ done: true, fetched, upserted }));
+  const dbCount = await prisma.sapoCustomer.count();
+  log(JSON.stringify({ done: true, fetched, upserted, failed, dbCount }));
   await prisma.$disconnect();
 }
 

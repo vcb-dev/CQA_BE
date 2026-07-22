@@ -12,6 +12,11 @@ import { SapoProductImportService } from './sapo/sapo-product-import.service';
 import { SapoOAuthService } from './sapo/sapo-oauth.service';
 import { SapoCatalogDbService } from './sapo/sapo-catalog-db.service';
 import { SapoOrderService } from './sapo/sapo-order.service';
+import { SapoFullSyncService } from './sapo/sapo-full-sync.service';
+import { SapoCustomerSyncService } from './sapo/sapo-customer-sync.service';
+import { SapoOrderSyncService } from './sapo/sapo-order-sync.service';
+import { SapoCollectionSyncService } from './sapo/sapo-collection-sync.service';
+import { SapoDisplayService } from './sapo/sapo-display.service';
 import { ProductAnalyticsService } from './product-analytics.service';
 import { CustomerAnalyticsService } from './customer-analytics.service';
 import { CskhCronService } from './cskh-cron.service';
@@ -40,6 +45,11 @@ import { UsersModule } from '../users/users.module';
     SapoProductImportService,
     SapoOAuthService,
     SapoOrderService,
+    SapoCustomerSyncService,
+    SapoOrderSyncService,
+    SapoCollectionSyncService,
+    SapoFullSyncService,
+    SapoDisplayService,
     ProductAnalyticsService,
     CustomerAnalyticsService,
     CskhCronService,

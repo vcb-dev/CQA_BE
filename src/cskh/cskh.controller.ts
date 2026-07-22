@@ -38,12 +38,15 @@ import { parseMediaProxyUrlFromRequest } from './facebook/facebook-message.util'
 import { SapoOAuthService } from './sapo/sapo-oauth.service';
 import { SapoProductService } from './sapo/sapo-product.service';
 import { SapoOrderService } from './sapo/sapo-order.service';
+import { SapoFullSyncService, type SapoSyncResource } from './sapo/sapo-full-sync.service';
+import { SapoDisplayService } from './sapo/sapo-display.service';
 import { ProductAnalyticsService } from './product-analytics.service';
 import { CustomerAnalyticsService } from './customer-analytics.service';
+import { isSapoApiReady } from './sapo/sapo-api.util';
+import { ConfigService } from '@nestjs/config';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtService } from '@nestjs/jwt';
 import { UsersService } from '../users/users.service';
-import { ConfigService } from '@nestjs/config';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { User } from '@prisma/client';
 
@@ -63,6 +66,8 @@ export class CskhController {
     private readonly sapoOAuth: SapoOAuthService,
     private readonly sapoProducts: SapoProductService,
     private readonly sapoOrders: SapoOrderService,
+    private readonly sapoFullSync: SapoFullSyncService,
+    private readonly sapoDisplay: SapoDisplayService,
     private readonly productAnalytics: ProductAnalyticsService,
     private readonly customerAnalytics: CustomerAnalyticsService,
     private readonly jwtService: JwtService,
@@ -272,10 +277,12 @@ export class CskhController {
     const ordersReady = this.sapoOrders.isConfigured();
     const catalog = await this.sapoProducts.getCatalog();
     const variantCount = catalog.length;
+    const apiReady = isSapoApiReady(this.configService);
 
     return {
       oauthReady: false,
-      apiReady: false,
+      apiReady,
+      syncReady: apiReady,
       ordersReady,
       dbCatalogReady: variantCount > 0,
       catalogSource: catalogSource ?? (variantCount > 0 ? 'db' : null),
@@ -284,8 +291,118 @@ export class CskhController {
       authorizeUrl: null,
       oauthStartUrl: null,
       variantCount,
-      mode: 'db_only',
+      mode: apiReady ? 'api+db' : 'db_only',
+      resources: {
+        products: 'products / product_variants / product_images / inventory_levels',
+        customers: 'customers',
+        orders: 'orders / order_items',
+        collections: 'categories',
+      },
     };
+  }
+
+  /**
+   * Kéo data Sapo → DB CRM.
+   * body/query resource: all | products | customers | orders | collections
+   */
+  @Post('sapo/sync')
+  @UseGuards(JwtAuthGuard)
+  async sapoSync(
+    @Query('resource') resourceQuery?: string,
+    @Body() body?: { resource?: string },
+  ) {
+    const raw = (body?.resource ?? resourceQuery ?? 'all').trim().toLowerCase();
+    const allowed: SapoSyncResource[] = ['all', 'products', 'customers', 'orders', 'collections'];
+    if (!allowed.includes(raw as SapoSyncResource)) {
+      throw new BadRequestException(`resource phải là: ${allowed.join(', ')}`);
+    }
+    try {
+      return await this.sapoFullSync.sync(raw as SapoSyncResource);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Sapo sync failed';
+      throw new BadRequestException(msg);
+    }
+  }
+
+  @Post('sapo/sync/products')
+  @UseGuards(JwtAuthGuard)
+  async sapoSyncProducts() {
+    try {
+      return await this.sapoFullSync.sync('products');
+    } catch (e) {
+      throw new BadRequestException(e instanceof Error ? e.message : 'Sapo sync products failed');
+    }
+  }
+
+  @Post('sapo/sync/customers')
+  @UseGuards(JwtAuthGuard)
+  async sapoSyncCustomers() {
+    try {
+      return await this.sapoFullSync.sync('customers');
+    } catch (e) {
+      throw new BadRequestException(e instanceof Error ? e.message : 'Sapo sync customers failed');
+    }
+  }
+
+  @Post('sapo/sync/orders')
+  @UseGuards(JwtAuthGuard)
+  async sapoSyncOrders() {
+    try {
+      return await this.sapoFullSync.sync('orders');
+    } catch (e) {
+      throw new BadRequestException(e instanceof Error ? e.message : 'Sapo sync orders failed');
+    }
+  }
+
+  @Post('sapo/sync/collections')
+  @UseGuards(JwtAuthGuard)
+  async sapoSyncCollections() {
+    try {
+      return await this.sapoFullSync.sync('collections');
+    } catch (e) {
+      throw new BadRequestException(e instanceof Error ? e.message : 'Sapo sync collections failed');
+    }
+  }
+
+  /** Bảng Sapo đã flatten — phục vụ UI */
+  @Get('sapo/display/stats')
+  @UseGuards(JwtAuthGuard)
+  sapoDisplayStats() {
+    return this.sapoDisplay.stats();
+  }
+
+  @Get('sapo/display/customers')
+  @UseGuards(JwtAuthGuard)
+  sapoDisplayCustomers(
+    @Query('q') q?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.sapoDisplay.listCustomers({
+      q,
+      page: page ? Number(page) : 1,
+      pageSize: pageSize ? Number(pageSize) : 20,
+    });
+  }
+
+  @Get('sapo/display/orders')
+  @UseGuards(JwtAuthGuard)
+  sapoDisplayOrders(
+    @Query('q') q?: string,
+    @Query('financialStatus') financialStatus?: string,
+    @Query('fulfillmentStatus') fulfillmentStatus?: string,
+    @Query('sapoStatus') sapoStatus?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.sapoDisplay.listOrders({
+      q,
+      financialStatus,
+      fulfillmentStatus,
+      sapoStatus,
+      page: page ? Number(page) : 1,
+      pageSize: pageSize ? Number(pageSize) : 20,
+    });
   }
 
   @Get('sapo/catalog')

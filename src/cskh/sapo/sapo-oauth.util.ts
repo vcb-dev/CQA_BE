@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-export const SAPO_DEFAULT_SCOPES = 'read_products,read_inventory';
+export const SAPO_DEFAULT_SCOPES =
+  'read_products,read_inventory,read_customers,read_orders,read_content';
 
 /** Dùng SAPO_OAUTH_SCOPES khi cần tạo đơn từ inbox. */
 export const SAPO_ORDER_SCOPES =

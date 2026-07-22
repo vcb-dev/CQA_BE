@@ -1,8 +1,8 @@
 /**
- * Nếu DB đã có schema (vd. users) nhưng thiếu lịch sử `_prisma_migrations`,
- * đánh dấu toàn bộ migration local là đã apply — KHÔNG chạy lại SQL cũ.
+ * Chỉ baseline khi DB đã có schema nhưng `_prisma_migrations` trống hoàn toàn
+ * (trường hợp sync bằng db push trước đó).
  *
- * Sau đó `prisma migrate deploy` chỉ apply migration MỚI.
+ * Nếu đã có lịch sử migration → KHÔNG mark migration mới; để `migrate deploy` chạy SQL.
  *
  * Usage: node scripts/ensure-migration-baseline.js
  */
@@ -62,9 +62,7 @@ function deriveDirectUrl(databaseUrl) {
   await c.query('SET default_transaction_read_only = off');
   await c.query('SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE');
 
-  const users = await c.query(
-    `SELECT to_regclass('public.users') AS t`,
-  );
+  const users = await c.query(`SELECT to_regclass('public.users') AS t`);
   const hasUsers = Boolean(users.rows[0]?.t);
 
   await c.query(`
@@ -80,17 +78,16 @@ function deriveDirectUrl(databaseUrl) {
     );
   `);
 
-  // Xóa bản ghi migration fail (vd. init_foundation dở) để resolve lại được
+  // Xóa bản ghi migration fail để resolve/deploy lại được
   const failed = await c.query(
     `SELECT migration_name FROM "_prisma_migrations"
      WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL`,
   );
   for (const row of failed.rows) {
     console.log(`Removing failed/incomplete record: ${row.migration_name}`);
-    await c.query(
-      `DELETE FROM "_prisma_migrations" WHERE migration_name = $1`,
-      [row.migration_name],
-    );
+    await c.query(`DELETE FROM "_prisma_migrations" WHERE migration_name = $1`, [
+      row.migration_name,
+    ]);
   }
 
   const applied = await c.query(
@@ -106,6 +103,15 @@ function deriveDirectUrl(databaseUrl) {
     return;
   }
 
+  // Đã có lịch sử → migration còn thiếu là migration MỚI, phải chạy SQL qua migrate deploy
+  if (appliedSet.size > 0) {
+    console.log(
+      `Đã có ${appliedSet.size} migration applied, ${missing.length} pending → bỏ qua baseline (để migrate deploy chạy SQL).`,
+    );
+    await c.end();
+    return;
+  }
+
   if (!hasUsers) {
     console.log(
       `DB trống (chưa có users) — bỏ qua baseline, để migrate deploy tạo schema (${missing.length} pending).`,
@@ -115,24 +121,20 @@ function deriveDirectUrl(databaseUrl) {
   }
 
   console.log(
-    `DB đã có schema + thiếu ${missing.length} migration trong lịch sử → mark applied (không chạy SQL).`,
+    `DB đã có schema + lịch sử migration trống → mark ${missing.length} migration cũ (không chạy SQL).`,
   );
   await c.end();
 
   for (const name of missing) {
     console.log(`  resolve --applied ${name}`);
-    execFileSync(
-      'npx',
-      ['prisma', 'migrate', 'resolve', '--applied', name],
-      {
-        stdio: 'inherit',
-        env: process.env,
-        cwd: path.resolve(__dirname, '..'),
-      },
-    );
+    execFileSync('npx', ['prisma', 'migrate', 'resolve', '--applied', name], {
+      stdio: 'inherit',
+      env: process.env,
+      cwd: path.resolve(__dirname, '..'),
+    });
   }
 
-  console.log('✅ baseline xong — migrate deploy chỉ chạy migration mới.');
+  console.log('✅ baseline xong — migrate deploy chỉ chạy migration mới về sau.');
 })().catch((e) => {
   console.error(e);
   process.exit(1);

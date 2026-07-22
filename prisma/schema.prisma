@@ -119,6 +119,7 @@ enum OrderSource {
   zalo
   live_fb
   warranty
+  sapo
   other
 }
 
@@ -425,6 +426,7 @@ model ProductOption {
 model ProductVariant {
   id             BigInt   @id @default(autoincrement())
   productId      BigInt   @map("product_id")
+  sapoId         BigInt?  @unique @map("sapo_id")
   sku            String   @unique
   title          String?
   barcode        String?
@@ -471,6 +473,7 @@ model VariantOptionValue {
 
 model Category {
   id             BigInt                @id @default(autoincrement())
+  sapoId         BigInt?               @unique @map("sapo_id")
   name           String
   description    String?               @db.Text
   parentId       BigInt?               @map("parent_id")
@@ -876,6 +879,7 @@ model PurchaseReturnItem {
 
 model Customer {
   id        BigInt   @id @default(autoincrement())
+  sapoId    BigInt?  @unique @map("sapo_id")
   firstName String?  @map("first_name")
   lastName  String?  @map("last_name")
   email     String?
@@ -891,6 +895,7 @@ model Customer {
   ledgerEntries CustomerLedgerEntry[]
 
   @@index([phone])
+  @@index([email])
   @@map("customers")
 }
 
@@ -923,6 +928,7 @@ model CustomerLedgerEntry {
 
 model Order {
   id                 BigInt        @id @default(autoincrement())
+  sapoId             BigInt?       @unique @map("sapo_id")
   code               String        @unique
   customerId         BigInt?       @map("customer_id")
   branchId           BigInt        @map("branch_id")
@@ -1364,6 +1370,158 @@ model CskhPageMessageTotals {
 
   @@index([refreshedAt])
   @@map("cskh_page_message_totals")
+}
+
+// --- Sapo mirror (đầy đủ cột để hiển thị UI / báo cáo) ---
+
+model SapoCustomer {
+  id                 BigInt    @id @default(autoincrement())
+  sapoId             BigInt    @unique @map("sapo_id")
+  email              String?
+  phone              String?
+  firstName          String?   @map("first_name")
+  lastName           String?   @map("last_name")
+  fullName           String?   @map("full_name")
+  gender             String?
+  dob                DateTime? @db.Date
+  company            String?
+  acceptsMarketing   Boolean   @default(false) @map("accepts_marketing")
+  verifiedEmail      Boolean   @default(false) @map("verified_email")
+  state              String?
+  ordersCount        Int       @default(0) @map("orders_count")
+  totalSpent         Decimal   @default(0) @map("total_spent") @db.Decimal(18, 2)
+  lastOrderSapoId    BigInt?   @map("last_order_sapo_id")
+  lastOrderName      String?   @map("last_order_name")
+  tags               String[]  @default([])
+  note               String?   @db.Text
+  /// Địa chỉ mặc định — tách cột để FE hiển thị
+  addressName        String?   @map("address_name")
+  addressPhone       String?   @map("address_phone")
+  address1           String?   @map("address1")
+  address2           String?   @map("address2")
+  ward               String?
+  district           String?
+  city               String?
+  province           String?
+  provinceCode       String?   @map("province_code")
+  districtCode       String?   @map("district_code")
+  wardCode           String?   @map("ward_code")
+  country            String?
+  countryCode        String?   @map("country_code")
+  zip                String?
+  sapoCreatedAt      DateTime? @map("sapo_created_at")
+  sapoModifiedAt     DateTime? @map("sapo_modified_at")
+  syncedAt           DateTime  @default(now()) @map("synced_at")
+
+  orders SapoOrder[]
+
+  @@index([phone])
+  @@index([email])
+  @@index([fullName])
+  @@map("sapo_customers")
+}
+
+model SapoOrder {
+  id                      BigInt    @id @default(autoincrement())
+  sapoId                  BigInt    @unique @map("sapo_id")
+  code                    String    @map("code")
+  orderNumber             Int?      @map("order_number")
+  /// open | closed | cancelled (Sapo)
+  sapoStatus              String?   @map("sapo_status")
+  financialStatus         String?   @map("financial_status")
+  fulfillmentStatus       String?   @map("fulfillment_status")
+  gateway                 String?
+  sourceName              String?   @map("source_name")
+  currency                String?   @default("VND")
+  email                   String?
+  phone                   String?
+  note                    String?   @db.Text
+  tags                    String[]  @default([])
+  cancelReason            String?   @map("cancel_reason")
+  customerSapoId          BigInt?   @map("customer_sapo_id")
+  customerName            String?   @map("customer_name")
+  customerId              BigInt?   @map("customer_id")
+  /// Tiền — tách cột
+  subtotalPrice           Decimal   @default(0) @map("subtotal_price") @db.Decimal(18, 2)
+  totalLineItemsPrice     Decimal   @default(0) @map("total_line_items_price") @db.Decimal(18, 2)
+  totalDiscounts          Decimal   @default(0) @map("total_discounts") @db.Decimal(18, 2)
+  totalTax                Decimal   @default(0) @map("total_tax") @db.Decimal(18, 2)
+  totalShippingPrice      Decimal   @default(0) @map("total_shipping_price") @db.Decimal(18, 2)
+  totalPrice              Decimal   @default(0) @map("total_price") @db.Decimal(18, 2)
+  totalOutstanding        Decimal   @default(0) @map("total_outstanding") @db.Decimal(18, 2)
+  unpaidAmount            Decimal   @default(0) @map("unpaid_amount") @db.Decimal(18, 2)
+  totalReceived           Decimal   @default(0) @map("total_received") @db.Decimal(18, 2)
+  totalRefunded           Decimal   @default(0) @map("total_refunded") @db.Decimal(18, 2)
+  itemQuantity            Int       @default(0) @map("item_quantity")
+  /// Ngày
+  createdOn               DateTime? @map("created_on")
+  modifiedOn              DateTime? @map("modified_on")
+  paidOn                  DateTime? @map("paid_on")
+  cancelledOn             DateTime? @map("cancelled_on")
+  closedOn                DateTime? @map("closed_on")
+  expectedDeliveryDate    DateTime? @map("expected_delivery_date")
+  /// Địa chỉ giao hàng
+  shipName                String?   @map("ship_name")
+  shipPhone               String?   @map("ship_phone")
+  shipCompany             String?   @map("ship_company")
+  shipAddress1            String?   @map("ship_address1")
+  shipAddress2            String?   @map("ship_address2")
+  shipWard                String?   @map("ship_ward")
+  shipDistrict            String?   @map("ship_district")
+  shipCity                String?   @map("ship_city")
+  shipProvince            String?   @map("ship_province")
+  shipCountry             String?   @map("ship_country")
+  shipZip                 String?   @map("ship_zip")
+  /// Địa chỉ thanh toán
+  billName                String?   @map("bill_name")
+  billPhone               String?   @map("bill_phone")
+  billAddress1            String?   @map("bill_address1")
+  billDistrict            String?   @map("bill_district")
+  billCity                String?   @map("bill_city")
+  billProvince            String?   @map("bill_province")
+  billCountry             String?   @map("bill_country")
+  syncedAt                DateTime  @default(now()) @map("synced_at")
+
+  customer SapoCustomer?     @relation(fields: [customerId], references: [id])
+  items    SapoOrderLineItem[]
+
+  @@index([code])
+  @@index([financialStatus])
+  @@index([fulfillmentStatus])
+  @@index([sapoStatus])
+  @@index([createdOn])
+  @@index([customerSapoId])
+  @@index([phone])
+  @@map("sapo_orders")
+}
+
+model SapoOrderLineItem {
+  id                BigInt  @id @default(autoincrement())
+  orderId           BigInt  @map("order_id")
+  sapoLineItemId    BigInt? @map("sapo_line_item_id")
+  productSapoId     BigInt? @map("product_sapo_id")
+  variantSapoId     BigInt? @map("variant_sapo_id")
+  title             String?
+  variantTitle      String? @map("variant_title")
+  name              String?
+  sku               String?
+  vendor            String?
+  unit              String?
+  quantity          Int     @default(0)
+  price             Decimal @default(0) @db.Decimal(18, 2)
+  totalDiscount     Decimal @default(0) @map("total_discount") @db.Decimal(18, 2)
+  discountedTotal   Decimal @default(0) @map("discounted_total") @db.Decimal(18, 2)
+  fulfillmentStatus String? @map("fulfillment_status")
+  requiresShipping  Boolean @default(true) @map("requires_shipping")
+  taxable           Boolean @default(true)
+
+  order SapoOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([sku])
+  @@index([productSapoId])
+  @@index([variantSapoId])
+  @@map("sapo_order_line_items")
 }
 
 // --- Sapo catalog mirror (test / offline) + inbox orders ---

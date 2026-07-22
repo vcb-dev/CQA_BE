@@ -180,20 +180,41 @@ export class CskhService implements OnModuleInit {
 
   /** BE restart — hủy job kẹt + xóa hàng đợi audit (chạy trước audit worker). */
   async onModuleInit() {
-    await this.cleanupStuckJobsOnBoot();
+    try {
+      await this.cleanupStuckJobsOnBoot();
+    } catch (e) {
+      // Không crash cả API vì cleanup (vd. DB tạm read-only / pooler).
+      this.logger.error(
+        `cleanupStuckJobsOnBoot failed — server vẫn tiếp tục: ${(e as Error).message}`,
+      );
+    }
   }
 
   /** Hủy job audit/monitor đang running. Chỉ worker mới purge Redis queue — tránh API restart xóa hàng đợi worker. */
   async cleanupStuckJobsOnBoot(): Promise<{ cancelledJobs: number; purgedQueue: number }> {
     const mode = getCskhRunMode();
-    const n = await this.prisma.cskhJobRun.updateMany({
-      where: { status: 'running' },
-      data: {
-        status: 'failed',
-        error: 'Server khởi động lại — vui lòng chạy job mới',
-        finishedAt: new Date(),
-      },
-    });
+    let cancelledJobs = 0;
+    try {
+      const n = await this.prisma.cskhJobRun.updateMany({
+        where: { status: 'running' },
+        data: {
+          status: 'failed',
+          error: 'Server khởi động lại — vui lòng chạy job mới',
+          finishedAt: new Date(),
+        },
+      });
+      cancelledJobs = n.count;
+    } catch (e) {
+      const msg = (e as Error).message || '';
+      if (msg.includes('read-only') || msg.includes('25006')) {
+        this.logger.warn(
+          `Skip cleanup stuck jobs — DB read-only (${msg.slice(0, 120)}). Check DATABASE_URL/DIRECT_URL (dùng :5432, không :6543).`,
+        );
+        return { cancelledJobs: 0, purgedQueue: 0 };
+      }
+      throw e;
+    }
+
     let purgedAudit = 0;
     let purgedBackfill = 0;
     if (isCskhWorkerProcess()) {
@@ -201,9 +222,9 @@ export class CskhService implements OnModuleInit {
       purgedBackfill = await this.redisQueue.purgeBackfillQueue();
     }
     const purged = purgedAudit + purgedBackfill;
-    if (n.count > 0 || purged > 0) {
+    if (cancelledJobs > 0 || purged > 0) {
       this.logger.warn(
-        `Restart (${mode}): hủy ${n.count} job running` +
+        `Restart (${mode}): hủy ${cancelledJobs} job running` +
           (purged > 0
             ? `, xóa ${purgedAudit} audit + ${purgedBackfill} backfill queue item(s)`
             : isCskhApiProcess()
@@ -220,7 +241,7 @@ export class CskhService implements OnModuleInit {
       }
     }
 
-    return { cancelledJobs: n.count, purgedQueue: purged };
+    return { cancelledJobs, purgedQueue: purged };
   }
 
   /** Đăng ký lại webhook (subscribed_apps) cho tất cả page đã kết nối. Idempotent. */

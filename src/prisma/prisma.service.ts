@@ -13,15 +13,38 @@ function stripEnvQuotes(value: string): string {
   return trimmed;
 }
 
+/**
+ * Supabase transaction pooler (:6543 + pgbouncer) đôi khi trả
+ * "cannot execute UPDATE/INSERT in a read-only transaction".
+ * Ưu tiên DIRECT_URL / session port :5432 cho runtime Nest (cần ghi).
+ */
+function preferWritableSessionUrl(url: string): string {
+  if (!url) return url;
+  let out = url;
+  if (out.includes(':6543/')) {
+    out = out.replace(':6543/', ':5432/');
+  }
+  out = out
+    .replace(/([?&])pgbouncer=true&?/gi, '$1')
+    .replace(/[?&]$/, '')
+    .replace(/\?&/, '?');
+  return out;
+}
+
 /** Railway đôi khi lưu DATABASE_URL kèm quote hoặc để trống — fallback từ DB_* nếu có. */
 function resolveDatabaseUrl(): string {
+  const direct = stripEnvQuotes(process.env.DIRECT_URL || '');
+  if (direct.startsWith('postgresql://') || direct.startsWith('postgres://')) {
+    return preferWritableSessionUrl(direct);
+  }
+
   let url = stripEnvQuotes(process.env.DATABASE_URL || '');
   if (url.startsWith('postgresql://') || url.startsWith('postgres://')) {
-    return url;
+    return preferWritableSessionUrl(url);
   }
 
   const host = stripEnvQuotes(process.env.DB_HOST || '');
-  const port = stripEnvQuotes(process.env.DB_PORT || '6543');
+  const port = stripEnvQuotes(process.env.DB_PORT || '5432');
   const user = stripEnvQuotes(process.env.DB_USERNAME || '');
   const password = process.env.DB_PASSWORD || '';
   const dbName = stripEnvQuotes(process.env.DB_NAME || 'postgres');
@@ -29,13 +52,10 @@ function resolveDatabaseUrl(): string {
   if (host && user && password) {
     const encodedPass = encodeURIComponent(password);
     const built = `postgresql://${user}:${encodedPass}@${host}:${port}/${dbName}`;
-    if (port === '6543' && !built.includes('pgbouncer=')) {
-      return `${built}?pgbouncer=true`;
-    }
-    return built;
+    return preferWritableSessionUrl(built);
   }
 
-  return url;
+  return preferWritableSessionUrl(url);
 }
 
 function resolvePrismaConnectionLimit(): number {
@@ -92,6 +112,14 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     if (baseUrl && baseUrl !== stripEnvQuotes(rawEnvUrl)) {
       this.logger.warn('DATABASE_URL invalid or missing — built connection string from DB_HOST/DB_* env.');
     }
+    const direct = stripEnvQuotes(process.env.DIRECT_URL || '');
+    if (direct) {
+      this.logger.log('Prisma using DIRECT_URL (session) for writable runtime connection.');
+    } else if (stripEnvQuotes(rawEnvUrl).includes(':6543')) {
+      this.logger.warn(
+        'DATABASE_URL was :6543 pooler — rewritten to :5432 session to avoid read-only writes. Prefer setting DIRECT_URL on Railway.',
+      );
+    }
     if (url) {
       this.logger.log(
         `Prisma connection limit enforced at ${connectionLimit} (${getCskhRunMode()} process, db pool budget ${process.env.CSKH_DB_POOL_SIZE || 15}).`,
@@ -103,6 +131,17 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   async onModuleInit(): Promise<void> {
     await this.$connect();
+    // Session có thể inherit default_transaction_read_only=on từ role/pooler.
+    try {
+      await this.$executeRawUnsafe('SET default_transaction_read_only = off');
+      await this.$executeRawUnsafe(
+        'SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE',
+      );
+    } catch (e) {
+      this.logger.warn(
+        `Could not force read-write session: ${(e as Error).message}`,
+      );
+    }
   }
 
   async onModuleDestroy(): Promise<void> {

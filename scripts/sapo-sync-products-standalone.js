@@ -60,7 +60,7 @@ async function main() {
     auth,
     path: '/admin/products.json',
     rootKey: 'products',
-    delayMs: 80,
+    delayMs: 20,
     onPage: async ({ batch, page }) => {
       await ensureWritable(prisma);
       fetched += batch.length;

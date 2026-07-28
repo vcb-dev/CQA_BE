@@ -60,17 +60,17 @@ export class CskhService implements OnModuleInit {
   /** Số hội thoại chấm AI song song — worker process có thể cao hơn API. */
   private readonly auditConcurrency = Number(
     process.env.CSKH_AUDIT_CONCURRENCY ||
-      (getCskhRunMode() === 'worker' ? 1 : 1),
+    (getCskhRunMode() === 'worker' ? 1 : 1),
   );
   /** Số hội thoại fetch tin FB song song / batch. */
   private readonly auditFetchConcurrency = Number(
     process.env.CSKH_AUDIT_FETCH_CONCURRENCY ||
-      (getCskhRunMode() === 'worker' ? 2 : 3),
+    (getCskhRunMode() === 'worker' ? 2 : 3),
   );
   /** Số Page quét FB song song (khi bật nhiều page). */
   private readonly auditPageConcurrency = Number(
     process.env.CSKH_AUDIT_PAGE_CONCURRENCY ||
-      (getCskhRunMode() === 'worker' ? 1 : 2),
+    (getCskhRunMode() === 'worker' ? 1 : 2),
   );
   private readonly auditMsgLimit = Number(process.env.CSKH_AUDIT_MSG_LIMIT || 100);
   /** Nguồn hội thoại khi chấm: `database` (inbox DB) hoặc `facebook` (quét Graph API). */
@@ -86,12 +86,12 @@ export class CskhService implements OnModuleInit {
   private readonly monitorMaxPages = Number(process.env.CSKH_MONITOR_MAX_PAGES || 10);
   private readonly monitorPageConcurrency = Number(
     process.env.CSKH_MONITOR_PAGE_CONCURRENCY ||
-      (getCskhRunMode() === 'worker' ? 2 : 2),
+    (getCskhRunMode() === 'worker' ? 2 : 2),
   );
   /** Số hội thoại fetch messages song song / Page (tăng tốc monitor). */
   private readonly monitorMsgConcurrency = Number(
     process.env.CSKH_MONITOR_MSG_CONCURRENCY ||
-      (getCskhRunMode() === 'worker' ? 4 : 4),
+    (getCskhRunMode() === 'worker' ? 4 : 4),
   );
 
   private readonly activeJobs = new Map<string, { pauseRequested: boolean }>();
@@ -176,7 +176,7 @@ export class CskhService implements OnModuleInit {
     private readonly config: ConfigService,
     @Inject(forwardRef(() => CskhInboxService))
     private readonly inboxService: CskhInboxService,
-  ) {}
+  ) { }
 
   /** BE restart — hủy job kẹt + xóa hàng đợi audit (chạy trước audit worker). */
   async onModuleInit() {
@@ -225,11 +225,11 @@ export class CskhService implements OnModuleInit {
     if (cancelledJobs > 0 || purged > 0) {
       this.logger.warn(
         `Restart (${mode}): hủy ${cancelledJobs} job running` +
-          (purged > 0
-            ? `, xóa ${purgedAudit} audit + ${purgedBackfill} backfill queue item(s)`
-            : isCskhApiProcess()
-              ? ' (API — giữ nguyên Redis queue cho worker)'
-              : ''),
+        (purged > 0
+          ? `, xóa ${purgedAudit} audit + ${purgedBackfill} backfill queue item(s)`
+          : isCskhApiProcess()
+            ? ' (API — giữ nguyên Redis queue cho worker)'
+            : ''),
       );
     }
 
@@ -545,6 +545,8 @@ export class CskhService implements OnModuleInit {
       enabled: true,
       updatedAt: true,
       metadata: true,
+      managerName: true,
+      region: true,
     } as const;
 
     const month = options?.month?.trim();
@@ -583,22 +585,22 @@ export class CskhService implements OnModuleInit {
     const [pageStats, inboundStatsMap, dayTotalMessageMap, oauth] = await Promise.all([
       pageIds.length
         ? this.loadPageStatsBundleCached(tenantId, pageIds, {
-            allowStaleDuringBackfill: true,
-          })
+          allowStaleDuringBackfill: true,
+        })
         : Promise.resolve({
-            convMap: new Map<string, number>(),
-            unreadMap: new Map<string, number>(),
-            messageMap: new Map<string, number>(),
-          }),
+          convMap: new Map<string, number>(),
+          unreadMap: new Map<string, number>(),
+          messageMap: new Map<string, number>(),
+        }),
       inboundMonth && pageIds.length
         ? this.loadPageInboundMessageStats(inboundMonth, pageIds)
         : inboundDate && pageIds.length
           ? this.loadPageInboundMessageStatsForRangeCached(
-              tenantId,
-              inboundDate,
-              inboundDate,
-              pageIds,
-            )
+            tenantId,
+            inboundDate,
+            inboundDate,
+            pageIds,
+          )
           : Promise.resolve(new Map<string, number>()),
       inboundDate && pageIds.length
         ? this.loadPageDayTotalMessageStatsForRange(inboundDate, inboundDate, pageIds)
@@ -630,8 +632,8 @@ export class CskhService implements OnModuleInit {
       } | null) ?? null;
     const oauthSyncStatus =
       oauthMeta?.syncStatus === 'running' ||
-      oauthMeta?.syncStatus === 'failed' ||
-      oauthMeta?.syncStatus === 'done'
+        oauthMeta?.syncStatus === 'failed' ||
+        oauthMeta?.syncStatus === 'done'
         ? oauthMeta.syncStatus
         : null;
     const oauthSyncError = oauthMeta?.syncError ?? null;
@@ -652,14 +654,14 @@ export class CskhService implements OnModuleInit {
       inboundDate && pageIds.length
         ? await this.loadPageAdSpendCache(inboundDate, pageIds, tenantId)
         : new Map<string, {
-            spend: number | null;
-            currency: string | null;
-            messagingConversations: number | null;
-            costPerConversation: number | null;
-            adAccountName: string | null;
-            unavailableReason: string | null;
-            syncedAt: Date | null;
-          }>();
+          spend: number | null;
+          currency: string | null;
+          messagingConversations: number | null;
+          costPerConversation: number | null;
+          adAccountName: string | null;
+          unavailableReason: string | null;
+          syncedAt: Date | null;
+        }>();
 
     let adSpendSyncPending = false;
     if (inboundDate && pageIds.length) {
@@ -671,8 +673,8 @@ export class CskhService implements OnModuleInit {
       );
     }
 
-  let totalAdSpend = 0;
-  let adSpendCurrency: string | null = null;
+    let totalAdSpend = 0;
+    let adSpendCurrency: string | null = null;
 
     return {
       pages: rows.map((row) => {
@@ -700,38 +702,40 @@ export class CskhService implements OnModuleInit {
           if (!adSpendCurrency && ad.currency) adSpendCurrency = ad.currency;
         }
         return {
-        pageId: row.pageId,
-        pageName: row.pageName,
-        enabled: row.enabled,
-        updatedAt: row.updatedAt,
-        pagePictureUrl: this.pagePictureUrl(row.metadata),
-        conversationCount: convCountMap.get(row.pageId) || 0,
-        messageCount: totalMessageStatsMap.get(row.pageId) || 0,
-        unreadConversationCount: unreadCountMap.get(row.pageId) || 0,
-        inboundMessageCount: inboundCount,
-        adSpend: ad?.spend ?? null,
-        adSpendCurrency: ad?.currency ?? null,
-        adMessagingConversations: ad?.messagingConversations ?? null,
-        adCostPerConversation,
-        adAccountName: ad?.adAccountName ?? null,
-        adSpendUnavailableReason: ad?.unavailableReason ?? null,
-        adSpendSyncedAt: ad?.syncedAt?.toISOString() ?? null,
-      };
+          pageId: row.pageId,
+          pageName: row.pageName,
+          enabled: row.enabled,
+          updatedAt: row.updatedAt,
+          pagePictureUrl: this.pagePictureUrl(row.metadata),
+          managerName: row.managerName,
+          region: row.region,
+          conversationCount: convCountMap.get(row.pageId) || 0,
+          messageCount: totalMessageStatsMap.get(row.pageId) || 0,
+          unreadConversationCount: unreadCountMap.get(row.pageId) || 0,
+          inboundMessageCount: inboundCount,
+          adSpend: ad?.spend ?? null,
+          adSpendCurrency: ad?.currency ?? null,
+          adMessagingConversations: ad?.messagingConversations ?? null,
+          adCostPerConversation,
+          adAccountName: ad?.adAccountName ?? null,
+          adSpendUnavailableReason: ad?.unavailableReason ?? null,
+          adSpendSyncedAt: ad?.syncedAt?.toISOString() ?? null,
+        };
       }),
       inboundMonth: inboundMonth
         ? {
-            month: inboundMonth,
-            totalInbound: Array.from(inboundStatsMap.values()).reduce((sum, n) => sum + n, 0),
-          }
+          month: inboundMonth,
+          totalInbound: Array.from(inboundStatsMap.values()).reduce((sum, n) => sum + n, 0),
+        }
         : undefined,
       inboundDay: inboundDate
         ? {
-            date: inboundDate,
-            totalInbound: Array.from(inboundStatsMap.values()).reduce((sum, n) => sum + n, 0),
-            totalAdSpend: totalAdSpend > 0 ? totalAdSpend : null,
-            adSpendCurrency,
-            adSpendSyncPending,
-          }
+          date: inboundDate,
+          totalInbound: Array.from(inboundStatsMap.values()).reduce((sum, n) => sum + n, 0),
+          totalAdSpend: totalAdSpend > 0 ? totalAdSpend : null,
+          adSpendCurrency,
+          adSpendSyncPending,
+        }
         : undefined,
       statsMeta: inboundMonth
         ? { inboundMonthStats: true as const, requestedMonth: inboundMonth, buildTag: 'inbound-month-v1' }
@@ -773,8 +777,8 @@ export class CskhService implements OnModuleInit {
       } | null) ?? null;
     const oauthSyncStatus =
       oauthMeta?.syncStatus === 'running' ||
-      oauthMeta?.syncStatus === 'failed' ||
-      oauthMeta?.syncStatus === 'done'
+        oauthMeta?.syncStatus === 'failed' ||
+        oauthMeta?.syncStatus === 'done'
         ? oauthMeta.syncStatus
         : null;
     const cachedAdCount = Array.isArray(oauthMeta?.adAccounts) ? oauthMeta.adAccounts.length : 0;
@@ -1763,7 +1767,7 @@ export class CskhService implements OnModuleInit {
     const filter =
       pageIds?.length ?
         Prisma.sql`WHERE c.page_id IN (${Prisma.join(pageIds)})`
-      : Prisma.empty;
+        : Prisma.empty;
     await this.prisma.$executeRaw`
       INSERT INTO cskh_page_message_totals (
         page_id, message_count, conversation_count, unread_conversation_count, refreshed_at
@@ -2562,9 +2566,9 @@ export class CskhService implements OnModuleInit {
       where: tenantId ? { type: 'monitor', status: 'done', tenantId } : { type: 'monitor', status: 'done' },
       orderBy: { finishedAt: 'desc' },
       include: {
-        monitorItems: { 
-          where: tenantId ? { needsReply: true, tenantId } : { needsReply: true }, 
-          orderBy: { updatedAt: 'desc' } 
+        monitorItems: {
+          where: tenantId ? { needsReply: true, tenantId } : { needsReply: true },
+          orderBy: { updatedAt: 'desc' }
         },
       },
     });
@@ -3060,13 +3064,13 @@ export class CskhService implements OnModuleInit {
             const fromName = dbMsg.direction === 'outbound' ? 'Staff' : 'Customer';
             const attachments = dbMsg.attachmentUrl
               ? {
-                  data: [
-                    {
-                      url: dbMsg.attachmentUrl,
-                      type: dbMsg.messageType || 'text',
-                    },
-                  ],
-                }
+                data: [
+                  {
+                    url: dbMsg.attachmentUrl,
+                    type: dbMsg.messageType || 'text',
+                  },
+                ],
+              }
               : undefined;
 
             return {
@@ -3314,7 +3318,7 @@ export class CskhService implements OnModuleInit {
                   usingDb = true;
                   this.logger.warn(
                     `[CskhService] Inbox DB không có hội thoại cho Page ${pageName} (${rangeLabel}). ` +
-                      `Chạy "Quét đầy đủ" ở tab Kênh trước khi chấm. Không quét API.`,
+                    `Chạy "Quét đầy đủ" ở tab Kênh trước khi chấm. Không quét API.`,
                   );
                 }
               }
@@ -3356,8 +3360,8 @@ export class CskhService implements OnModuleInit {
 
               this.logger.log(
                 `Audit job ${jobId.slice(0, 8)}: Page ${pageName} — ${rangeLabel}: chấm ${pageMatchedCount} cuộc mới` +
-                  (cap > 0 ? ` (giới hạn ${cap})` : '') +
-                  `, bỏ qua ${skippedOnPage} đã chấm`,
+                (cap > 0 ? ` (giới hạn ${cap})` : '') +
+                `, bỏ qua ${skippedOnPage} đã chấm`,
               );
 
               await reportFetchProgress(
@@ -4287,5 +4291,40 @@ export class CskhService implements OnModuleInit {
     const result = { totalConversations, totalMessages };
     this.dashboardHeavyCountsCache.set(cacheKey, { at: Date.now(), data: result });
     return result;
+  }
+
+  async getEmployees(tenantId?: string) {
+    const users = await this.prisma.user.findMany({
+      where: {
+        tenantId: tenantId || undefined,
+        isActive: true,
+        NOT: {
+          roles: {
+            has: 'admin'
+          }
+        }
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        avatarUrl: true,
+        roles: true,
+        createdAt: true,
+      }
+    });
+    return users.map(u => ({
+      id: u.id.toString(),
+      name: u.name || u.email.split('@')[0],
+      email: u.email,
+      avataUrl: u.avatarUrl,
+      roleName: u.roles.includes('sales' as any) ? 'Sale / CSKH'
+        : u.roles.includes('store_manager' as any) ? 'Quản lý'
+          : u.roles.includes('warehouse_staff' as any) ? 'Nhân viên kho'
+            : u.roles.includes('purchasing' as any) ? 'Thu mua'
+              : 'Nhân viên',
+      roles: u.roles,
+      createdAt: u.createdAt
+    }))
   }
 }

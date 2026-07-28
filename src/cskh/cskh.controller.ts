@@ -229,6 +229,12 @@ export class CskhController {
     return this.cskh.deletePage(pageId, user.tenantId || undefined);
   }
 
+  @Get('employees')
+  @UseGuards(JwtAuthGuard)
+  getEmployees(@CurrentUser() user: User) {
+    return this.cskh.getEmployees(user.tenantId || undefined);
+  }
+
   @Post('oauth/refresh')
   @UseGuards(JwtAuthGuard)
   refreshOAuth(@CurrentUser() user: User) {

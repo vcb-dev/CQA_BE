@@ -245,30 +245,107 @@ async function fetchSapoListPages(input) {
     params = {},
     onPage,
     delayMs = 50,
-    maxPages = 500,
+    /** 'min' = ascending lists (customers); 'max' = newest-first; null = single 30k window */
+    dateCursor = null,
   } = input;
 
-  for (let page = 1; page <= maxPages; page++) {
-    if (page * 250 > 30000) {
-      log(
-        JSON.stringify({
-          warn: 'hit Sapo 30000 window — stop page walk',
-          path,
-          page,
-        }),
-      );
+  let cursor = null;
+  let windows = 0;
+
+  while (windows < 50) {
+    windows++;
+    let windowFetched = 0;
+    let edgeDate = null; // newest for min, oldest for max
+    let hitEnd = false;
+
+    for (let page = 1; page <= SAPO_MAX_PAGE_WINDOW; page++) {
+      const dateParams = {};
+      if (dateCursor === 'min' && cursor) dateParams.created_on_min = cursor;
+      if (dateCursor === 'max' && cursor) dateParams.created_on_max = cursor;
+
+      let batch;
+      try {
+        const { data } = await axios.get(`https://${host}${path}`, {
+          auth,
+          params: { limit: 250, page, ...params, ...dateParams },
+          timeout: 90_000,
+        });
+        batch = data[rootKey] || [];
+      } catch (e) {
+        if (e.response?.status === 422) {
+          hitEnd = true;
+          break;
+        }
+        throw e;
+      }
+
+      if (!batch.length) {
+        hitEnd = true;
+        break;
+      }
+
+      windowFetched += batch.length;
+      for (const item of batch) {
+        const t = item.created_on || item.created_at || item.published_on;
+        if (!t) continue;
+        if (dateCursor === 'min') {
+          if (!edgeDate || t > edgeDate) edgeDate = t;
+        } else if (dateCursor === 'max') {
+          if (!edgeDate || t < edgeDate) edgeDate = t;
+        }
+      }
+
+      await onPage({
+        batch,
+        page,
+        window: { cursor, n: windows, dateCursor },
+      });
+
+      if (batch.length < 250) {
+        hitEnd = true;
+        break;
+      }
+      if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+    }
+
+    if (!dateCursor) {
+      if (!hitEnd && windowFetched >= SAPO_MAX_PAGE_WINDOW * 250) {
+        log(
+          JSON.stringify({
+            warn: 'hit Sapo 30000 window — pass dateCursor min/max to continue',
+            path,
+          }),
+        );
+      }
       break;
     }
-    const { data } = await axios.get(`https://${host}${path}`, {
-      auth,
-      params: { limit: 250, page, ...params },
-      timeout: 90_000,
-    });
-    const batch = data[rootKey] || [];
-    if (!batch.length) break;
-    await onPage({ batch, page });
-    if (batch.length < 250) break;
-    if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+
+    if (hitEnd && windowFetched < SAPO_MAX_PAGE_WINDOW * 250) break;
+    if (!edgeDate) break;
+
+    const next =
+      dateCursor === 'min'
+        ? new Date(new Date(edgeDate).getTime() + 1000).toISOString()
+        : new Date(new Date(edgeDate).getTime() - 1000).toISOString();
+
+    if (
+      cursor &&
+      ((dateCursor === 'min' && next <= cursor) ||
+        (dateCursor === 'max' && next >= cursor))
+    ) {
+      break;
+    }
+
+    cursor = next;
+    log(
+      JSON.stringify({
+        path,
+        nextWindow: windows + 1,
+        dateCursor,
+        cursor,
+        windowFetched,
+      }),
+    );
   }
 }
 

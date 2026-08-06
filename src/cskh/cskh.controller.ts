@@ -41,6 +41,8 @@ import { SapoOrderService } from './sapo/sapo-order.service';
 import { SapoFullSyncService, type SapoSyncResource } from './sapo/sapo-full-sync.service';
 import { SapoDisplayService } from './sapo/sapo-display.service';
 import { ProductAnalyticsService } from './product-analytics.service';
+import { OmsCatalogService } from './oms/oms-catalog.service';
+import { OmsProductOperationsService } from './oms/oms-product-operations.service';
 import { CustomerAnalyticsService } from './customer-analytics.service';
 import { isSapoApiReady } from './sapo/sapo-api.util';
 import { ConfigService } from '@nestjs/config';
@@ -69,6 +71,8 @@ export class CskhController {
     private readonly sapoFullSync: SapoFullSyncService,
     private readonly sapoDisplay: SapoDisplayService,
     private readonly productAnalytics: ProductAnalyticsService,
+    private readonly omsCatalog: OmsCatalogService,
+    private readonly omsProductOperations: OmsProductOperationsService,
     private readonly customerAnalytics: CustomerAnalyticsService,
     private readonly jwtService: JwtService,
     private readonly usersService: UsersService,
@@ -464,6 +468,41 @@ export class CskhController {
       page: page ? Number(page) : 1,
       pageSize: pageSize ? Number(pageSize) : 20,
     });
+  }
+
+  /** Báo cáo "Sản phẩm — Vận hành theo tháng" — proxy trực tiếp từ OMS, không lưu DB. */
+  @Get('products/operations')
+  @UseGuards(JwtAuthGuard)
+  getProductsOperations(
+    @Query('month') month?: string,
+    @Query('categoryId') categoryId?: string,
+    @Query('locationId') locationId?: string,
+    @Query('topLimit') topLimit?: string,
+    @Query('stockoutPage') stockoutPage?: string,
+    @Query('stockoutPageSize') stockoutPageSize?: string,
+  ) {
+    return this.omsProductOperations.getDashboard({
+      month,
+      categoryId: categoryId || undefined,
+      locationId: locationId || undefined,
+      topLimit: topLimit ? Number(topLimit) : undefined,
+      stockoutPage: stockoutPage ? Number(stockoutPage) : undefined,
+      stockoutPageSize: stockoutPageSize ? Number(stockoutPageSize) : undefined,
+    });
+  }
+
+  /** Danh mục sản phẩm (OMS) — dùng cho dropdown filter tab Sản phẩm. */
+  @Get('oms/categories')
+  @UseGuards(JwtAuthGuard)
+  getOmsCategories() {
+    return this.omsCatalog.getCategories();
+  }
+
+  /** Kho hàng (OMS) — dùng cho dropdown filter tab Sản phẩm. */
+  @Get('oms/locations')
+  @UseGuards(JwtAuthGuard)
+  getOmsLocations() {
+    return this.omsCatalog.getLocations();
   }
 
   /** Danh sách khách đã chốt đơn inbox — filter theo kênh (page) / trạng thái hội thoại. */

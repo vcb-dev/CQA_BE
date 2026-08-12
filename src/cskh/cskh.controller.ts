@@ -227,26 +227,6 @@ export class CskhController {
     return this.cskh.setPageEnabled(pageId, Boolean(body.enabled), user.tenantId || undefined);
   }
 
-  /**
-   * API Cập nhật thông tin chi tiết kênh CSKH Facebook (Người quản lý, Vùng, Nhóm/Team, Bật/Tắt).
-   */
-  @Patch('pages/:pageId/info')
-  @UseGuards(JwtAuthGuard)
-  updatePageInfo(
-    @CurrentUser() user: User,
-    @Param('pageId') pageId: string,
-    @Body()
-    body: {
-      managerName?: string | null;
-      region?: string | null;
-      team?: string | null;
-      enabled?: boolean;
-      pageName?: string;
-    },
-  ) {
-    return this.cskh.updatePageChannelInfo(pageId, body, user.tenantId || undefined);
-  }
-
   @Delete('pages/:pageId')
   @UseGuards(JwtAuthGuard)
   deletePage(@CurrentUser() user: User, @Param('pageId') pageId: string) {

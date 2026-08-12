@@ -2064,60 +2064,6 @@ export class CskhService implements OnModuleInit {
     return { ok: true, pageId };
   }
 
-  /**
-   * Cập nhật thông tin chi tiết kênh CSKH Facebook (Người quản lý, Vùng, Nhóm/Team, Bật/Tắt).
-   * @param pageId ID của Fanpage Facebook
-   * @param data Dữ liệu cần cập nhật (managerName, region, team, enabled, pageName)
-   * @param tenantId ID của tenant nếu có
-   */
-  async updatePageChannelInfo(
-    pageId: string,
-    data: {
-      managerName?: string | null;
-      region?: string | null;
-      team?: string | null;
-      enabled?: boolean;
-      pageName?: string;
-    },
-    tenantId?: string,
-  ) {
-    const pid = pageId?.trim();
-    if (!pid) {
-      throw new BadRequestException('pageId không được để trống');
-    }
-
-    const where = tenantId ? { pageId: pid, tenantId } : { pageId: pid };
-
-    const existing = await this.prisma.facebookCskhConfig.findFirst({ where });
-    if (!existing) {
-      throw new NotFoundException('Không tìm thấy kênh hoặc bạn không có quyền cập nhật');
-    }
-
-    const updateData: Prisma.FacebookCskhConfigUpdateInput = {};
-    if (data.managerName !== undefined) updateData.managerName = data.managerName?.trim() || null;
-    if (data.region !== undefined) updateData.region = data.region?.trim() || null;
-    if (data.team !== undefined) updateData.team = data.team?.trim() || null;
-    if (data.enabled !== undefined) updateData.enabled = Boolean(data.enabled);
-    if (data.pageName !== undefined) updateData.pageName = data.pageName?.trim() || null;
-
-    const updated = await this.prisma.facebookCskhConfig.update({
-      where: { id: existing.id },
-      data: updateData,
-      select: {
-        id: true,
-        pageId: true,
-        pageName: true,
-        managerName: true,
-        region: true,
-        team: true,
-        enabled: true,
-        updatedAt: true,
-      },
-    });
-
-    return updated;
-  }
-
   private async exchangeCodeForUserToken(code: string): Promise<string> {
     const redirectUri = getFacebookOAuthRedirectUri();
     const shortRes = await axios.get(`${GRAPH_BASE}/oauth/access_token`, {

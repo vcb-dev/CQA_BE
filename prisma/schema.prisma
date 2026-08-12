@@ -1176,7 +1176,8 @@ model FacebookCskhConfig {
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
   managerName String? @map("manager_name") @db.VarChar
-  region      String? @db.VarChar   
+  region      String? @db.VarChar
+  team        String? @db.VarChar
   @@map("facebook_cskh_configs")
 }
 

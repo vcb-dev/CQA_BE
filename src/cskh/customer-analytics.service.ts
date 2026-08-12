@@ -220,29 +220,6 @@ export class CustomerAnalyticsService {
       if (!existing.address && order.address?.trim()) existing.address = order.address.trim();
     }
 
-    if (aggMap.size === 0) {
-      const realCustomers = await this.prisma.customer.findMany({
-        orderBy: { createdAt: 'desc' },
-        take: 200,
-      });
-
-      for (const c of realCustomers) {
-        const key = `cust:${c.id}`;
-        aggMap.set(key, {
-          key,
-          conversationId: null,
-          participantPsid: null,
-          customerName: [c.firstName, c.lastName].filter(Boolean).join(' ') || c.email || 'Khách hàng',
-          phone: c.phone || null,
-          address: null,
-          orderCount: 1,
-          totalSpend: 0,
-          lastOrderAt: c.createdAt || new Date(),
-          firstOrderAt: c.createdAt || new Date(),
-        });
-      }
-    }
-
     // Channel options from all orders (ignore page/status/q filters)
     const channelSeen = new Map<string, Set<string>>();
     const channelNames = new Map<string, string>();

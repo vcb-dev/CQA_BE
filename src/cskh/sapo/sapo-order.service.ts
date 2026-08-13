@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SapoCatalogDbService } from './sapo-catalog-db.service';
 import { SapoProductService } from './sapo-product.service';
+import { PancakeService } from '../../pancake/pancake.service';
 
 export type CreateSapoOrderInput = {
   customerName: string;
@@ -30,6 +31,7 @@ export class SapoOrderService {
     private readonly prisma: PrismaService,
     private readonly catalogDb: SapoCatalogDbService,
     private readonly sapoProducts: SapoProductService,
+    private readonly pancake: PancakeService,
   ) {}
 
   isConfigured(): boolean {
@@ -145,6 +147,27 @@ export class SapoOrderService {
     await this.catalogDb.refreshCount();
 
     this.logger.log(`Inbox order #${result.orderNumber} total=${result.totalPrice}`);
+
+    // Nâng Pancake lead → customer khi có đơn (match psid / SĐT)
+    try {
+      const upgraded = await this.pancake.upgradeLeadFromOrder({
+        phone: input.phone,
+        address: input.address,
+        customerName: input.customerName,
+        psid: input.psid,
+        conversationId: input.conversationId,
+        orderRef: `CQA-${result.orderNumber}`,
+      });
+      if (upgraded.upgraded > 0) {
+        this.logger.log(
+          `Linked inbox order #${result.orderNumber} → ${upgraded.upgraded} pancake lead(s)`,
+        );
+      }
+    } catch (e) {
+      this.logger.warn(
+        `upgrade pancake lead from order failed: ${(e as Error).message}`,
+      );
+    }
 
     return {
       orderId: result.orderNumber,

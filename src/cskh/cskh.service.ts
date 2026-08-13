@@ -1229,12 +1229,12 @@ export class CskhService implements OnModuleInit {
         return picked;
       }
     }
-
+      
     const fallback = candidates.find((s) => s.userAccessToken) ?? null;
     this.oauthSessionForPageCache.set(cacheKey, { at: Date.now(), session: fallback });
     return fallback;
   }
-
+  
   /** Nạp hint QC Page từ DB → RAM (sau restart chỉ cần 1 API insights). */
   private async ensurePageAdHintHydrated(pageId: string): Promise<void> {
     if (this.ads.getPageAdHint(pageId)) return;
@@ -4218,12 +4218,36 @@ export class CskhService implements OnModuleInit {
     }
 
     const whereTenant = tenantId ? { tenantId } : {};
+    const empty = {
+      totalPages: 0,
+      enabledPages: 0,
+      totalAudits: 0,
+      avgScore: 0,
+      recentAudits: [] as Array<{
+        id: string;
+        agentName: string | null;
+        customerName: string | null;
+        channel: string | null;
+        score: number | null;
+        createdAt: Date;
+      }>,
+      latestJobs: [] as Array<{
+        id: string;
+        type: string;
+        status: string;
+        startedAt: Date;
+        finishedAt: Date | null;
+      }>,
+    };
 
-    const [totalPages, enabledPages, totalAudits, avgScoreResult, recentAudits, latestJobs] =
-      await Promise.all([
+    try {
+      // Chia 2 batch — tránh 6 query song song chiếm hết session pool (15).
+      const [totalPages, enabledPages, totalAudits] = await Promise.all([
         this.prisma.facebookCskhConfig.count({ where: whereTenant }),
         this.prisma.facebookCskhConfig.count({ where: { ...whereTenant, enabled: true } }),
         this.prisma.chatAudit.count({ where: whereTenant }),
+      ]);
+      const [avgScoreResult, recentAudits, latestJobs] = await Promise.all([
         this.prisma.chatAudit.aggregate({
           where: whereTenant,
           _avg: { score: true },
@@ -4255,19 +4279,26 @@ export class CskhService implements OnModuleInit {
         }),
       ]);
 
-    const avgScore = avgScoreResult._avg.score ? Math.round(avgScoreResult._avg.score) : 0;
-
-    const result = {
-      totalPages,
-      enabledPages,
-      totalAudits,
-      avgScore,
-      recentAudits,
-      latestJobs,
-    };
-
-    this.dashboardStatsCache.set(cacheKey, { at: Date.now(), data: result });
-    return result;
+      const avgScore = avgScoreResult._avg.score ? Math.round(avgScoreResult._avg.score) : 0;
+      const result = {
+        totalPages,
+        enabledPages,
+        totalAudits,
+        avgScore,
+        recentAudits,
+        latestJobs,
+      };
+      this.dashboardStatsCache.set(cacheKey, { at: Date.now(), data: result });
+      return result;
+    } catch (e) {
+      const msg = (e as Error)?.message || '';
+      if (/EMAXCONNSESSION|max clients reached|connection pool|Timed out fetching/i.test(msg)) {
+        this.logger.warn(`getDashboardStats pool busy — ${cached ? 'serving stale cache' : 'empty fallback'}`);
+        if (cached) return cached.data;
+        return empty;
+      }
+      throw e;
+    }
   }
 
   /** COUNT hội thoại/tin nhắn — cache lâu, tách khỏi stats nhanh để Tổng quan load ngay. */

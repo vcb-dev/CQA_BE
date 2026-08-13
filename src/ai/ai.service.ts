@@ -116,8 +116,11 @@ export class AiService {
         select: { id: true },
       });
     } else if (agentName?.trim() && agentName.trim() !== 'Nhân viên') {
+      const q = agentName.trim();
       user = await this.prisma.user.findFirst({
-        where: { name: { contains: agentName.trim(), mode: 'insensitive' } },
+        where: {
+          name: { contains: q, mode: 'insensitive' },
+        },
         select: { id: true },
       });
     }

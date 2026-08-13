@@ -11,6 +11,7 @@ import jwtConfig from './config/jwt.config';
 import { PrismaModule } from './prisma/prisma.module';
 import { CskhModule } from './cskh/cskh.module';
 import { AiModule } from './ai/ai.module';
+import { PancakeModule } from './pancake/pancake.module';
 import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
@@ -40,6 +41,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     UsersModule,
     CskhModule,
     AiModule,
+    PancakeModule,
   ],
   controllers: [AppController],
   providers: [

@@ -64,9 +64,10 @@ function resolvePrismaConnectionLimit(): number {
     return envOverride;
   }
 
+  // Supabase session pooler thường pool_size=15 — để reserve cho dashboard/scripts/hot-reload.
   const dbPoolSize = Number(process.env.CSKH_DB_POOL_SIZE || 15);
-  const reserve = Number(process.env.CSKH_DB_POOL_RESERVE || 4);
-  const available = Math.max(4, dbPoolSize - reserve);
+  const reserve = Number(process.env.CSKH_DB_POOL_RESERVE || 6);
+  const available = Math.max(3, dbPoolSize - reserve);
 
   if (getCskhRunMode() === 'worker') {
     const worker = Number(process.env.CSKH_PRISMA_WORKER_CONNECTIONS || 2);
@@ -76,10 +77,10 @@ function resolvePrismaConnectionLimit(): number {
   const workerBudget = Number(process.env.CSKH_PRISMA_WORKER_CONNECTIONS || 2);
   const apiEnv = Number(process.env.CSKH_PRISMA_API_CONNECTIONS);
   if (Number.isFinite(apiEnv) && apiEnv > 0) {
-    return Math.min(apiEnv, available - workerBudget);
+    return Math.max(2, Math.min(apiEnv, available - workerBudget));
   }
-  // API: đủ cho webhook + sync nhẹ; worker giữ 2 slot — tổng < Supabase pool_size (15).
-  return Math.min(6, available - workerBudget);
+  // API local/dev: 3 connection — tránh EMAXCONNSESSION khi nest --watch + FE gọi nhiều API.
+  return Math.min(3, Math.max(2, available - workerBudget));
 }
 
 @Injectable()
@@ -93,11 +94,15 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
     const connectionLimit = resolvePrismaConnectionLimit();
     const limit = `connection_limit=${connectionLimit}`;
+    const poolTimeout = 'pool_timeout=20';
     if (url) {
       if (!url.includes('connection_limit=')) {
         url += (url.includes('?') ? '&' : '?') + limit;
       } else {
         url = url.replace(/connection_limit=\d+/, limit);
+      }
+      if (!url.includes('pool_timeout=')) {
+        url += (url.includes('?') ? '&' : '?') + poolTimeout;
       }
     }
 

@@ -32,7 +32,6 @@ async function main() {
         ...(tenant?.id ? { tenantId: tenant.id } : {}),
       },
     });
-
     console.log(`OK: user id=${user.id} email=${user.email} tenant=${user.tenantId ?? 'none'}`);
     console.log('Đăng nhập: tài khoản user1 (hoặc user1@cqa.vn), mật khẩu đã set.');
   } finally {

@@ -200,13 +200,13 @@ export class CskhInboxLabelsService {
         isActive: true,
         ...(tenantId ? { tenantId } : {}),
       },
-      select: { id: true, name: true },
+      select: { id: true, name: true, email: true },
       orderBy: { name: 'asc' },
     });
 
     let order = 100;
     for (const user of users) {
-      const name = user.name?.trim() || `NV #${user.id}`;
+      const name = user.name?.trim() || user.email?.trim() || `NV #${user.id}`;
       await this.upsertStaffLabel(tenantId, user.id, name, this.staffColor(user.id), order++);
     }
     this.labelsEnsuredAt.set(cacheKey, Date.now());
@@ -298,7 +298,7 @@ export class CskhInboxLabelsService {
     ]);
     return rows.map((row) => ({
       userId: Number(row.user.id),
-      fullName: row.user.name ?? '',
+      fullName: row.user.name?.trim() || '',
       avatarUrl: row.user.avatarUrl,
       viewedAt: row.viewedAt.toISOString(),
       hasChot: chotUserIds.has(Number(row.user.id)),
@@ -411,7 +411,7 @@ export class CskhInboxLabelsService {
       const chotUsers = assignerMap.get(row.conversationId) ?? new Set<number>();
       list.push({
         userId: Number(row.user.id),
-        fullName: row.user.name ?? '',
+        fullName: row.user.name?.trim() || '',
         avatarUrl: row.user.avatarUrl,
         viewedAt: row.viewedAt.toISOString(),
         hasChot: chotUsers.has(Number(row.user.id)),

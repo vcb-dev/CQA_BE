@@ -1,66 +1,93 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
+import { ExpressAdapter } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import * as fs from 'fs';
 import * as path from 'path';
+import express from 'express';
+import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { rawBody: true });
-  app.use(cookieParser());
   const logger = new Logger('Bootstrap');
+
+  // ─── CORS trên Express app gốc (trước Nest) ──────────────────────────────────
+  // axios withCredentials=true cần Allow-Credentials: true trên cả OPTIONS preflight.
+  const frontendUrl = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
+  const allowedOrigins = [
+    ...(process.env.ALLOWED_ORIGINS
+      ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
+      : []),
+    ...(frontendUrl ? [frontendUrl] : []),
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+  ];
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  if (isProduction && allowedOrigins.filter((o) => !o.includes('localhost')).length === 0) {
+    logger.error('❌ CRITICAL SECURITY WARNING: ALLOWED_ORIGINS is not defined in production.');
+  }
+
+  const server = express();
+  server.use(
+    cors({
+      origin(origin, callback) {
+        if (!origin) {
+          callback(null, true);
+          return;
+        }
+        if (!isProduction || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+          callback(null, origin);
+          return;
+        }
+        logger.warn(`CORS blocked request from origin: ${origin}`);
+        callback(null, false);
+      },
+      credentials: true,
+      methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'Accept',
+        'Origin',
+        'X-Requested-With',
+      ],
+      optionsSuccessStatus: 204,
+    }),
+  );
+
+  // Probe / browser mở http://localhost:PORT/ → không đi vào Nest (tránh spam 404 ERROR)
+  const apiPrefix = process.env.API_PREFIX || 'api/v1';
+  server.get('/', (_req, res) => {
+    res.status(200).json({
+      ok: true,
+      service: 'cqa-be',
+      api: `/${apiPrefix}`,
+      docs: '/docs',
+      health: `/${apiPrefix}/health`,
+    });
+  });
+
+  const app = await NestFactory.create(AppModule, new ExpressAdapter(server), {
+    rawBody: true,
+  });
+
+  app.use(cookieParser());
 
   // ─── Security Headers (Helmet) ───────────────────────────────────────────────
   app.use(
     helmet({
       contentSecurityPolicy: false, // Swagger docs need inline JS/CSS; disable CSP as BE is an API
+      // FE khác origin (Vite :5173) cần đọc response API
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
     }),
   );
 
   // ─── Global Prefix ───────────────────────────────────────────────────────────
-  const apiPrefix = process.env.API_PREFIX || 'api/v1';
   app.setGlobalPrefix(apiPrefix);
-
-  // ─── CORS ─────────────────────────────────────────────────────────────────────
-  const allowedOrigins = process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
-    : [];
-  const isProduction = process.env.NODE_ENV === 'production';
-
-  if (isProduction && allowedOrigins.length === 0) {
-    logger.error('❌ CRITICAL SECURITY WARNING: ALLOWED_ORIGINS is not defined in production.');
-  }
-
-  app.enableCors({
-    origin: (requestOrigin, callback) => {
-      // Allow requests with no origin (like mobile apps, curl, etc.)
-      if (!requestOrigin) {
-        callback(null, true);
-        return;
-      }
-
-      if (!isProduction) {
-        // In development, allow any origin dynamically to support credentials
-        callback(null, true);
-        return;
-      }
-
-      // In production, check if the origin is explicitly allowed
-      const isAllowed = allowedOrigins.includes(requestOrigin) || allowedOrigins.includes('*');
-      if (isAllowed) {
-        callback(null, true);
-      } else {
-        logger.warn(`CORS blocked request from origin: ${requestOrigin}`);
-        callback(null, false);
-      }
-    },
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials: true,
-  });
 
   // ─── Global Validation Pipe ───────────────────────────────────────────────────
   app.useGlobalPipes(

@@ -79,6 +79,7 @@ export class CskhController {
     private readonly configService: ConfigService,
   ) {}
 
+
   /** OAuth — không cần JWT (redirect browser). */
   @Get('oauth/start')
   async oauthStart(
@@ -91,7 +92,6 @@ export class CskhController {
     const url = this.cskh.getOAuthStartUrl(returnUrl, tenantId);
     return res.redirect(url);
   }
-
   private async resolveOAuthTenantId(
     token: string | undefined,
     req: Request,

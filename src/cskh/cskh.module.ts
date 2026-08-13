@@ -29,9 +29,10 @@ import { RedisQueueService } from './redis/redis-queue.service';
 import { AiModule } from '../ai/ai.module';
 import { AuthModule } from '../auth/auth.module';
 import { UsersModule } from '../users/users.module';
+import { PancakeModule } from '../pancake/pancake.module';
 
 @Module({
-  imports: [AiModule, AuthModule, UsersModule],
+  imports: [AiModule, AuthModule, UsersModule, PancakeModule],
   controllers: [CskhController],
   providers: [
     CskhRedisSignalsService,

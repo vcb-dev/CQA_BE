@@ -4,13 +4,9 @@ import {
   Logger,
   NotFoundException,
   UnauthorizedException,
-  Inject,
-  forwardRef,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { RedisQueueService } from '../cskh/redis/redis-queue.service';
-import { isCskhWorkerProcess } from '../cskh/cskh-run-mode';
 import {
   PancakeClient,
   isFacebookMarketingNoise,
@@ -83,8 +79,6 @@ export class PancakeService {
     private readonly prisma: PrismaService,
     private readonly client: PancakeClient,
     private readonly ai: AiService,
-    @Inject(forwardRef(() => RedisQueueService))
-    private readonly redisQueue: RedisQueueService,
   ) {}
 
   /** Optional bootstrap from env if DB has no session yet. */
@@ -1167,10 +1161,9 @@ export class PancakeService {
       this.logger.warn(`backfill chat meta failed: ${(e as Error).message}`);
     }
 
-    // Quét nhãn chat → worker (API không giữ connection pool vì scan nặng)
-    const queuedLabel = await this.redisQueue.enqueuePancakeAutoLabel({
-      pageId,
-      tenantId: opts?.tenantId || undefined,
+    // Quét chat → tự gán nhãn follow / Đã chốt (ưu tiên lead có SĐT+địa chỉ)
+    const autoLabel = await this.scanAndAutoLabelPageLeads(pageId, {
+      tenantId: opts?.tenantId,
       maxScan: 40,
     });
 
@@ -1189,7 +1182,7 @@ export class PancakeService {
     });
 
     this.logger.log(
-      `Pancake sync DONE pageId=${pageId} fetched=${fetched} upserted=${upserted} stored=${stored} withPhone=${withPhone} withAddress=${withAddress} truncated=${truncated} autoLabelQueued=${queuedLabel}`,
+      `Pancake sync DONE pageId=${pageId} fetched=${fetched} upserted=${upserted} stored=${stored} withPhone=${withPhone} withAddress=${withAddress} truncated=${truncated} autoLabelClosed=${autoLabel.closed} autoLabelScanned=${autoLabel.scanned}`,
     );
 
     const warnings: string[] = [];
@@ -1219,13 +1212,13 @@ export class PancakeService {
       withPhoneCount: withPhone,
       withAddressCount: withAddress,
       closedCount,
-      autoLabelQueued: queuedLabel,
+      autoLabel,
       truncated,
       pageTokenRegenerated,
       warning: warnings.length ? warnings.join(' ') : null,
       note: usedConversationsFallback
-        ? `Đã đồng bộ ${upserted} lead từ hội thoại (fallback). Nhãn chat đang quét trên worker.`
-        : `Đã đồng bộ ${upserted} khách (Pancake tổng ${total ?? '?'}). Nhãn chat đang quét trên worker. Có SĐT: ${withPhone} · địa chỉ: ${withAddress}.`,
+        ? `Đã đồng bộ ${upserted} lead từ hội thoại (fallback). Quét chat: ${autoLabel.closed} Đã chốt / ${autoLabel.follow} follow (quét ${autoLabel.scanned}).`
+        : `Đã đồng bộ ${upserted} khách (Pancake tổng ${total ?? '?'}). Quét chat tự gán nhãn: ${autoLabel.closed} Đã chốt · ${autoLabel.follow} follow (quét ${autoLabel.scanned}/${autoLabel.candidates}). Có SĐT: ${withPhone} · địa chỉ: ${withAddress}.`,
     };
   }
 
@@ -1672,32 +1665,6 @@ export class PancakeService {
       ok: results.filter((r) => r.ok).length,
       failed: results.filter((r) => !r.ok).length,
       results,
-    };
-  }
-
-  /**
-   * API: xếp hàng quét nhãn cho worker. Worker gọi scanAndAutoLabelPageLeads trực tiếp.
-   */
-  async requestAutoLabelPageLeads(
-    pageId: string,
-    opts?: { tenantId?: string | null; maxScan?: number; onlyWithContact?: boolean },
-  ) {
-    if (isCskhWorkerProcess()) {
-      return this.scanAndAutoLabelPageLeads(pageId, opts);
-    }
-    const queued = await this.redisQueue.enqueuePancakeAutoLabel({
-      pageId,
-      tenantId: opts?.tenantId || undefined,
-      maxScan: opts?.maxScan,
-      onlyWithContact: opts?.onlyWithContact,
-    });
-    return {
-      queued,
-      candidates: 0,
-      scanned: 0,
-      closed: 0,
-      follow: 0,
-      errors: 0,
     };
   }
 

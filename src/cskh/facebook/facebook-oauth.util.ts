@@ -20,7 +20,14 @@ export function getFacebookAppId(): string {
 }
 
 export function getFacebookAppSecret(): string {
-  return process.env.FB_APP_SECRET?.trim() || '';
+  const raw = process.env.FB_APP_SECRET?.trim() || '';
+  if (
+    (raw.startsWith('"') && raw.endsWith('"')) ||
+    (raw.startsWith("'") && raw.endsWith("'"))
+  ) {
+    return raw.slice(1, -1).trim();
+  }
+  return raw;
 }
 
 export function getFacebookOAuthRedirectUri(): string {

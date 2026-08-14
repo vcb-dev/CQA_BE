@@ -77,6 +77,14 @@ export class PancakeController {
     });
   }
 
+  /** Đồng bộ tuần tự mọi kênh chat đã activated (FB / IG / TikTok…). */
+  @Post('sync-all')
+  syncAll(@CurrentUser() user: User) {
+    return this.pancake.syncAllPages({
+      tenantId: user.tenantId || undefined,
+    });
+  }
+
   /** Quét hội thoại → tự gán follow / Đã chốt theo SĐT·địa chỉ + tín hiệu CK/đơn trong chat. */
   @Post('pages/:pageId/auto-label')
   autoLabel(
@@ -166,6 +174,17 @@ export class PancakeController {
     return this.pancake.leadPreview(pageId, conversationId, {
       tenantId: user.tenantId || undefined,
     });
+  }
+
+  /** Dịch tin Pancake (giữ nguyên bản gốc) → tiếng Việt. */
+  @Post('translate')
+  translateChat(
+    @Body()
+    body: {
+      items?: Array<{ id: string; text: string }>;
+    },
+  ) {
+    return this.pancake.translateChatItems(body.items ?? []);
   }
 }
 

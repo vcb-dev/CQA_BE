@@ -2923,6 +2923,25 @@
         ]
       }
     },
+    "/api/v1/pancake/sync-all": {
+      "post": {
+        "operationId": "PancakeController_syncAll",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "pancake"
+        ]
+      }
+    },
     "/api/v1/pancake/pages/{pageId}/auto-label": {
       "post": {
         "operationId": "PancakeController_autoLabel",
@@ -3126,6 +3145,25 @@
         ],
         "responses": {
           "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "pancake"
+        ]
+      }
+    },
+    "/api/v1/pancake/translate": {
+      "post": {
+        "operationId": "PancakeController_translateChat",
+        "parameters": [],
+        "responses": {
+          "201": {
             "description": ""
           }
         },

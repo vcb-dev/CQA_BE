@@ -133,10 +133,10 @@ export class CskhInboxService {
   /** Tắt mặc định — tránh quét inbox nền khi mở danh sách (chỉ bật khi CSKH_INBOX_ROTATING_SYNC_ENABLED=true). */
   private readonly rotatingSyncEnabled =
     process.env.CSKH_INBOX_ROTATING_SYNC_ENABLED === 'true';
-  private readonly msgLimit = Number(process.env.CSKH_INBOX_MSG_LIMIT || 120);
+  private readonly msgLimit = Number(process.env.CSKH_INBOX_MSG_LIMIT || 250);
   /** Khi recheck audit — tải nhiều tin hơn để so khớp transcript. */
   private readonly auditRecheckMsgLimit = Number(
-    process.env.CSKH_INBOX_AUDIT_RECHECK_LIMIT || 200,
+    process.env.CSKH_INBOX_AUDIT_RECHECK_LIMIT || 400,
   );
   /** Tránh gọi Graph mỗi lần FE poll — gây nhảy UI. */
   private readonly graphRefreshCooldownMs = Number(
@@ -181,6 +181,15 @@ export class CskhInboxService {
   );
   private lastAdReferralBackfillAt = 0;
   private adReferralBackfillRunning = false;
+  /** Chặn double-click / retry gửi cùng nội dung trong vài giây. */
+  private readonly inflightSends = new Map<string, Promise<InboxMessagePayload>>();
+  /** Giới hạn kéo lịch sử Graph khi mở / cuộn lên (toàn bộ tin cũ). */
+  private readonly historyMsgLimit = Number(process.env.CSKH_INBOX_HISTORY_LIMIT || 1200);
+  private readonly lastDeepHistory = new Map<string, number>();
+  private readonly inflightDeepHistory = new Map<string, Promise<void>>();
+  private readonly deepHistoryCooldownMs = Number(
+    process.env.CSKH_INBOX_DEEP_HISTORY_COOLDOWN_MS || 600_000,
+  );
 
   /** Trạng thái tiến trình "Quét đầy đủ" — đồng bộ với cskh_job_runs (type=inbox-backfill). */
   private backfillPauseRequested = false;
@@ -549,6 +558,7 @@ export class CskhInboxService {
       id: conv.id,
       pageId: conv.pageId,
       pageName: conv.pageName,
+      fbConversationId: conv.fbConversationId,
       participantPsid: conv.participantPsid,
       customerName: conv.customerName,
       customerPictureUrl: conv.customerPictureUrl,
@@ -563,6 +573,105 @@ export class CskhInboxService {
       customerLang: conv.customerLang ?? null,
       customerLangLabel: conv.customerLangLabel ?? null,
     };
+  }
+
+  private normalizeInboxText(text: string | null | undefined): string {
+    return (text ?? '').replace(/\s+/g, ' ').trim();
+  }
+
+  private facebookSendErrorMessage(e: unknown): string {
+    const msg = String((e as Error)?.message ?? e ?? '');
+    if (/outside the allowed window|24 hour/i.test(msg)) {
+      return 'Facebook chỉ cho trả lời trong 24 giờ sau tin nhắn của khách. Đợi khách nhắn lại rồi gửi.';
+    }
+    if (/permission|not authorized|#200|pages_messaging/i.test(msg)) {
+      return 'Page chưa đủ quyền nhắn tin Messenger. Kiểm tra lại quyền pages_messaging.';
+    }
+    if (/invalid user|does not exist|#100/i.test(msg)) {
+      return 'PSID khách không hợp lệ hoặc hội thoại mất liên kết Facebook.';
+    }
+    return msg.trim() || 'Gửi tin Facebook thất bại';
+  }
+
+  private async ensureFbConversationLinked<
+    T extends {
+      id: string;
+      pageId: string;
+      fbConversationId: string | null;
+      participantPsid: string | null;
+    },
+  >(conv: T): Promise<T> {
+    if (conv.fbConversationId || !conv.participantPsid?.trim()) return conv;
+    const config = await this.prisma.facebookCskhConfig.findUnique({
+      where: { pageId: conv.pageId },
+      select: { pageAccessToken: true },
+    });
+    if (!config?.pageAccessToken) return conv;
+    const fbId = await this.graph.fetchConversationIdByPsid(
+      conv.pageId,
+      config.pageAccessToken,
+      conv.participantPsid,
+    );
+    if (!fbId) return conv;
+    await this.prisma.cskhInboxConversation.update({
+      where: { id: conv.id },
+      data: { fbConversationId: fbId },
+    });
+    return { ...conv, fbConversationId: fbId };
+  }
+
+  private runDeepHistory(
+    conv: { id: string; pageId: string; fbConversationId: string },
+    token: string,
+    tenantId?: string,
+  ): Promise<void> {
+    const existing = this.inflightDeepHistory.get(conv.id);
+    if (existing) return existing;
+    const run = this.refreshConversationMessages(
+      conv.id,
+      conv.pageId,
+      conv.fbConversationId,
+      token,
+      this.historyMsgLimit,
+      tenantId,
+      { bypassHotGuard: true },
+    )
+      .then(() => undefined)
+      .finally(() => {
+        if (this.inflightDeepHistory.get(conv.id) === run) this.inflightDeepHistory.delete(conv.id);
+      });
+    this.inflightDeepHistory.set(conv.id, run);
+    this.lastDeepHistory.set(conv.id, Date.now());
+    return run;
+  }
+
+  private async findPendingOutboundToLink(
+    conversationId: string,
+    text?: string,
+    sentAt?: Date,
+  ) {
+    const now = sentAt?.getTime() ?? Date.now();
+    const pendings = await this.prisma.cskhInboxMessage.findMany({
+      where: {
+        conversationId,
+        fbMessageId: null,
+        direction: 'outbound',
+        senderType: 'staff',
+        sentAt: {
+          gte: new Date(now - 90_000),
+          lte: new Date(now + 15_000),
+        },
+      },
+      orderBy: { sentAt: 'desc' },
+      take: 8,
+    });
+    if (!pendings.length) return null;
+    const want = this.normalizeInboxText(text);
+    if (!want) return pendings[0];
+    return (
+      pendings.find((p) => this.normalizeInboxText(p.text) === want) ??
+      (pendings.length === 1 ? pendings[0] : null)
+    );
   }
 
   private publishMessageRealtime(
@@ -1083,6 +1192,29 @@ export class CskhInboxService {
     if (text && this.graph.isStoredMessageNoise(text)) return;
 
     const sentAt = new Date(event.timestamp ?? Date.now());
+    if (isFromPage && msg.mid) {
+      const pendingMatch = await this.findPendingOutboundToLink(conv.id, text, sentAt);
+      if (pendingMatch) {
+        try {
+          const linked = await this.prisma.cskhInboxMessage.update({
+            where: { id: pendingMatch.id },
+            data: { fbMessageId: msg.mid, status: 'sent' },
+          });
+          this.publishMessageRealtime(
+            pageId,
+            conv.id,
+            [linked],
+            false,
+            conv.tenantId || undefined,
+            conv,
+          );
+          inboxRtTraceDone(trace, { conversationId: conv.id, path: 'echo-link-pending' });
+          return;
+        } catch (e) {
+          if ((e as { code?: string }).code !== 'P2002') throw e;
+        }
+      }
+    }
     const webhookAttachments = msg.attachments ?? [];
     let mediaItems: Array<{ url: string | null; messageType: string }> = [];
     let needsBackgroundMedia = false;
@@ -1929,8 +2061,10 @@ export class CskhInboxService {
     conversationId: string,
     sinceDate: Date | undefined,
     fetchLimit: number,
+    beforeDate?: Date,
   ): Promise<InboxMessageRow[]> {
     const hasSince = sinceDate && !Number.isNaN(sinceDate.getTime());
+    const hasBefore = beforeDate && !Number.isNaN(beforeDate.getTime());
     const withLegacyNulls = (
       rows: Array<{
         id: string;
@@ -1953,6 +2087,15 @@ export class CskhInboxService {
       }));
 
     try {
+      if (hasBefore) {
+        const rows = await this.prisma.cskhInboxMessage.findMany({
+          where: { conversationId, sentAt: { lt: beforeDate! } },
+          orderBy: { sentAt: 'desc' },
+          take: fetchLimit,
+          select: INBOX_MESSAGE_SELECT,
+        });
+        return rows.reverse();
+      }
       if (hasSince) {
         return await this.prisma.cskhInboxMessage.findMany({
           where: { conversationId, sentAt: { gt: sinceDate! } },
@@ -1973,6 +2116,15 @@ export class CskhInboxService {
       this.logger.warn(
         `loadConversationMessages fallback legacy select (chạy manual-inbox-translate.sql): ${(e as Error).message}`,
       );
+      if (hasBefore) {
+        const rows = await this.prisma.cskhInboxMessage.findMany({
+          where: { conversationId, sentAt: { lt: beforeDate! } },
+          orderBy: { sentAt: 'desc' },
+          take: fetchLimit,
+          select: INBOX_MESSAGE_SELECT_LEGACY,
+        });
+        return withLegacyNulls(rows.reverse());
+      }
       if (hasSince) {
         const rows = await this.prisma.cskhInboxMessage.findMany({
           where: { conversationId, sentAt: { gt: sinceDate! } },
@@ -2063,14 +2215,16 @@ export class CskhInboxService {
     limit?: number,
     tenantId?: string,
     viewerUserId?: bigint | number,
+    before?: string,
   ) {
     this.touchUserActivity();
 
     const fetchLimit = limit
-      ? Math.min(Math.max(Math.floor(limit), 10), this.auditRecheckMsgLimit)
+      ? Math.min(Math.max(Math.floor(limit), 10), this.historyMsgLimit)
       : this.msgLimit;
 
     const sinceDate = since ? new Date(since) : undefined;
+    const beforeDate = before ? new Date(before) : undefined;
 
     const labelsPromise = this.inboxLabels
       .getLabelsForConversation(conversationId)
@@ -2085,7 +2239,7 @@ export class CskhInboxService {
     try {
       [conv, messages] = await Promise.all([
         findInboxConversationById(this.prisma, conversationId, tenantId),
-        this.loadConversationMessages(conversationId, sinceDate, fetchLimit),
+        this.loadConversationMessages(conversationId, sinceDate, fetchLimit, beforeDate),
       ]);
     } catch (e) {
       if (isPrismaPoolTimeout(e)) {
@@ -2096,7 +2250,7 @@ export class CskhInboxService {
           () => null,
         );
         messages = conv
-          ? await this.loadConversationMessages(conversationId, sinceDate, fetchLimit).catch(
+          ? await this.loadConversationMessages(conversationId, sinceDate, fetchLimit, beforeDate).catch(
               () => [],
             )
           : [];
@@ -2107,13 +2261,15 @@ export class CskhInboxService {
 
     if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
 
+    conv = await this.ensureFbConversationLinked(conv);
+
     const hasSince = sinceDate && !Number.isNaN(sinceDate.getTime());
-    if (!hasSince && conv.fbConversationId && conv.participantPsid) {
-      const previewMismatch = lastMessagePreviewMismatch(conv.lastMessage, messages);
+    const hasBefore = beforeDate && !Number.isNaN(beforeDate.getTime());
+    if (conv.fbConversationId && conv.participantPsid) {
+      const previewMismatch =
+        !hasSince && !hasBefore && lastMessagePreviewMismatch(conv.lastMessage, messages);
       const needsReconcile =
-        previewMismatch ||
-        messages.length === 0 ||
-        forceRefresh;
+        !hasSince && !hasBefore && (previewMismatch || messages.length === 0 || forceRefresh);
       if (needsReconcile) {
         this.lastReconcileRead.set(conversationId, Date.now());
         const reconcileTask = this.syncReconcileConversationMessages(
@@ -2123,7 +2279,7 @@ export class CskhInboxService {
         );
         if (messages.length === 0 || previewMismatch) {
           await reconcileTask;
-          messages = await this.loadConversationMessages(conversationId, sinceDate, fetchLimit);
+          messages = await this.loadConversationMessages(conversationId, sinceDate, fetchLimit, beforeDate);
         } else {
           void reconcileTask.catch((e) => {
             this.logger.debug(
@@ -2134,36 +2290,86 @@ export class CskhInboxService {
       }
 
       const lastGraph = this.lastGraphRefresh.get(conversationId) ?? 0;
-      const mustAwaitGraph = messages.length === 0 || previewMismatch;
-      const shouldGraphRefresh = forceRefresh || mustAwaitGraph;
+      const graphCooled = Date.now() - lastGraph >= this.graphRefreshCooldownMs;
+      const needOlderFromGraph = hasBefore && messages.length < Math.min(fetchLimit, 8);
+      const mustAwaitGraph =
+        (!hasSince && !hasBefore && (messages.length === 0 || previewMismatch)) || needOlderFromGraph;
+      const shouldGraphRefresh = mustAwaitGraph || (forceRefresh && graphCooled);
+      const fbConversationId = conv.fbConversationId;
 
-      if (shouldGraphRefresh) {
-        this.lastGraphRefresh.set(conversationId, Date.now());
+      if ((shouldGraphRefresh || needOlderFromGraph) && fbConversationId) {
         const config = await this.prisma.facebookCskhConfig.findUnique({
           where: { pageId: conv.pageId },
           select: { pageAccessToken: true },
         });
         if (config?.pageAccessToken) {
-          const refreshTask = this.refreshConversationMessages(
-            conv.id,
-            conv.pageId,
-            conv.fbConversationId!,
-            config.pageAccessToken,
-            fetchLimit,
-            tenantId,
-            { bypassHotGuard: mustAwaitGraph || forceRefresh },
-          );
-          if (mustAwaitGraph) {
-            await refreshTask;
+          if (needOlderFromGraph) {
+            await this.runDeepHistory(
+              { id: conv.id, pageId: conv.pageId, fbConversationId },
+              config.pageAccessToken,
+              tenantId,
+            );
             messages = await this.loadConversationMessages(
               conversationId,
               sinceDate,
               fetchLimit,
+              beforeDate,
             );
           } else {
-            void refreshTask.catch((e) => {
-              this.logger.warn(
-                `getMessages background sync failed conv=${conversationId.slice(0, 8)}: ${(e as Error).message}`,
+            this.lastGraphRefresh.set(conversationId, Date.now());
+            const refreshTask = this.refreshConversationMessages(
+              conv.id,
+              conv.pageId,
+              fbConversationId,
+              config.pageAccessToken,
+              fetchLimit,
+              tenantId,
+              { bypassHotGuard: mustAwaitGraph || forceRefresh },
+            );
+            if (mustAwaitGraph) {
+              await refreshTask;
+              messages = await this.loadConversationMessages(
+                conversationId,
+                sinceDate,
+                fetchLimit,
+                beforeDate,
+              );
+            } else {
+              void refreshTask.catch((e) => {
+                this.logger.warn(
+                  `getMessages background sync failed conv=${conversationId.slice(0, 8)}: ${(e as Error).message}`,
+                );
+              });
+            }
+            const lastDeep = this.lastDeepHistory.get(conversationId) ?? 0;
+            if (Date.now() - lastDeep >= this.deepHistoryCooldownMs) {
+              void this.runDeepHistory(
+                { id: conv.id, pageId: conv.pageId, fbConversationId },
+                config.pageAccessToken,
+                tenantId,
+              ).catch((e) => {
+                this.logger.debug(
+                  `getMessages deep history conv=${conversationId.slice(0, 8)}: ${(e as Error).message}`,
+                );
+              });
+            }
+          }
+        }
+      } else if (!hasSince && !hasBefore && fbConversationId) {
+        const lastDeep = this.lastDeepHistory.get(conversationId) ?? 0;
+        if (Date.now() - lastDeep >= this.deepHistoryCooldownMs) {
+          const config = await this.prisma.facebookCskhConfig.findUnique({
+            where: { pageId: conv.pageId },
+            select: { pageAccessToken: true },
+          });
+          if (config?.pageAccessToken) {
+            void this.runDeepHistory(
+              { id: conv.id, pageId: conv.pageId, fbConversationId },
+              config.pageAccessToken,
+              tenantId,
+            ).catch((e) => {
+              this.logger.debug(
+                `getMessages deep history conv=${conversationId.slice(0, 8)}: ${(e as Error).message}`,
               );
             });
           }
@@ -2259,7 +2465,8 @@ export class CskhInboxService {
       });
       const customerPsid = convRow?.participantPsid ?? undefined;
 
-      const safeLimit = Math.min(Math.max(msgLimit, 10), this.auditRecheckMsgLimit);
+      const cap = Math.max(this.auditRecheckMsgLimit, this.historyMsgLimit);
+      const safeLimit = Math.min(Math.max(msgLimit, 10), cap);
       const rawMsgs = await this.graph.fetchMessages(fbConversationId, token, safeLimit);
       const ordered = [...rawMsgs].reverse();
 
@@ -2324,14 +2531,15 @@ export class CskhInboxService {
       const syncedRows = await this.loadConversationMessages(
         conversationId,
         undefined,
-        safeLimit,
+        Math.min(safeLimit, this.msgLimit),
       );
       if (syncedRows.length) {
+        const recent = syncedRows.slice(-20);
         this.realtime.publish({
           type: 'message',
           pageId,
           conversationId,
-          messages: syncedRows.map((m) => this.formatMessageRow(m as CskhInboxMessage)),
+          messages: recent.map((m) => this.formatMessageRow(m as CskhInboxMessage)),
           tenantId,
         });
       }
@@ -2660,6 +2868,9 @@ export class CskhInboxService {
           normalized.text,
         );
       }
+      if (!exists && isStaff) {
+        exists = await this.findPendingOutboundToLink(conversationId, normalized.text, sentAt);
+      }
       const payload = {
         text: normalized.text,
         messageType: normalized.messageType,
@@ -2700,18 +2911,22 @@ export class CskhInboxService {
         }
         return { text: normalized.text };
       }
-      await this.prisma.cskhInboxMessage.create({
-        data: {
-          conversationId,
-          direction,
-          senderType,
-          fbMessageId,
-          ...payload,
-          sentAt,
-          status: 'sent',
-          tenantId,
-        },
-      });
+      try {
+        await this.prisma.cskhInboxMessage.create({
+          data: {
+            conversationId,
+            direction,
+            senderType,
+            fbMessageId,
+            ...payload,
+            sentAt,
+            status: 'sent',
+            tenantId,
+          },
+        });
+      } catch (e) {
+        if ((e as { code?: string }).code !== 'P2002') throw e;
+      }
       return { text: normalized.text };
     }
 
@@ -2981,9 +3196,34 @@ export class CskhInboxService {
   ) {
     const trimmed = text.trim();
     if (!trimmed) throw new BadRequestException('Tin nhắn trống');
+    const lockKey = `${conversationId}:${trimmed}`;
+    const inflight = this.inflightSends.get(lockKey);
+    if (inflight) return inflight;
+    const run = this.sendMessageUnlocked(conversationId, trimmed, tenantId, options);
+    this.inflightSends.set(lockKey, run);
+    void run.finally(() => {
+      setTimeout(() => {
+        if (this.inflightSends.get(lockKey) === run) this.inflightSends.delete(lockKey);
+      }, 2500);
+    });
+    return run;
+  }
+
+  private async sendMessageUnlocked(
+    conversationId: string,
+    trimmed: string,
+    tenantId?: string,
+    options?: { autoTranslate?: boolean },
+  ) {
 
     const conv = await findInboxConversationById(this.prisma, conversationId, tenantId);
     if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
+
+    if (!conv.participantPsid?.trim()) {
+      throw new BadRequestException(
+        'Thiếu PSID khách — không gửi được tin Messenger. Mở lại hội thoại để đồng bộ từ Facebook.',
+      );
+    }
 
     const config = await this.prisma.facebookCskhConfig.findFirst({
       where: tenantId ? { pageId: conv.pageId, tenantId } : { pageId: conv.pageId },
@@ -3041,18 +3281,16 @@ export class CskhInboxService {
       },
     });
 
-    // 1. Publish pending message and updated conversation to SSE immediately
     this.publishMessageRealtime(conv.pageId, conv.id, [pending], false, tenantId, updatedConv);
 
-    // 2. Perform the Meta Graph API sending in the background
-    void (async () => {
+    try {
+      const result = await this.graph.sendPageMessage(
+        conv.pageId,
+        config.pageAccessToken,
+        conv.participantPsid,
+        outboundText,
+      );
       try {
-        const result = await this.graph.sendPageMessage(
-          conv.pageId,
-          config.pageAccessToken,
-          conv.participantPsid,
-          outboundText,
-        );
         const sent = await this.prisma.cskhInboxMessage.update({
           where: { id: pending.id },
           data: {
@@ -3061,18 +3299,41 @@ export class CskhInboxService {
           },
         });
         this.publishMessageRealtime(conv.pageId, conv.id, [sent], false, tenantId, updatedConv);
-      } catch (e) {
-        this.logger.error(`Failed to send message to Facebook background for msg ${pending.id}: ${(e as Error).message}`);
-        const failed = await this.prisma.cskhInboxMessage.update({
-          where: { id: pending.id },
-          data: { status: 'failed' },
-        });
-        this.publishMessageRealtime(conv.pageId, conv.id, [failed], false, tenantId, updatedConv);
+        return this.formatMessageRow(sent);
+      } catch (linkErr) {
+        const code = (linkErr as { code?: string }).code;
+        if (code === 'P2002' && result.message_id) {
+          const linked = await this.prisma.cskhInboxMessage.findUnique({
+            where: { fbMessageId: result.message_id },
+          });
+          if (linked && linked.id !== pending.id) {
+            await this.prisma.cskhInboxMessage
+              .delete({ where: { id: pending.id } })
+              .catch(() => undefined);
+            this.publishMessageRealtime(
+              conv.pageId,
+              conv.id,
+              [linked],
+              false,
+              tenantId,
+              updatedConv,
+            );
+            return this.formatMessageRow(linked);
+          }
+        }
+        throw linkErr;
       }
-    })();
-
-    // 3. Return the pending message immediately to caller
-    return this.formatMessageRow(pending);
+    } catch (e) {
+      this.logger.error(
+        `Failed to send message to Facebook for msg ${pending.id}: ${(e as Error).message}`,
+      );
+      const failed = await this.prisma.cskhInboxMessage.update({
+        where: { id: pending.id },
+        data: { status: 'failed' },
+      });
+      this.publishMessageRealtime(conv.pageId, conv.id, [failed], false, tenantId, updatedConv);
+      throw new BadRequestException(this.facebookSendErrorMessage(e));
+    }
   }
 
   /** Preview dịch VI → ngôn ngữ khách (không lưu DB). */

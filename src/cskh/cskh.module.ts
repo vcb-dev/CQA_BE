@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { CskhController } from './cskh.controller';
 import { CskhService } from './cskh.service';
 import { CskhInsightService } from './cskh-insight.service';
@@ -32,7 +32,7 @@ import { UsersModule } from '../users/users.module';
 import { PancakeModule } from '../pancake/pancake.module';
 
 @Module({
-  imports: [AiModule, AuthModule, UsersModule, PancakeModule],
+  imports: [AiModule, AuthModule, UsersModule, forwardRef(() => PancakeModule)],
   controllers: [CskhController],
   providers: [
     CskhRedisSignalsService,

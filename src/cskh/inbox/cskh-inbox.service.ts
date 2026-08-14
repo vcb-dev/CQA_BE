@@ -150,6 +150,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   private catchUpTimer: ReturnType<typeof setInterval> | null = null;
   private liveCatchUpRunning = false;
   private liveViewedPageId: string | null = null;
+  private catchUpBackoffUntil = 0;
+  private auditRunningCache: { at: number; value: boolean } = { at: 0, value: false };
   private readonly msgLimit = Number(process.env.CSKH_INBOX_MSG_LIMIT || 250);
   /** Khi recheck audit — tải nhiều tin hơn để so khớp transcript. */
   private readonly auditRecheckMsgLimit = Number(
@@ -521,12 +523,17 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit(): void {
     if (!this.catchUpEnabled) return;
+    if (!isCskhWorkerProcess()) return;
     this.logger.log(
-      `[catch-up] Poll Graph realtime mỗi ${this.catchUpIntervalMs}ms (head ${this.catchUpConvLimit} hội thoại)`,
+      `[catch-up] Worker poll Graph realtime mỗi ${this.catchUpIntervalMs}ms (head ${this.catchUpConvLimit} hội thoại)`,
     );
     this.catchUpTimer = setInterval(() => {
       void this.runLiveGraphCatchUp().catch((e) => {
-        this.logger.warn(`[catch-up] ${(e as Error).message}`);
+        const msg = (e as Error).message || '';
+        if (/connection pool|Timed out fetching/i.test(msg)) {
+          this.catchUpBackoffUntil = Date.now() + 20_000;
+        }
+        this.logger.warn(`[catch-up] ${msg}`);
       });
     }, this.catchUpIntervalMs);
     void this.runLiveGraphCatchUp().catch((e) => {
@@ -1951,6 +1958,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   async runLiveGraphCatchUp(tenantId?: string): Promise<void> {
     if (this.liveCatchUpRunning || this.backgroundInboxSyncRunning) return;
     if (this.graphCoordinator.inboxSyncActive) return;
+    if (Date.now() < this.catchUpBackoffUntil) return;
     if (await this.isAuditJobRunning(tenantId)) return;
     if (!(await this.redisQueue.tryLiveCatchUpLock(2))) return;
 
@@ -2020,15 +2028,28 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async isAuditJobRunning(tenantId?: string): Promise<boolean> {
-    const running = await this.prisma.cskhJobRun.findFirst({
-      where: {
-        type: 'audit',
-        status: 'running',
-        ...(tenantId ? { tenantId } : {}),
-      },
-      select: { id: true },
-    });
-    return !!running;
+    if (Date.now() - this.auditRunningCache.at < 15_000) {
+      return this.auditRunningCache.value;
+    }
+    try {
+      const running = await this.prisma.cskhJobRun.findFirst({
+        where: {
+          type: 'audit',
+          status: 'running',
+          ...(tenantId ? { tenantId } : {}),
+        },
+        select: { id: true },
+      });
+      this.auditRunningCache = { at: Date.now(), value: !!running };
+      return !!running;
+    } catch (e) {
+      const msg = (e as Error).message || '';
+      if (/connection pool|Timed out fetching/i.test(msg)) {
+        this.catchUpBackoffUntil = Date.now() + 20_000;
+      }
+      this.auditRunningCache = { at: Date.now(), value: false };
+      return false;
+    }
   }
 
   /**

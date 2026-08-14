@@ -11,6 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import type Redis from 'ioredis';
 import { CskhInboxService } from '../inbox/cskh-inbox.service';
 import { CskhService } from '../cskh.service';
+import { PancakeService } from '../../pancake/pancake.service';
 import { getCskhRunMode, isCskhApiProcess, isCskhWorkerProcess } from '../cskh-run-mode';
 import { CskhRedisSignalsService } from './cskh-redis-signals.service';
 import {
@@ -43,6 +44,8 @@ const WEBHOOK_MESSAGING_QUEUE = 'cskh:webhook:messaging';
 const INTENT_QUEUE = 'cskh:intent_queue';
 const AUDIT_QUEUE = 'cskh:audit_queue';
 const BACKFILL_QUEUE = 'cskh:backfill_queue';
+const PANCAKE_AUTOLABEL_QUEUE = 'cskh:pancake:autolabel';
+const PANCAKE_AUTOLABEL_DEDUP = 'cskh:pancake:autolabel:dedup:';
 const LIVE_CATCHUP_LOCK = 'cskh:inbox:live-catchup';
 const VIEWED_PAGE_KEY = 'cskh:inbox:viewed-page';
 const BRPOP_TIMEOUT_SEC = 30;
@@ -57,6 +60,13 @@ export type WebhookMessagingQueuePayload = {
 };
 
 type IntentQueuePayload = { conversationId: string; tenantId?: string };
+
+export type PancakeAutoLabelPayload = {
+  pageId: string;
+  tenantId?: string;
+  maxScan?: number;
+  onlyWithContact?: boolean;
+};
 
 @Injectable()
 export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnApplicationBootstrap {
@@ -78,6 +88,8 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
     private readonly inboxService: CskhInboxService,
     @Inject(forwardRef(() => CskhService))
     private readonly cskhService: CskhService,
+    @Inject(forwardRef(() => PancakeService))
+    private readonly pancakeService: PancakeService,
   ) {}
 
   async onModuleInit() {
@@ -128,8 +140,8 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
       }, 60_000);
       void this.touchAuditWorkerHeartbeat();
     } else {
-      this.logger.log(
-        'Queue consumers OFF on API — webhook inbox vẫn chạy inline trên process này; worker chỉ cần cho audit/backfill/intent queue',
+        this.logger.log(
+        'Queue consumers OFF on API — webhook inbox vẫn chạy inline trên process này; worker lo audit/backfill/intent/pancake-label',
       );
     }
   }
@@ -406,7 +418,7 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
       );
       return;
     }
-    this.logger.log('Unified queue worker started (webhook + intent + backfill + audit).');
+    this.logger.log('Unified queue worker started (webhook + intent + pancake-label + backfill + audit).');
     while (this.running) {
       if (!this.canUseRedis()) {
         await new Promise((r) => setTimeout(r, 60_000));
@@ -416,6 +428,7 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
         const result = await this.blockingConsumer.brpop(
           WEBHOOK_MESSAGING_QUEUE,
           INTENT_QUEUE,
+          PANCAKE_AUTOLABEL_QUEUE,
           BACKFILL_QUEUE,
           AUDIT_QUEUE,
           BRPOP_TIMEOUT_SEC,
@@ -453,6 +466,17 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
           this.logger.log(`Audit Worker: job ${payload.jobId.slice(0, 8)}`);
           await this.cskhService.runAuditJob(payload.jobId, payload.options ?? {});
           this.logger.log(`Audit Worker: done ${payload.jobId.slice(0, 8)}`);
+        } else if (queue === PANCAKE_AUTOLABEL_QUEUE) {
+          const payload = JSON.parse(raw) as PancakeAutoLabelPayload;
+          if (!payload?.pageId) continue;
+          this.logger.log(
+            `Pancake label Worker: page=${payload.pageId} onlyContact=${Boolean(payload.onlyWithContact)}`,
+          );
+          await this.pancakeService.scanAndAutoLabelPageLeads(payload.pageId, {
+            tenantId: payload.tenantId,
+            maxScan: payload.maxScan,
+            onlyWithContact: payload.onlyWithContact,
+          });
         }
       } catch (e) {
         if (isRedisQuotaError(e)) {
@@ -515,6 +539,27 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
     } catch (e) {
       this.handleRedisError(e);
       this.logger.error(`Failed to enqueue backfill job: ${(e as Error).message}`);
+      return false;
+    }
+  }
+
+  async enqueuePancakeAutoLabel(payload: PancakeAutoLabelPayload): Promise<boolean> {
+    const redis = this.activeRedis();
+    if (!redis) return false;
+    const pageId = payload.pageId?.trim();
+    if (!pageId) return false;
+    try {
+      const dedupKey = `${PANCAKE_AUTOLABEL_DEDUP}${pageId}:${payload.onlyWithContact ? 'contact' : 'all'}`;
+      const locked = await redis.set(dedupKey, '1', 'EX', 40, 'NX');
+      if (locked !== 'OK') {
+        this.logger.log(`Pancake auto-label skip duplicate page=${pageId}`);
+        return true;
+      }
+      await redis.lpush(PANCAKE_AUTOLABEL_QUEUE, JSON.stringify(payload));
+      return true;
+    } catch (e) {
+      this.handleRedisError(e);
+      this.logger.error(`Failed to enqueue pancake auto-label: ${(e as Error).message}`);
       return false;
     }
   }

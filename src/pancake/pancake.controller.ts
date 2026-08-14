@@ -92,7 +92,7 @@ export class PancakeController {
     @Param('pageId') pageId: string,
     @Body() body?: { maxScan?: number; onlyWithContact?: boolean },
   ) {
-    return this.pancake.scanAndAutoLabelPageLeads(pageId, {
+    return this.pancake.requestAutoLabelPageLeads(pageId, {
       tenantId: user.tenantId || undefined,
       maxScan: body?.maxScan,
       onlyWithContact: body?.onlyWithContact === true,

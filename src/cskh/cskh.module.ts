@@ -18,6 +18,9 @@ import { SapoOrderSyncService } from './sapo/sapo-order-sync.service';
 import { SapoCollectionSyncService } from './sapo/sapo-collection-sync.service';
 import { SapoDisplayService } from './sapo/sapo-display.service';
 import { ProductAnalyticsService } from './product-analytics.service';
+import { OmsApiService } from './oms/oms-api.service';
+import { OmsCatalogService } from './oms/oms-catalog.service';
+import { OmsProductOperationsService } from './oms/oms-product-operations.service';
 import { CustomerAnalyticsService } from './customer-analytics.service';
 import { CskhCronService } from './cskh-cron.service';
 import { GraphApiCoordinatorService } from './facebook/graph-api-coordinator.service';
@@ -52,6 +55,9 @@ import { PancakeModule } from '../pancake/pancake.module';
     SapoFullSyncService,
     SapoDisplayService,
     ProductAnalyticsService,
+    OmsApiService,
+    OmsCatalogService,
+    OmsProductOperationsService,
     CustomerAnalyticsService,
     CskhCronService,
     RedisQueueService,

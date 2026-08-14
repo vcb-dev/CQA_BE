@@ -689,6 +689,29 @@ export class FacebookGraphService {
     }
   }
 
+  /** Tìm Facebook conversation id theo PSID khách (Page Conversations API). */
+  async fetchConversationIdByPsid(
+    pageId: string,
+    token: string,
+    participantPsid: string,
+  ): Promise<string | null> {
+    const psid = participantPsid.trim();
+    if (!psid) return null;
+    try {
+      const data = await this.graphRequest<{ data?: Array<{ id?: string }> }>(
+        `/${pageId}/conversations`,
+        token,
+        { user_id: psid, fields: 'id', limit: 1 },
+      );
+      return data.data?.[0]?.id ?? null;
+    } catch (e) {
+      this.logger.warn(
+        `fetchConversationIdByPsid page=${pageId} psid=${psid.slice(0, 8)}: ${(e as Error).message}`,
+      );
+      return null;
+    }
+  }
+
   /**
    * Quét đầy đủ tin nhắn DỰA TRÊN tin đã tải kèm (inline) khi lấy danh sách hội thoại.
    * Tránh gọi lại Graph từ đầu cho mỗi hội thoại → nhanh hơn nhiều khi backfill.

@@ -2085,6 +2085,14 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "before",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {

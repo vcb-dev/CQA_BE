@@ -36,6 +36,7 @@ export type InboxConversationPayload = {
   id: string;
   pageId: string;
   pageName: string | null;
+  fbConversationId?: string | null;
   participantPsid: string;
   customerName: string | null;
   customerPictureUrl: string | null;

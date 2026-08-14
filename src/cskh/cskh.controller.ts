@@ -917,6 +917,7 @@ export class CskhController {
     @Query('since') since?: string,
     @Query('refresh') refresh?: string,
     @Query('limit') limit?: string,
+    @Query('before') before?: string,
   ) {
     const forceRefresh = refresh === '1' || refresh === 'true';
     const parsedLimit = limit ? Number(limit) : undefined;
@@ -927,6 +928,7 @@ export class CskhController {
       Number.isFinite(parsedLimit) ? parsedLimit : undefined,
       user.tenantId || undefined,
       user.id,
+      before?.trim(),
     );
   }
 

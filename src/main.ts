@@ -32,6 +32,27 @@ async function bootstrap() {
   }
 
   const server = express();
+  const apiPrefix = process.env.API_PREFIX || 'api/v1';
+
+  // Meta ký HMAC trên byte gốc. Phải giữ raw body TRƯỚC Nest JSON parser, nếu không chữ ký luôn sai dù secret đúng.
+  server.use(
+    `/${apiPrefix}/cskh/webhook`,
+    express.raw({ type: '*/*', limit: '5mb' }),
+    (req, _res, next) => {
+      const buf = req.body as Buffer;
+      if (Buffer.isBuffer(buf)) {
+        (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
+        try {
+          const text = buf.toString('utf8');
+          req.body = text ? JSON.parse(text) : {};
+        } catch {
+          req.body = {};
+        }
+      }
+      next();
+    },
+  );
+
   server.use(
     cors({
       origin(origin, callback) {
@@ -60,7 +81,6 @@ async function bootstrap() {
   );
 
   // Probe / browser mở http://localhost:PORT/ → không đi vào Nest (tránh spam 404 ERROR)
-  const apiPrefix = process.env.API_PREFIX || 'api/v1';
   server.get('/', (_req, res) => {
     res.status(200).json({
       ok: true,

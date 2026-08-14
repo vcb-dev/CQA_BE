@@ -911,29 +911,22 @@ export class PancakeService {
       platform: hydrated[0]?.platform ?? pageCfg?.platform ?? null,
       source: 'db' as const,
       leads: hydrated.map((r) => {
-        const hasConversation = Boolean(r.conversationId);
         const closedFromChat = detectOrderClosedFromTexts([
           r.lastMessage,
           r.notes,
         ]).closed;
         const stage = closedFromChat || r.stage === 'customer' ? 'customer' : r.stage || 'conversation';
-        const labels = hasConversation
-          ? ensureDefaultLabels(stage, r.labels, { hasConversation: true })
-          : stage === 'customer'
-            ? ensureDefaultLabels('customer', r.labels, { hasConversation: false })
-            : [];
+        const labels = ensureDefaultLabels(stage, r.labels);
         if (
           labelsNeedPersist(r.labels ?? [], labels) ||
           (closedFromChat && r.stage !== 'customer') ||
-          (closedFromChat && r.followAt) ||
-          (!hasConversation && (r.followAt || (r.labels ?? []).length > 0) && stage !== 'customer')
+          (closedFromChat && r.followAt)
         ) {
           void this.prisma.pancakeLead
             .update({
               where: { id: r.id },
               data: {
                 labels,
-                ...(!hasConversation && stage !== 'customer' ? { followAt: null } : {}),
                 ...(closedFromChat
                   ? {
                       followAt: null,
@@ -1074,9 +1067,7 @@ export class PancakeService {
                 (c.threadId ? 'INBOX' : undefined),
               dataAt: parseOptionalDate(c.updatedAt),
               source: 'sync',
-              labels: ensureDefaultLabels('conversation', c.threadId ? ['follow'] : [], {
-                hasConversation: Boolean(c.threadId),
-              }),
+              labels: ensureDefaultLabels('conversation', ['follow']),
               raw: c.raw as Prisma.InputJsonValue,
               tenantId: opts?.tenantId || null,
             },
@@ -1271,23 +1262,14 @@ export class PancakeService {
       }
     }
 
-    // Backfill nhãn follow chỉ khi đã có hội thoại; không gán nhãn nếu chưa có chat.
+    // Backfill nhãn follow / Đã chốt cho lead thiếu labels
     await this.prisma.pancakeLead.updateMany({
       where: {
         pageId,
         labels: { equals: [] },
-        conversationId: { not: null },
         NOT: { stage: 'customer' },
       },
       data: { labels: ['follow'] },
-    });
-    await this.prisma.pancakeLead.updateMany({
-      where: {
-        pageId,
-        conversationId: null,
-        AND: [{ NOT: { stage: 'customer' } }, { NOT: { labels: { equals: [] } } }],
-      },
-      data: { labels: [], followAt: null },
     });
     await this.prisma.pancakeLead.updateMany({
       where: {
@@ -1513,7 +1495,7 @@ export class PancakeService {
           labels: ensureDefaultLabels('conversation', [
             'follow',
             ...conv.tags.filter((t) => t && t !== 'follow'),
-          ], { hasConversation: true }),
+          ]),
           raw: raw as Prisma.InputJsonValue,
           tenantId: opts.tenantId || null,
         },
@@ -1528,7 +1510,6 @@ export class PancakeService {
         ? 'customer'
         : existing.stage,
       [...(existing.labels ?? []), ...conv.tags],
-      { hasConversation: Boolean(conv.id || existing.conversationId) },
     );
     const nextLastMessage =
       storeableLastMessage(conv.lastMessage) ||
@@ -1671,17 +1652,15 @@ export class PancakeService {
   /**
    * Quét tin nhắn hội thoại → gán nhãn:
    * - Có tín hiệu chuyển khoản / xác nhận đơn → Đã chốt (+ stage customer)
-   * - Chưa → follow (chỉ khi đã có hội thoại)
+   * - Chưa → follow
    * Ưu tiên lead đã có SĐT + địa chỉ.
    */
   async scanAndAutoLabelPageLeads(
     pageId: string,
-    opts?: { tenantId?: string | null; maxScan?: number; onlyWithContact?: boolean },
+    opts?: { tenantId?: string | null; maxScan?: number },
   ) {
     const maxScan = Math.min(Math.max(opts?.maxScan ?? 40, 1), 80);
-    this.logger.log(
-      `Pancake auto-label START pageId=${pageId} maxScan=${maxScan} onlyContact=${Boolean(opts?.onlyWithContact)}`,
-    );
+    this.logger.log(`Pancake auto-label START pageId=${pageId} maxScan=${maxScan}`);
 
     const pool = await this.prisma.pancakeLead.findMany({
       where: {
@@ -1696,10 +1675,6 @@ export class PancakeService {
     // Bỏ qua đã chốt chắc chắn
     const candidates = pool
       .filter((l) => l.stage !== 'customer' && !l.labels.includes('Đã chốt'))
-      .filter((l) => {
-        if (!opts?.onlyWithContact) return true;
-        return l.phones.length > 0 && Boolean(l.address?.trim());
-      })
       .map((l) => {
         const hasPhone = l.phones.length > 0;
         const hasAddr = Boolean(l.address?.trim());
@@ -1732,7 +1707,7 @@ export class PancakeService {
           pageId,
           opts?.tenantId,
           (pageToken) =>
-            this.client.listMessages(pageId, lead.conversationId!, pageToken, { limit: 80 }),
+            this.client.listMessages(pageId, lead.conversationId!, pageToken, { limit: 50 }),
         );
         const texts = [
           lead.lastMessage,
@@ -1764,9 +1739,7 @@ export class PancakeService {
           if (up.upgraded || up.stage === 'customer') closed += 1;
           else follow += 1;
         } else {
-          const labels = ensureDefaultLabels('conversation', lead.labels, {
-            hasConversation: true,
-          });
+          const labels = ensureDefaultLabels('conversation', lead.labels);
           await this.prisma.pancakeLead.update({
             where: { id: lead.id },
             data: {
@@ -1927,9 +1900,7 @@ export class PancakeService {
           null,
         dataAt: Number.isNaN(dataAt.getTime()) ? new Date() : dataAt,
         source: 'webhook',
-        labels: ensureDefaultLabels('conversation', conversationId ? ['follow'] : [], {
-          hasConversation: Boolean(conversationId),
-        }),
+        labels: ensureDefaultLabels('conversation', ['follow']),
         raw: body as Prisma.InputJsonValue,
         tenantId: pageCfg?.tenantId ?? null,
       },
@@ -2256,12 +2227,8 @@ function conversationCustomerKeys(conv: PancakeConversation): string[] {
   return [...new Set(keys)];
 }
 
-/** Nhãn mặc định: đã chốt (customer) hoặc follow (đã có hội thoại, chưa chốt). Không hội thoại → không nhãn. */
-function ensureDefaultLabels(
-  stage: string | null | undefined,
-  labels: string[] | null | undefined,
-  opts?: { hasConversation?: boolean },
-): string[] {
+/** Nhãn mặc định: đã chốt (customer) hoặc follow (chưa chốt). */
+function ensureDefaultLabels(stage: string | null | undefined, labels: string[] | null | undefined): string[] {
   const set = new Set((labels ?? []).filter(Boolean));
   if (set.has('Follow') || set.has('follow-up')) {
     set.delete('Follow');
@@ -2272,16 +2239,9 @@ function ensureDefaultLabels(
   if (isCustomer) {
     set.add('Đã chốt');
     set.delete('follow');
-    return [...set];
+  } else {
+    set.add('follow');
   }
-  if (opts?.hasConversation === false) {
-    set.delete('follow');
-    set.delete('Follow');
-    set.delete('follow-up');
-    set.delete('Đã chốt');
-    return [...set];
-  }
-  set.add('follow');
   return [...set];
 }
 

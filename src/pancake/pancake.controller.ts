@@ -90,12 +90,11 @@ export class PancakeController {
   autoLabel(
     @CurrentUser() user: User,
     @Param('pageId') pageId: string,
-    @Body() body?: { maxScan?: number; onlyWithContact?: boolean },
+    @Body() body?: { maxScan?: number },
   ) {
     return this.pancake.scanAndAutoLabelPageLeads(pageId, {
       tenantId: user.tenantId || undefined,
       maxScan: body?.maxScan,
-      onlyWithContact: body?.onlyWithContact === true,
     });
   }
 

@@ -43,6 +43,8 @@ const WEBHOOK_MESSAGING_QUEUE = 'cskh:webhook:messaging';
 const INTENT_QUEUE = 'cskh:intent_queue';
 const AUDIT_QUEUE = 'cskh:audit_queue';
 const BACKFILL_QUEUE = 'cskh:backfill_queue';
+const LIVE_CATCHUP_LOCK = 'cskh:inbox:live-catchup';
+const VIEWED_PAGE_KEY = 'cskh:inbox:viewed-page';
 const BRPOP_TIMEOUT_SEC = 30;
 
 export type BackfillQueuePayload = {
@@ -204,6 +206,41 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
 
   async clearInboxSyncActive(): Promise<void> {
     return this.redisSignals.clearInboxSyncActive();
+  }
+
+  async tryLiveCatchUpLock(ttlSeconds = 2): Promise<boolean> {
+    const redis = this.activeRedis();
+    if (!redis) return true;
+    try {
+      const ok = await redis.set(LIVE_CATCHUP_LOCK, String(Date.now()), 'EX', ttlSeconds, 'NX');
+      return ok === 'OK';
+    } catch (e) {
+      this.handleRedisError(e);
+      return true;
+    }
+  }
+
+  async markViewedInboxPage(pageId: string): Promise<void> {
+    const id = pageId?.trim();
+    if (!id) return;
+    const redis = this.activeRedis();
+    if (!redis) return;
+    try {
+      await redis.set(VIEWED_PAGE_KEY, id, 'EX', 120);
+    } catch (e) {
+      this.handleRedisError(e);
+    }
+  }
+
+  async getViewedInboxPage(): Promise<string | null> {
+    const redis = this.activeRedis();
+    if (!redis) return null;
+    try {
+      return (await redis.get(VIEWED_PAGE_KEY)) || null;
+    } catch (e) {
+      this.handleRedisError(e);
+      return null;
+    }
   }
 
   async shouldYieldGraphToInbox(): Promise<boolean> {

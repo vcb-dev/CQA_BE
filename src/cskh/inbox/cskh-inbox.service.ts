@@ -3722,10 +3722,11 @@ export class CskhInboxService {
   async syncFromGraph(
     pageId?: string,
     tenantId?: string,
-    options?: { full?: boolean; lightweight?: boolean },
+    options?: { full?: boolean; lightweight?: boolean; force?: boolean },
   ) {
     const redisOff = !this.redisQueue.isRedisQueueEnabled();
-    if (!redisOff && (await this.redisQueue.isInboxHot())) {
+    const force = options?.force === true || Boolean(pageId?.trim());
+    if (!force && !redisOff && (await this.redisQueue.isInboxHot())) {
       this.logger.log('[syncFromGraph] Bỏ qua — inbox/webhook đang ưu tiên');
       return { synced: 0, pageCount: 0, okPages: 0, failedPages: [] as Array<{ page: string; error: string }> };
     }
@@ -3746,10 +3747,11 @@ export class CskhInboxService {
   private async syncFromGraphInner(
     pageId?: string,
     tenantId?: string,
-    options?: { full?: boolean; lightweight?: boolean },
+    options?: { full?: boolean; lightweight?: boolean; force?: boolean },
   ) {
     const full = options?.full === true;
     const lightweight = options?.lightweight === true;
+    const force = options?.force === true || Boolean(pageId?.trim());
     const redisOff = !this.redisQueue.isRedisQueueEnabled();
     const where: any = {};
     if (pageId) where.pageId = pageId;
@@ -3760,7 +3762,7 @@ export class CskhInboxService {
     let okPages = 0;
     const failedPages: Array<{ page: string; error: string }> = [];
     for (const page of pages) {
-      if (!redisOff && (await this.redisQueue.isInboxHot())) {
+      if (!force && !redisOff && (await this.redisQueue.isInboxHot())) {
         this.logger.log('[syncFromGraph] Dừng giữa chừng — nhường webhook/inbox');
         break;
       }

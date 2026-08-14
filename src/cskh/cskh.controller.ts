@@ -1057,7 +1057,7 @@ export class CskhController {
   ) {
     const pageId = body.pageId?.trim();
     const tenantId = user.tenantId || undefined;
-    const options = { full: body.full === true, lightweight: body.full !== true };
+    const options = { full: body.full === true, lightweight: body.full !== true, force: true };
 
     // Quét nhiều kênh — chạy nền, không block HTTP (tránh treo web)
     if (!pageId) {

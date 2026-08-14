@@ -20,6 +20,8 @@ export type PancakeConversation = {
   id: string;
   customerName: string | null;
   customerId: string | null;
+  /** Chuẩn hoá: INBOX | COMMENT (hoặc giá trị gốc nếu không nhận diện). */
+  type: string | null;
   lastMessage: string | null;
   updatedAt: string | null;
   tags: string[];
@@ -49,6 +51,8 @@ export type PancakeCustomer = {
   psid: string | null;
   customerId: string | null;
   threadId: string | null;
+  lastMessage?: string | null;
+  conversationType?: string | null;
   updatedAt: string | null;
   raw: Record<string, unknown>;
 };
@@ -117,15 +121,29 @@ export class PancakeClient {
       },
     );
     const data = res.data as Record<string, unknown>;
-    const token =
-      (data.page_access_token as string | undefined) ||
-      (data.access_token as string | undefined) ||
-      ((data.data as Record<string, unknown> | undefined)?.page_access_token as
-        | string
-        | undefined);
+    const nested = (data.data as Record<string, unknown> | undefined) ?? {};
+    const candidates = [
+      data.page_access_token,
+      data.access_token,
+      data.token,
+      nested.page_access_token,
+      nested.access_token,
+      nested.token,
+    ];
+    const token = candidates
+      .map((v) => (typeof v === 'string' ? v.trim() : v != null ? String(v).trim() : ''))
+      .find((v) => v.length > 0);
     if (!token) {
-      this.logger.warn(`generatePageAccessToken: unexpected payload keys=${Object.keys(data)}`);
-      throw new Error('Pancake không trả page_access_token');
+      this.logger.warn(
+        `generatePageAccessToken: unexpected payload keys=${Object.keys(data)} types=${candidates
+          .map((v) => (v == null ? 'null' : typeof v))
+          .join(',')}`,
+      );
+      throw new Error(
+        typeof data.message === 'string' && data.message
+          ? data.message
+          : 'Pancake không trả page_access_token',
+      );
     }
     return token;
   }
@@ -133,13 +151,23 @@ export class PancakeClient {
   async listConversations(
     pageId: string,
     pageAccessToken: string,
-    opts?: { cursor?: string; limit?: number },
+    opts?: {
+      cursor?: string;
+      limit?: number;
+      /** Lọc Pancake: INBOX | COMMENT */
+      type?: 'INBOX' | 'COMMENT' | string;
+    },
   ): Promise<{ conversations: PancakeConversation[]; nextCursor: string | null; raw: unknown }> {
     const params: Record<string, string | number> = {
       page_access_token: pageAccessToken,
     };
-    if (opts?.cursor) params.cursor = opts.cursor;
-    if (opts?.limit) params.limit = opts.limit;
+    // Pancake public API paginate bằng last_conversation_id (docs); một số bản còn nhận cursor.
+    if (opts?.cursor) {
+      params.last_conversation_id = opts.cursor;
+      params.cursor = opts.cursor;
+    }
+    if (opts?.limit) params.limit = Math.min(opts.limit, 60);
+    if (opts?.type) params.type = opts.type;
 
     // v2 không bắt buộc since/until; v1 trả success:false nếu thiếu → dùng v2 trước
     const urls = [
@@ -155,7 +183,7 @@ export class PancakeClient {
           lastErr = new Error(body.message || 'Pancake conversations failed');
           continue;
         }
-        const normalized = this.normalizeConversationsResponse(res.data);
+        const normalized = this.normalizeConversationsResponse(res.data, opts?.type);
         if (normalized.conversations.length > 0 || body?.success === true) {
           return normalized;
         }
@@ -203,7 +231,10 @@ export class PancakeClient {
         }
         const normalized = this.normalizeMessagesResponse(res.data);
         if (normalized.messages.length > 0 || body?.success === true) {
-          return normalized;
+          return {
+            ...normalized,
+            messages: tidyPancakeMessages(normalized.messages),
+          };
         }
         lastErr = new Error('empty messages response');
       } catch (e) {
@@ -297,7 +328,18 @@ export class PancakeClient {
         gender: (c.gender as string) || null,
         psid: c.psid != null ? String(c.psid) : null,
         customerId: c.customer_id != null ? String(c.customer_id) : null,
-        threadId: c.thread_id != null ? String(c.thread_id) : null,
+        threadId:
+          c.thread_id != null
+            ? String(c.thread_id)
+            : c.conversation_id != null
+              ? String(c.conversation_id)
+              : c.current_conversation_id != null
+                ? String(c.current_conversation_id)
+                : null,
+        lastMessage: pickCustomerSnippet(c),
+        conversationType: normalizePancakeConversationType(
+          c.conversation_type || c.type || c.thread_type || c.origin,
+        ),
         updatedAt: (c.updated_at as string) || (c.inserted_at as string) || null,
         raw: { ...c, _phones: phones },
       } satisfies PancakeCustomer;
@@ -323,7 +365,10 @@ export class PancakeClient {
     };
   }
 
-  private normalizeConversationsResponse(data: unknown): {
+  private normalizeConversationsResponse(
+    data: unknown,
+    forcedType?: string,
+  ): {
     conversations: PancakeConversation[];
     nextCursor: string | null;
     raw: unknown;
@@ -341,22 +386,60 @@ export class PancakeClient {
       const customer = (c.customers as Record<string, unknown>[] | undefined)?.[0] ??
         (c.customer as Record<string, unknown> | undefined) ??
         {};
+      const pageCustomer =
+        (c.page_customer as Record<string, unknown> | undefined) ?? {};
       const last =
         (c.last_message as Record<string, unknown> | undefined) ??
         (c.snippet as Record<string, unknown> | undefined) ??
         {};
-      const lastText =
+      const lastTextRaw =
         (typeof c.last_message === 'string' ? c.last_message : null) ||
-        (last.message as string) ||
-        (last.text as string) ||
-        (c.snippet as string) ||
+        (typeof last.message === 'string' ? last.message : null) ||
+        (typeof last.text === 'string' ? last.text : null) ||
+        (typeof last.original_message === 'string' ? last.original_message : null) ||
+        (typeof c.snippet === 'string' ? c.snippet : null) ||
         null;
-      const tagsRaw = c.tags ?? c.tag_ids ?? [];
+      const lastTextClean = lastTextRaw ? stripHtml(lastTextRaw) : null;
+      const lastImageUrl =
+        extractMessageAttachments(last, lastTextRaw).find(
+          (a) =>
+            /image|photo|sticker|gif/i.test(a.type || '') ||
+            /\.(jpg|jpeg|png|gif|webp|bmp)(\?|$)/i.test(a.url) ||
+            /fbcdn|scontent|cdninstagram|tiktokcdn/i.test(a.url),
+        )?.url || null;
+      const lastText =
+        lastTextClean && isFacebookMarketingNoise(lastTextClean)
+          ? lastImageUrl
+          : lastTextClean &&
+              !isAttachmentPlaceholder(lastTextClean) &&
+              !isExpiredMessageText(lastTextClean)
+            ? lastTextClean
+            : lastImageUrl || extractAttachmentTemplateText(last) || null;
+      const tagsRaw = c.tags ?? c.tag_ids ?? c.tag_names ?? [];
       const tags = Array.isArray(tagsRaw)
-        ? tagsRaw.map((t) =>
-            typeof t === 'string' ? t : String((t as Record<string, unknown>)?.name ?? t),
-          )
+        ? tagsRaw
+            .map((t) =>
+              typeof t === 'string'
+                ? t
+                : String(
+                    (t as Record<string, unknown>)?.name ??
+                      (t as Record<string, unknown>)?.text ??
+                      t,
+                  ),
+            )
+            .filter((t) => t && t !== 'undefined')
         : [];
+      const type =
+        normalizePancakeConversationType(
+          forcedType ||
+            c.type ||
+            c.conversation_type ||
+            c.thread_type ||
+            c.message_type ||
+            c.origin ||
+            c.source,
+        ) ||
+        (forcedType ? normalizePancakeConversationType(forcedType) : null);
       return {
         id: String(c.id ?? c.conversation_id ?? ''),
         customerName:
@@ -364,15 +447,20 @@ export class PancakeClient {
           ((c.from as Record<string, unknown> | undefined)?.name as string) ||
           (c.from_name as string) ||
           (c.customer_name as string) ||
-          ((c.page_customer as Record<string, unknown> | undefined)?.name as string) ||
+          (pageCustomer.name as string) ||
           null,
         customerId:
-          (customer.id as string) ||
-          (customer.psid as string) ||
-          (customer.fb_id as string) ||
-          (c.customer_id as string) ||
-          ((c.from as Record<string, unknown> | undefined)?.id as string) ||
+          (customer.id != null ? String(customer.id) : null) ||
+          (pageCustomer.id != null ? String(pageCustomer.id) : null) ||
+          (customer.psid != null ? String(customer.psid) : null) ||
+          (pageCustomer.psid != null ? String(pageCustomer.psid) : null) ||
+          (customer.fb_id != null ? String(customer.fb_id) : null) ||
+          (c.customer_id != null ? String(c.customer_id) : null) ||
+          ((c.from as Record<string, unknown> | undefined)?.id != null
+            ? String((c.from as Record<string, unknown>).id)
+            : null) ||
           null,
+        type,
         lastMessage: lastText,
         updatedAt:
           (c.updated_at as string) ||
@@ -385,12 +473,16 @@ export class PancakeClient {
       } satisfies PancakeConversation;
     });
 
+    const lastId = conversations.length
+      ? conversations[conversations.length - 1]?.id
+      : null;
     const nextCursor =
       (root.cursor as string) ||
       (root.next_cursor as string) ||
+      (root.last_conversation_id as string) ||
       ((root.paging as Record<string, unknown> | undefined)?.cursors as Record<string, string> | undefined)
         ?.after ||
-      null;
+      (conversations.length >= 20 ? lastId : null);
 
     return { conversations, nextCursor, raw: data };
   }
@@ -408,19 +500,24 @@ export class PancakeClient {
       list = (root.data as Record<string, unknown>).messages as unknown[];
     }
 
-    const messages = list.map((item) => {
+    const messages = list.map((item, idx) => {
       const m = (item ?? {}) as Record<string, unknown>;
       const from = (m.from as Record<string, unknown> | undefined) ?? {};
-      const rawText =
-        (typeof m.original_message === 'string' && m.original_message.trim()
-          ? m.original_message
-          : null) ||
-        (typeof m.message === 'string' ? m.message : null) ||
-        (typeof m.text === 'string' ? m.text : null) ||
-        (typeof m.content === 'string' ? m.content : null) ||
-        null;
-      const text = rawText ? stripHtml(rawText) : null;
+      const rawText = pickPancakeMessageRawText(m);
+      const textRaw = rawText ? stripHtml(rawText) : null;
       const attachments = extractMessageAttachments(m, rawText);
+      const templateText = extractAttachmentTemplateText(m);
+      const expired = isExpiredMessageText(textRaw) || isExpiredMessageText(templateText);
+      const text =
+        expired
+          ? textRaw && !isAttachmentPlaceholder(textRaw)
+            ? textRaw
+            : 'Tin nhắn đã hết hạn'
+          : textRaw && !isAttachmentPlaceholder(textRaw)
+            ? textRaw
+            : templateText && !isAttachmentPlaceholder(templateText)
+              ? templateText
+              : null;
       const fromId = (from.id as string) || (m.from_id as string) || null;
       const pageIdOfMsg = m.page_id != null ? String(m.page_id) : null;
       const isFromPage = Boolean(
@@ -431,16 +528,17 @@ export class PancakeClient {
           from.ai_generated ||
           (pageIdOfMsg && fromId && fromId === pageIdOfMsg),
       );
+      const createdAt =
+        (m.inserted_at as string) ||
+        (m.created_at as string) ||
+        (m.created_time as string) ||
+        null;
       return {
-        id: String(m.id ?? m.message_id ?? ''),
-        message: text && text !== '[Attachment]' ? text : text,
+        id: String(m.id ?? m.message_id ?? '').trim() || `pancake-${idx}-${createdAt || 'na'}`,
+        message: text && isAttachmentPlaceholder(text) ? null : text,
         fromId,
         fromName: (from.name as string) || (m.from_name as string) || null,
-        createdAt:
-          (m.inserted_at as string) ||
-          (m.created_at as string) ||
-          (m.created_time as string) ||
-          null,
+        createdAt,
         isFromPage,
         attachments,
         raw: m,
@@ -456,6 +554,98 @@ export class PancakeClient {
 
     return { messages, nextCursor, raw: data };
   }
+}
+
+function isFacebookAdIdLike(text: string | null | undefined): boolean {
+  if (!text) return false;
+  const t = text.trim();
+  return /^\d{10,20}$/.test(t);
+}
+
+function isAdReferralNoiseText(text: string | null | undefined): boolean {
+  if (!text) return false;
+  return /đã trả lời một quảng cáo|replied to (?:your|an?) ad|trả lời qua quảng cáo|qua quảng cáo trên facebook|ตอบกลับโฆษณ|ตอบผ่านโฆษณ|ผ่านโฆษณ|จากโฆษณ/i.test(
+    text,
+  );
+}
+
+export function isFacebookMarketingNoise(text: string | null | undefined): boolean {
+  if (!text) return false;
+  const t = text.trim();
+  if (
+    /^ข้อเสนอและประกาศ$|^ưu đãi và thông báo$|^offers and announcements$/i.test(t)
+  ) {
+    return true;
+  }
+  return /muốn gửi tin nhắn cho bạn|tin nhắn quảng cáo|promotional message|advertising message|wants to send you a message|facebook\.com\/help\/messenger|messenger-app\/564030381383143|this (may|might) be (an? )?(ad|advert)|ต้องการส่งข้อความถึงคุณ|ข้อความโฆษณา/i.test(
+    t,
+  );
+}
+
+function isAdJunkAttachment(url: string, name?: string | null): boolean {
+  const label = (name || '').trim();
+  if (isFacebookAdIdLike(label)) return true;
+  if (/facebook\.com|fb\.com|fb\.me/i.test(url) && !/fbcdn|scontent/i.test(url)) return true;
+  try {
+    const base = decodeURIComponent(new URL(url).pathname).split('/').filter(Boolean).pop() || '';
+    if (isFacebookAdIdLike(base)) return true;
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+export function tidyPancakeMessages(messages: PancakeMessage[]): PancakeMessage[] {
+  const cleaned = messages.map((m) => {
+    const attachments = (m.attachments ?? []).filter((a) => !isAdJunkAttachment(a.url, a.name));
+    let message = m.message?.trim() || null;
+    if (message && isFacebookMarketingNoise(message)) {
+      return { ...m, message: null, attachments: [] };
+    }
+    if (message && (isFacebookAdIdLike(message) || isAdReferralNoiseText(message))) {
+      message = attachments.length ? null : 'Khách đã trả lời một quảng cáo';
+    }
+    return { ...m, message, attachments };
+  });
+
+  const sorted = [...cleaned].sort((a, b) => {
+    const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    if (ta !== tb) return ta - tb;
+    return String(a.id).localeCompare(String(b.id));
+  });
+
+  const out: PancakeMessage[] = [];
+  const seenIds = new Set<string>();
+  for (const m of sorted) {
+    if (m.id && seenIds.has(m.id)) continue;
+    if (m.id) seenIds.add(m.id);
+
+    const text = (m.message || '').trim();
+    const isSystem = text === 'Khách đã trả lời một quảng cáo' || isAdReferralNoiseText(text);
+    const last = out[out.length - 1];
+
+    if (isSystem) {
+      if (last && (last.message || '').trim() === 'Khách đã trả lời một quảng cáo') continue;
+      out.push({ ...m, message: 'Khách đã trả lời một quảng cáo', isFromPage: false, attachments: [] });
+      continue;
+    }
+
+    if (
+      last &&
+      text &&
+      (last.message || '').trim() === text &&
+      last.isFromPage === m.isFromPage
+    ) {
+      const t1 = last.createdAt ? new Date(last.createdAt).getTime() : 0;
+      const t2 = m.createdAt ? new Date(m.createdAt).getTime() : 0;
+      if (Math.abs(t2 - t1) <= 180_000) continue;
+    }
+
+    if (!text && !(m.attachments?.length)) continue;
+    out.push(m);
+  }
+  return out;
 }
 
 function isPancakeJsonPayload(data: unknown): boolean {
@@ -476,6 +666,97 @@ function isPancakeJsonPayload(data: unknown): boolean {
   );
 }
 
+function isExpiredMessageText(text: string | null | undefined): boolean {
+  if (!text) return false;
+  return /tin nhắn đã hết hạn|message (is )?no longer available|this content isn'?t available|hết hạn/i.test(
+    text,
+  );
+}
+
+function isAttachmentPlaceholder(text: string | null | undefined): boolean {
+  if (!text) return false;
+  const t = text.trim().replace(/\s+/g, ' ');
+  return (
+    /^\[?\s*attachments?\s*\]?$/i.test(t) ||
+    /^attachment$/i.test(t) ||
+    /^\[(ảnh|image|photo|file|video|sticker|tệp)\]$/i.test(t) ||
+    /^(tệp\s*)?đính kèm$/i.test(t) ||
+    /^attached file$/i.test(t) ||
+    t === '[Ảnh]' ||
+    t === '[File]'
+  );
+}
+
+/** Ưu tiên bản gốc hội thoại (TH/JP…) — tránh message đã bị dịch/lẫn locale CRM. */
+function pickPancakeMessageRawText(m: Record<string, unknown>): string | null {
+  const candidates = [
+    m.original_message,
+    m.original_text,
+    m.message,
+    m.text,
+    m.content,
+    m.body,
+    m.snippet,
+  ]
+    .map((v) => (typeof v === 'string' ? v.trim() : ''))
+    .filter(Boolean);
+
+  if (!candidates.length) return null;
+
+  const score = (s: string) => {
+    let n = 0;
+    // Thai / CJK / Hangul → ngôn ngữ khách thị trường HuyK
+    if (/[\u0E00-\u0E7F]/.test(s)) n += 5;
+    if (/[\u3040-\u30ff\u3400-\u9fff]/.test(s)) n += 5;
+    if (/[\uac00-\ud7af]/.test(s)) n += 4;
+    // Bản dịch/lẫn Việt trong hội thoại Thái thường kém điểm
+    if (/đã\s*gửi\s*khoản\s*thanh\s*toán|trị\s*giá|địa\s*chỉ|hội\s*thoại/i.test(s) && /[\u0E00-\u0E7F]/.test(s)) {
+      n -= 2;
+    }
+    if (isAttachmentPlaceholder(s) || isFacebookAdIdLike(s)) n -= 10;
+    return n;
+  };
+
+  candidates.sort((a, b) => score(b) - score(a));
+  return candidates[0] || null;
+}
+
+function extractAttachmentTemplateText(m: Record<string, unknown>): string | null {
+  const parts: string[] = [];
+  const push = (v: unknown) => {
+    if (typeof v === 'string' && v.trim() && !isAttachmentPlaceholder(v) && !isFacebookAdIdLike(v)) {
+      parts.push(v.trim());
+    }
+  };
+  const walk = (node: unknown, depth = 0) => {
+    if (!node || depth > 5) return;
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, depth + 1);
+      return;
+    }
+    if (typeof node !== 'object') return;
+    const o = node as Record<string, unknown>;
+    push(o.title);
+    push(o.subtitle);
+    push(o.description);
+    push(o.caption);
+    push(o.name);
+    const payload = o.payload as Record<string, unknown> | undefined;
+    if (payload) {
+      push(payload.title);
+      push(payload.subtitle);
+      push(payload.text);
+    }
+    for (const key of ['attachments', 'attachment', 'elements', 'cards', 'data', 'contents']) {
+      if (o[key] != null) walk(o[key], depth + 1);
+    }
+  };
+  walk(m.attachments);
+  walk(m.attachment);
+  walk(m.contents);
+  return parts.length ? [...new Set(parts)].join('\n') : null;
+}
+
 function extractMessageAttachments(
   m: Record<string, unknown>,
   rawText: string | null,
@@ -484,30 +765,100 @@ function extractMessageAttachments(
   const seen = new Set<string>();
   const add = (url?: unknown, type?: unknown, name?: unknown) => {
     if (typeof url !== 'string') return;
-    const u = url.trim();
+    const u = url.trim().replace(/&amp;/g, '&');
     if (!/^https?:\/\//i.test(u) || seen.has(u)) return;
     // bỏ qua pixel / tracking nhỏ
-    if (/pixel|spacer|1x1/i.test(u)) return;
+    if (/pixel|spacer|1x1|s\.facebook\.com\/l\.php/i.test(u)) return;
     seen.add(u);
+    const looksImage =
+      /\.(jpg|jpeg|png|gif|webp|bmp)(\?|$)/i.test(u) ||
+      /fbcdn|scontent|cdninstagram|tiktokcdn|pancake|pages\.fm/i.test(u);
+    const typeStr = typeof type === 'string' ? type : null;
+    const isVideo = typeStr ? /video/i.test(typeStr) : /\.(mp4|mov|webm)(\?|$)/i.test(u);
+    const placeholderName =
+      typeof name === 'string' && /^(tệp\s*)?đính kèm$|^attachment$/i.test(name.trim())
+        ? null
+        : typeof name === 'string'
+          ? name
+          : null;
     out.push({
       url: u,
-      type: typeof type === 'string' ? type : null,
-      name: typeof name === 'string' ? name : null,
+      type: isVideo ? 'video' : looksImage ? 'image' : typeStr,
+      name: placeholderName,
     });
   };
 
   const walk = (node: unknown, depth = 0) => {
-    if (!node || depth > 4) return;
+    if (!node || depth > 6) return;
+    if (typeof node === 'string') {
+      const trimmed = node.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          walk(JSON.parse(trimmed), depth + 1);
+        } catch {
+          add(trimmed);
+        }
+        return;
+      }
+      add(trimmed);
+      return;
+    }
     if (Array.isArray(node)) {
       for (const item of node) walk(item, depth + 1);
       return;
     }
     if (typeof node !== 'object') return;
     const o = node as Record<string, unknown>;
-    add(o.url || o.src || o.image_url || o.photo_url || o.media_url || o.preview_url, o.type || o.mime_type, o.name || o.filename);
-    add((o.image_data as Record<string, unknown> | undefined)?.url, 'image');
-    add((o.payload as Record<string, unknown> | undefined)?.url, o.type);
-    for (const key of ['attachments', 'attachment', 'files', 'photos', 'images', 'media', 'contents']) {
+    add(
+      o.url ||
+        o.src ||
+        o.image_url ||
+        o.photo_url ||
+        o.media_url ||
+        o.preview_url ||
+        o.attachment_url ||
+        o.origin_url ||
+        o.cdn_url ||
+        o.thumb_url ||
+        o.picture ||
+        o.image ||
+        o.href,
+      o.type || o.mime_type,
+      o.name || o.filename || o.file_name || o.title,
+    );
+    const imageData = o.image_data as Record<string, unknown> | undefined;
+    add(imageData?.url || imageData?.preview_url, 'image');
+    const media = o.media as Record<string, unknown> | undefined;
+    const mediaImage = media?.image as Record<string, unknown> | undefined;
+    add(mediaImage?.src || mediaImage?.url || media?.url || media?.src, o.type || 'image');
+    const payload = o.payload as Record<string, unknown> | undefined;
+    if (payload) {
+      add(payload.url || payload.src || payload.image_url, o.type || payload.type, payload.name || payload.title);
+      const sticker = payload.sticker as Record<string, unknown> | undefined;
+      add(sticker?.url || sticker?.image_url, 'sticker');
+      walk(payload.attachments, depth + 1);
+      walk(payload.elements, depth + 1);
+    }
+    const target = o.target as Record<string, unknown> | undefined;
+    add(target?.url, o.type);
+    add(o.file_url, o.type, o.file_name as string | undefined);
+    add(o.sticker_url, 'sticker');
+    if (typeof o.sticker === 'string') add(o.sticker, 'sticker');
+    for (const key of [
+      'attachments',
+      'attachment',
+      'files',
+      'photos',
+      'images',
+      'media',
+      'contents',
+      'data',
+      'elements',
+      'shares',
+      'share',
+      'story',
+      'message_attachments',
+    ]) {
       if (o[key] != null) walk(o[key], depth + 1);
     }
   };
@@ -519,8 +870,14 @@ function extractMessageAttachments(
   walk(m.images);
   walk(m.media);
   walk(m.contents);
+  walk(m.shares);
+  walk(m.message_attachments);
+  // FB-style { data: [...] }
+  if (m.attachments && typeof m.attachments === 'object' && !Array.isArray(m.attachments)) {
+    walk((m.attachments as Record<string, unknown>).data);
+  }
   add(m.photo_url || m.image_url || oUrl(m), m.type);
-  if (typeof m.type === 'string' && /photo|image|sticker|gif/i.test(m.type)) {
+  if (typeof m.type === 'string' && /photo|image|sticker|gif|file|video|audio|share/i.test(m.type)) {
     add(m.src || m.url || (m.payload as Record<string, unknown> | undefined)?.url, m.type);
   }
 
@@ -528,7 +885,9 @@ function extractMessageAttachments(
     for (const match of rawText.matchAll(/<img[^>]+src=["']([^"']+)["']/gi)) {
       add(match[1], 'image');
     }
-    for (const match of rawText.matchAll(/https?:\/\/[^\s"'<>]+\.(?:jpg|jpeg|png|gif|webp|bmp)(?:\?[^\s"'<>]*)?/gi)) {
+    for (const match of rawText.matchAll(
+      /https?:\/\/[^\s"'<>]+(?:\.(?:jpg|jpeg|png|gif|webp|bmp)|fbcdn|scontent)[^\s"'<>]*/gi,
+    )) {
       add(match[0], 'image');
     }
   }
@@ -538,6 +897,35 @@ function extractMessageAttachments(
 
 function oUrl(m: Record<string, unknown>): string | undefined {
   return typeof m.url === 'string' ? m.url : undefined;
+}
+
+function pickCustomerSnippet(c: Record<string, unknown>): string | null {
+  const lastObj =
+    (c.last_message as Record<string, unknown> | undefined) ||
+    (c.recent_message as Record<string, unknown> | undefined) ||
+    {};
+  const raw =
+    (typeof c.last_message === 'string' ? c.last_message : null) ||
+    (typeof lastObj.original_message === 'string' ? lastObj.original_message : null) ||
+    (typeof lastObj.message === 'string' ? lastObj.message : null) ||
+    (typeof lastObj.text === 'string' ? lastObj.text : null) ||
+    (typeof c.snippet === 'string' ? c.snippet : null) ||
+    (typeof c.last_content === 'string' ? c.last_content : null) ||
+    null;
+  const lastImageUrl =
+    extractMessageAttachments(lastObj, raw).find(
+      (a) =>
+        /image|photo|sticker|gif/i.test(a.type || '') ||
+        /\.(jpg|jpeg|png|gif|webp|bmp)(\?|$)/i.test(a.url) ||
+        /fbcdn|scontent|cdninstagram|tiktokcdn/i.test(a.url),
+    )?.url || null;
+  if (!raw) return lastImageUrl;
+  const cleaned = stripHtml(raw);
+  if (!cleaned) return lastImageUrl;
+  if (isFacebookMarketingNoise(cleaned)) return lastImageUrl;
+  if (isAttachmentPlaceholder(cleaned)) return lastImageUrl;
+  if (isExpiredMessageText(cleaned)) return 'Tin nhắn đã hết hạn';
+  return cleaned;
 }
 
 function stripHtml(html: string): string {
@@ -568,4 +956,35 @@ function normalizeStringList(value: unknown): string[] {
     }
   }
   return [...new Set(out)];
+}
+
+/** Chuẩn hoá loại hội thoại Pancake → INBOX | COMMENT. */
+export function normalizePancakeConversationType(raw: unknown): string | null {
+  if (raw == null) return null;
+  const t = String(raw).trim().toLowerCase();
+  if (!t) return null;
+  if (
+    t.includes('comment') ||
+    t === 'feed' ||
+    t === 'post' ||
+    t === 'rate' ||
+    t === 'rating' ||
+    t === 'review'
+  ) {
+    return 'COMMENT';
+  }
+  if (
+    t.includes('inbox') ||
+    t.includes('message') ||
+    t === 'messenger' ||
+    t === 'chat' ||
+    t === 'dm' ||
+    t === 'private' ||
+    t === 'private_reply' ||
+    t.includes('conversation') ||
+    t === 'thread'
+  ) {
+    return 'INBOX';
+  }
+  return 'INBOX';
 }

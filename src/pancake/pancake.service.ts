@@ -7,7 +7,14 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { PancakeClient, type PancakePage } from './pancake.client';
+import {
+  PancakeClient,
+  isFacebookMarketingNoise,
+  normalizePancakeConversationType,
+  tidyPancakeMessages,
+  type PancakeConversation,
+  type PancakePage,
+} from './pancake.client';
 import {
   collectAddressFromPancakeRaw,
   collectPhonesFromPancakeRaw,
@@ -16,6 +23,7 @@ import {
   extractPhonesFromText,
 } from './pancake-phone.util';
 import { detectOrderClosedFromTexts } from './pancake-order-detect.util';
+import { AiService } from '../ai/ai.service';
 
 function decodePancakeJwt(token: string): {
   pancakeUserId: string;
@@ -64,10 +72,13 @@ export class PancakeService {
   private readonly pagesCacheTtlMs = Number(process.env.PANCAKE_PAGES_CACHE_MS || 600_000);
   /** Dedup: status + pages gọi cùng lúc chỉ 1 request lên Pancake. */
   private pagesInFlight: Map<string, Promise<PancakePage[]>> = new Map();
+  /** Tránh gọi lại messages API cho lead đã hydrate trong process này. */
+  private readonly hydratedLeadIds = new Set<string>();
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly client: PancakeClient,
+    private readonly ai: AiService,
   ) {}
 
   /** Optional bootstrap from env if DB has no session yet. */
@@ -588,7 +599,7 @@ export class PancakeService {
               lastMessage: c.lastMessage,
               dataAt: c.updatedAt,
               hasPhone: Boolean(raw.has_phone) || phones.length > 0,
-              type: (raw.type as string) || null,
+              type: c.type || normalizePancakeConversationType(raw.type) || null,
             };
           });
 
@@ -682,102 +693,123 @@ export class PancakeService {
     conversationId: string,
     opts?: { tenantId?: string | null },
   ) {
-    const pages = await this.listPages(opts?.tenantId);
-    const page = pages.pages.find((p) => p.id === pageId);
-    if (!page) {
+    const storedLead = await this.prisma.pancakeLead.findFirst({
+      where: { pageId, conversationId },
+    });
+    const pageCfg = await this.prisma.pancakePageConfig.findUnique({ where: { pageId } });
+    if (!storedLead && !pageCfg) {
       throw new NotFoundException('Page không thuộc account đã kết nối');
     }
 
-    const convRes = await this.listConversations(pageId, {
+    const pageMsgs = await this.listMessages(pageId, conversationId, {
       limit: 50,
       tenantId: opts?.tenantId,
     });
-    const conv =
-      convRes.conversations.find((c) => c.id === conversationId) ??
-      ({
-        id: conversationId,
-        customerName: null,
-        customerId: null,
-        lastMessage: null,
-        updatedAt: null,
-        tags: [],
-        raw: {},
-      } as const);
-
-    const msgRes = await this.listMessages(pageId, conversationId, {
-      limit: 80,
-      tenantId: opts?.tenantId,
-    });
+    const msgRes = {
+      messages: tidyPancakeMessages(pageMsgs.messages),
+      pageTokenRegenerated: pageMsgs.pageTokenRegenerated,
+      warning: pageMsgs.warning,
+    };
     const phones = [
       ...new Set([
-        ...collectPhonesFromPancakeRaw(conv.raw as Record<string, unknown>),
-        ...collectPhonesFromPancakeRaw(
-          ((conv.raw as Record<string, unknown> | undefined)?.page_customer as
-            | Record<string, unknown>
-            | undefined) ?? undefined,
-        ),
+        ...(storedLead?.phones ?? []),
         ...extractPhonesFromMessages(msgRes.messages),
       ]),
     ];
     const addressFromChat =
-      collectAddressFromPancakeRaw(conv.raw as Record<string, unknown>) ||
-      collectAddressFromPancakeRaw(
-        ((conv.raw as Record<string, unknown> | undefined)?.page_customer as
-          | Record<string, unknown>
-          | undefined) ?? undefined,
-      ) ||
       msgRes.messages
         .map((m) => extractAddressFromText(m.message))
         .find((a): a is string => Boolean(a)) ||
+      storedLead?.address ||
       null;
 
     const orderSignal = detectOrderClosedFromTexts([
-      conv.lastMessage,
-      ...msgRes.messages.map((m) => m.message),
+      storedLead?.lastMessage,
+      storedLead?.notes,
+      ...msgRes.messages.flatMap((m) => collectDetectTextsFromMessage(m)),
     ]);
 
-    const chatUpgrade = await this.upgradeLeadFromChatOrder({
+    const lastVisible = pickVisibleLastMessage(msgRes.messages);
+    const nextType =
+      storedLead?.conversationType ||
+      inferConversationType(conversationId) ||
+      'INBOX';
+    if (storedLead) {
+      void this.prisma.pancakeLead
+        .update({
+          where: { id: storedLead.id },
+          data: {
+            lastMessage: lastVisible || storedLead.lastMessage,
+            conversationType: nextType,
+          },
+        })
+        .catch((e) =>
+          this.logger.warn(`leadPreview persist meta failed: ${(e as Error).message}`),
+        );
+    }
+
+    void this.upgradeLeadFromChatOrder({
       pageId,
       conversationId,
-      customerId: conv.customerId,
-      fullName: conv.customerName,
+      customerId: storedLead?.pancakeCustomerId || storedLead?.customerId,
+      fullName: storedLead?.fullName,
       phones,
       address: addressFromChat,
-      lastMessage: conv.lastMessage || msgRes.messages[0]?.message || null,
+      lastMessage: lastVisible || storedLead?.lastMessage || msgRes.messages[0]?.message || null,
       signal: orderSignal,
       tenantId: opts?.tenantId,
-    });
+    }).catch((e) => this.logger.warn(`leadPreview upgrade: ${(e as Error).message}`));
 
     return {
       leadPreview: {
-        fullName: conv.customerName,
+        fullName: storedLead?.fullName ?? null,
         phones,
         address: addressFromChat,
-        sourcePageId: page.id,
-        sourcePageName: page.name,
-        platform: page.platform,
+        sourcePageId: pageId,
+        sourcePageName: storedLead?.pageName ?? pageCfg?.pageName ?? null,
+        platform: storedLead?.platform ?? pageCfg?.platform ?? null,
         conversationId,
-        customerId: conv.customerId,
-        dataAt: conv.updatedAt || msgRes.messages[0]?.createdAt || null,
-        lastMessage: conv.lastMessage || msgRes.messages[0]?.message || null,
-        tags: conv.tags,
-        chatHint: `Pancake page ${page.id} / conversation ${conversationId}`,
+        customerId: storedLead?.customerId ?? storedLead?.pancakeCustomerId ?? null,
+        dataAt:
+          storedLead?.dataAt?.toISOString() ||
+          msgRes.messages[0]?.createdAt ||
+          null,
+        lastMessage: lastVisible || storedLead?.lastMessage || null,
+        conversationType:
+          storedLead?.conversationType || inferConversationType(conversationId) || 'INBOX',
+        tags: [],
+        chatHint: `Pancake page ${pageId} / conversation ${conversationId}`,
         orderSignal: {
           closed: orderSignal.closed,
           confidence: orderSignal.confidence,
           reasons: orderSignal.reasons,
         },
-        leadUpgraded: chatUpgrade.upgraded,
-        leadStage: chatUpgrade.stage,
-        leadLabels: chatUpgrade.labels,
+        leadUpgraded: Boolean(
+          orderSignal.closed &&
+            storedLead &&
+            !(storedLead.stage === 'customer' && storedLead.labels.includes('Đã chốt')),
+        ),
+        leadStage: orderSignal.closed ? 'customer' : storedLead?.stage ?? 'conversation',
+        leadLabels: orderSignal.closed
+          ? [
+              'Đã chốt',
+              ...(storedLead?.labels ?? []).filter(
+                (l) =>
+                  l !== 'Đã chốt' &&
+                  l.toLowerCase() !== 'follow' &&
+                  l !== 'Follow' &&
+                  l !== 'follow-up',
+              ),
+            ]
+          : storedLead?.labels ?? [],
       },
       messages: msgRes.messages,
-      pageTokenRegenerated: convRes.pageTokenRegenerated || msgRes.pageTokenRegenerated,
-      warning: convRes.warning || msgRes.warning,
+      pageTokenRegenerated: msgRes.pageTokenRegenerated,
+      warning: msgRes.warning,
       note: orderSignal.closed
-        ? chatUpgrade.upgraded
-          ? `Phát hiện chốt đơn từ chat (${orderSignal.confidence}) — đã gắn nhãn Đã chốt.`
-          : `Phát hiện chốt đơn từ chat (${orderSignal.confidence}).`
+        ? storedLead?.stage === 'customer' && storedLead.labels.includes('Đã chốt')
+          ? `Phát hiện chốt đơn từ chat (${orderSignal.confidence}).`
+          : `Phát hiện chốt đơn từ chat (${orderSignal.confidence}) — đã gắn nhãn Đã chốt.`
         : phones.length === 0
           ? 'Pancake chưa có SĐT trên hội thoại này. SĐT chỉ có khi khách gửi số / CS lưu trên Pancake (phone_numbers, phone_info).'
           : addressFromChat
@@ -786,13 +818,43 @@ export class PancakeService {
     };
   }
 
+  async translateChatItems(items: Array<{ id?: string; text?: string }>) {
+    const prepared = items
+      .map((it, i) => ({
+        id: String(it.id || i),
+        text: (it.text || '').trim(),
+        direction: 'inbound' as const,
+      }))
+      .filter(
+        (it) =>
+          it.text &&
+          !isNoiseChatText(it.text) &&
+          !isFacebookMarketingNoise(it.text),
+      )
+      .slice(0, 16);
+    if (!prepared.length) return { items: [] };
+    const rows = await this.ai.translateBatch({
+      items: prepared,
+      targetLang: 'vi',
+      contextMessages: prepared.map((p) => p.text),
+    });
+    return {
+      items: rows.map((r) => ({
+        id: r.id,
+        originalText: r.originalText,
+        translatedText: r.translatedText,
+        detectedLang: r.detectedLang,
+        sameLanguage: r.sameLanguage,
+      })),
+    };
+  }
+
   /** Lead đã lưu trong DB CRM (sau sync / webhook). */
   async listStoredLeads(
     pageId: string,
     opts?: { limit?: number; offset?: number; onlyWithPhone?: boolean; tenantId?: string | null },
   ) {
-    const pages = await this.listPages(opts?.tenantId);
-    const page = pages.pages.find((p) => p.id === pageId);
+    const pageCfg = await this.prisma.pancakePageConfig.findUnique({ where: { pageId } });
     const limit = Math.min(opts?.limit ?? 100, 500);
     const offset = opts?.offset ?? 0;
 
@@ -828,16 +890,58 @@ export class PancakeService {
         }),
       ]);
 
+    void this.persistMissingConversationTypes(pageId).catch((e) =>
+      this.logger.warn(`persist types page=${pageId}: ${(e as Error).message}`),
+    );
+    void this.hydrateListedLeadMeta(pageId, rows, opts?.tenantId).catch((e) =>
+      this.logger.warn(`hydrate listed meta page=${pageId}: ${(e as Error).message}`),
+    );
+
+    const hydrated = rows.map((r) => ({
+      ...r,
+      conversationType:
+        r.conversationType ||
+        inferConversationType(r.conversationId) ||
+        (r.conversationId ? 'INBOX' : r.conversationType),
+    }));
+
     return {
       pageId,
-      pageName: page?.name ?? rows[0]?.pageName ?? null,
-      platform: page?.platform ?? rows[0]?.platform ?? null,
+      pageName: hydrated[0]?.pageName ?? pageCfg?.pageName ?? null,
+      platform: hydrated[0]?.platform ?? pageCfg?.platform ?? null,
       source: 'db' as const,
-      leads: rows.map((r) => {
-        const labels = ensureDefaultLabels(r.stage, r.labels);
-        if (labelsNeedPersist(r.labels ?? [], labels)) {
+      leads: hydrated.map((r) => {
+        const closedFromChat = detectOrderClosedFromTexts([
+          r.lastMessage,
+          r.notes,
+        ]).closed;
+        const stage = closedFromChat || r.stage === 'customer' ? 'customer' : r.stage || 'conversation';
+        const labels = ensureDefaultLabels(stage, r.labels);
+        if (
+          labelsNeedPersist(r.labels ?? [], labels) ||
+          (closedFromChat && r.stage !== 'customer') ||
+          (closedFromChat && r.followAt)
+        ) {
           void this.prisma.pancakeLead
-            .update({ where: { id: r.id }, data: { labels } })
+            .update({
+              where: { id: r.id },
+              data: {
+                labels,
+                ...(closedFromChat
+                  ? {
+                      followAt: null,
+                      ...(r.stage !== 'customer'
+                        ? {
+                            stage: 'customer' as const,
+                            orderedAt: r.orderedAt ?? new Date(),
+                            orderRef: r.orderRef || `chat-${(r.conversationId || r.id).slice(0, 12)}`,
+                            source: 'chat_order_detect',
+                          }
+                        : {}),
+                    }
+                  : {}),
+              },
+            })
             .catch((e) =>
               this.logger.warn(`backfill labels lead=${r.id}: ${(e as Error).message}`),
             );
@@ -855,8 +959,11 @@ export class PancakeService {
           lastMessage: r.lastMessage,
           dataAt: r.dataAt?.toISOString() ?? r.updatedAt.toISOString(),
           hasPhone: r.phones.length > 0,
-          type: r.conversationType,
-          stage: r.stage || 'conversation',
+          type:
+            r.conversationType ||
+            inferConversationType(r.conversationId) ||
+            (r.conversationId ? 'INBOX' : null),
+          stage,
           labels,
           followAt: r.followAt?.toISOString() ?? null,
           orderedAt: r.orderedAt?.toISOString() ?? null,
@@ -953,9 +1060,14 @@ export class PancakeService {
               notes: c.notes,
               gender: c.gender,
               conversationId: c.threadId,
+              lastMessage: storeableLastMessage(c.lastMessage) || undefined,
+              conversationType:
+                c.conversationType ||
+                inferConversationType(c.threadId) ||
+                (c.threadId ? 'INBOX' : undefined),
               dataAt: parseOptionalDate(c.updatedAt),
               source: 'sync',
-              labels: ['follow'],
+              labels: ensureDefaultLabels('conversation', ['follow']),
               raw: c.raw as Prisma.InputJsonValue,
               tenantId: opts?.tenantId || null,
             },
@@ -971,6 +1083,11 @@ export class PancakeService {
               notes: c.notes,
               gender: c.gender ?? undefined,
               conversationId: c.threadId ?? undefined,
+              lastMessage: storeableLastMessage(c.lastMessage) || undefined,
+              conversationType:
+                c.conversationType ||
+                inferConversationType(c.threadId) ||
+                undefined,
               dataAt: parseOptionalDate(c.updatedAt) ?? undefined,
               source: 'sync',
               raw: c.raw as Prisma.InputJsonValue,
@@ -1001,211 +1118,38 @@ export class PancakeService {
       );
       pageTokenRegenerated = pageTokenRegenerated || regen;
       for (const conv of convs.conversations) {
-        const raw = conv.raw || {};
-        const custId =
-          String(
-            (raw.customers as { id?: string }[] | undefined)?.[0]?.id ||
-              (raw.page_customer as { id?: string } | undefined)?.id ||
-              conv.customerId ||
-              conv.id,
-          ) || null;
-        if (!custId) continue;
-        const phones = [
-          ...new Set([
-            ...collectPhonesFromPancakeRaw(raw),
-            ...collectPhonesFromPancakeRaw(
-              (raw.page_customer as Record<string, unknown> | undefined) ?? undefined,
-            ),
-            ...extractPhonesFromText(conv.lastMessage),
-          ]),
-        ];
-        const address =
-          collectAddressFromPancakeRaw(raw) ||
-          collectAddressFromPancakeRaw(
-            (raw.page_customer as Record<string, unknown> | undefined) ?? undefined,
-          ) ||
-          extractAddressFromText(conv.lastMessage);
-        await this.prisma.pancakeLead.upsert({
-          where: {
-            pageId_pancakeCustomerId: { pageId, pancakeCustomerId: custId },
-          },
-          create: {
-            pageId,
-            pageName: page.name,
-            platform: page.platform,
-            pancakeCustomerId: custId,
-            customerId: conv.customerId,
-            fullName: conv.customerName,
-            phones,
-            address,
-            conversationId: conv.id,
-            lastMessage: conv.lastMessage,
-            conversationType: (raw.type as string) || null,
-            dataAt: parseOptionalDate(conv.updatedAt),
-            source: 'sync_conversations',
-            labels: ['follow'],
-            raw: raw as Prisma.InputJsonValue,
-            tenantId: opts?.tenantId || null,
-          },
-          update: {
-            pageName: page.name,
-            platform: page.platform,
-            fullName: conv.customerName || undefined,
-            phones: phones.length ? phones : undefined,
-            address: address || undefined,
-            conversationId: conv.id,
-            lastMessage: conv.lastMessage,
-            conversationType: (raw.type as string) || undefined,
-            dataAt: parseOptionalDate(conv.updatedAt) ?? undefined,
-            source: 'sync_conversations',
-            raw: raw as Prisma.InputJsonValue,
-          },
+        const applied = await this.applyConversationToLead(pageId, page, conv, {
+          tenantId: opts?.tenantId,
+          source: 'sync_conversations',
+          createIfMissing: true,
         });
-        upserted += 1;
-        fetched += 1;
+        if (applied) {
+          upserted += 1;
+          fetched += 1;
+        }
       }
     }
 
     const truncated = total != null && fetched < total && !usedConversationsFallback;
 
-    // Bổ sung conversationId / lastMessage / type từ conversations (1 trang, không nặng)
-    if (!usedConversationsFallback) try {
-      this.logger.log(`Pancake sync page=${pageId} enriching from conversations…`);
-      const { result: convs } = await this.withPageTokenRetry(
-        pageId,
-        opts?.tenantId,
-        (pageToken) => this.client.listConversations(pageId, pageToken, { limit: 100 }),
-      );
-      for (const conv of convs.conversations) {
-        const raw = conv.raw || {};
-        const custId =
-          String(
-            (raw.customers as { id?: string }[] | undefined)?.[0]?.id ||
-              (raw.page_customer as { id?: string } | undefined)?.id ||
-              conv.customerId ||
-              '',
-          ) || null;
-        if (!custId) continue;
-        const phones = [
-          ...new Set([
-            ...collectPhonesFromPancakeRaw(raw),
-            ...extractPhonesFromText(conv.lastMessage),
-          ]),
-        ];
-        const addressFromConv =
-          collectAddressFromPancakeRaw(raw) ||
-          collectAddressFromPancakeRaw(
-            (raw.page_customer as Record<string, unknown> | undefined) ?? undefined,
-          ) ||
-          extractAddressFromText(conv.lastMessage);
-        const existing = await this.prisma.pancakeLead.findUnique({
-          where: {
-            pageId_pancakeCustomerId: { pageId, pancakeCustomerId: custId },
-          },
-        });
-        if (!existing) continue;
-        const mergedPhones = [...new Set([...existing.phones, ...phones])];
-        await this.prisma.pancakeLead.update({
-          where: { id: existing.id },
-          data: {
-            conversationId: conv.id,
-            lastMessage: conv.lastMessage,
-            conversationType: (raw.type as string) || existing.conversationType,
-            phones: mergedPhones,
-            ...(addressFromConv && !existing.address ? { address: addressFromConv } : {}),
-            fullName: existing.fullName || conv.customerName,
-            dataAt: parseOptionalDate(conv.updatedAt) ?? existing.dataAt,
-          },
-        });
-
-        // Nhận diện chốt đơn từ tin gần nhất (và tải thêm tin nếu có dấu hiệu)
-        let orderTexts: Array<string | null | undefined> = [conv.lastMessage];
-        let chatPhones = mergedPhones;
-        const hint = /มัดจำ|สั่งซื้อ|โอนเงิน|ยอดรวม|deposit|đặt\s*cọc|đơn\s*hàng|chuyển\s*khoản|ご注文|入金/i.test(
-          conv.lastMessage || '',
-        );
-        if (hint && existing.stage !== 'customer') {
-          try {
-            const { result: msgs } = await this.withPageTokenRetry(
-              pageId,
-              opts?.tenantId,
-              (pageToken) => this.client.listMessages(pageId, conv.id, pageToken, { limit: 40 }),
-            );
-            orderTexts = [conv.lastMessage, ...msgs.messages.map((m) => m.message)];
-            chatPhones = [
-              ...new Set([...mergedPhones, ...extractPhonesFromMessages(msgs.messages)]),
-            ];
-            await sleep(350);
-          } catch (e) {
-            this.logger.warn(
-              `chat-order scan messages failed conv=${conv.id}: ${(e as Error).message}`,
-            );
-          }
-        }
-        const signal = detectOrderClosedFromTexts(orderTexts);
-        if (signal.closed) {
-          await this.upgradeLeadFromChatOrder({
-            pageId,
-            conversationId: conv.id,
-            customerId: custId,
-            fullName: conv.customerName || existing.fullName,
-            phones: chatPhones,
-            address: addressFromConv || existing.address,
-            lastMessage: conv.lastMessage,
-            signal,
-            tenantId: opts?.tenantId,
-          });
-        }
-      }
-
-      // Khách có SĐT nhưng chưa có địa chỉ: đọc thêm tin nhắn (giới hạn) để trích 住所/địa chỉ
-      const needAddr = await this.prisma.pancakeLead.findMany({
-        where: {
-          pageId,
-          NOT: { phones: { equals: [] } },
-          OR: [{ address: null }, { address: '' }],
-          conversationId: { not: null },
-        },
-        take: 15,
-        orderBy: { updatedAt: 'desc' },
+    // Enrich INBOX + COMMENT (luôn chạy, kể cả khi fallback conversations)
+    try {
+      const enrich = await this.enrichLeadsFromConversations(pageId, page, {
+        tenantId: opts?.tenantId,
+        maxPagesPerType: 40,
       });
-      let addrFilled = 0;
-      for (const lead of needAddr) {
-        if (!lead.conversationId) continue;
-        try {
-          const { result: msgs } = await this.withPageTokenRetry(
-            pageId,
-            opts?.tenantId,
-            (pageToken) =>
-              this.client.listMessages(pageId, lead.conversationId!, pageToken, { limit: 40 }),
-          );
-          const fromChat =
-            msgs.messages
-              .map((m) => extractAddressFromText(m.message))
-              .find((a): a is string => Boolean(a)) ?? null;
-          if (!fromChat) {
-            await sleep(400);
-            continue;
-          }
-          await this.prisma.pancakeLead.update({
-            where: { id: lead.id },
-            data: { address: fromChat },
-          });
-          addrFilled += 1;
-          await sleep(400);
-        } catch (e) {
-          this.logger.warn(
-            `address enrich from chat failed lead=${lead.id}: ${(e as Error).message}`,
-          );
-        }
-      }
-      if (addrFilled) {
-        this.logger.log(
-          `Pancake sync page=${pageId} filled address from chat for ${addrFilled} leads`,
-        );
-      }
+      this.logger.log(
+        `Pancake sync page=${pageId} enrich conversations matched=${enrich.matched} created=${enrich.created} scanned=${enrich.scanned}`,
+      );
     } catch (e) {
       this.logger.warn(`sync conversations enrich failed: ${(e as Error).message}`);
+    }
+
+    try {
+      const filled = await this.backfillMissingChatMeta(pageId, opts?.tenantId);
+      this.logger.log(`Pancake sync page=${pageId} backfill chat meta=${filled}`);
+    } catch (e) {
+      this.logger.warn(`backfill chat meta failed: ${(e as Error).message}`);
     }
 
     // Quét chat → tự gán nhãn follow / Đã chốt (ưu tiên lead có SĐT+địa chỉ)
@@ -1270,6 +1214,442 @@ export class PancakeService {
   }
 
   /**
+   * Kéo hội thoại INBOX + COMMENT (phân trang) để gắn đúng Loại / tin gần nhất / conversationId.
+   */
+  async enrichLeadsFromConversations(
+    pageId: string,
+    page: PancakePage,
+    opts?: { tenantId?: string | null; maxPagesPerType?: number },
+  ) {
+    const maxPagesPerType = opts?.maxPagesPerType ?? 25;
+    let scanned = 0;
+    let matched = 0;
+    let created = 0;
+
+    for (const type of ['INBOX', 'COMMENT'] as const) {
+      let cursor: string | undefined;
+      for (let pageIdx = 0; pageIdx < maxPagesPerType; pageIdx++) {
+        const { result: convs } = await this.withPageTokenRetry(
+          pageId,
+          opts?.tenantId,
+          (pageToken) =>
+            this.client.listConversations(pageId, pageToken, {
+              limit: 60,
+              type,
+              cursor,
+            }),
+        );
+        if (!convs.conversations.length) break;
+
+        for (const conv of convs.conversations) {
+          scanned += 1;
+          const before = await this.findLeadForConversation(pageId, conv);
+          const applied = await this.applyConversationToLead(pageId, page, conv, {
+            tenantId: opts?.tenantId,
+            source: 'sync_conversations',
+            createIfMissing: true,
+            forcedType: type,
+          });
+          if (!applied) continue;
+          if (before) matched += 1;
+          else created += 1;
+        }
+
+        const next = convs.nextCursor;
+        if (!next || next === cursor) break;
+        cursor = next;
+        await sleep(450);
+      }
+    }
+
+    // Backfill nhãn follow / Đã chốt cho lead thiếu labels
+    await this.prisma.pancakeLead.updateMany({
+      where: {
+        pageId,
+        labels: { equals: [] },
+        NOT: { stage: 'customer' },
+      },
+      data: { labels: ['follow'] },
+    });
+    await this.prisma.pancakeLead.updateMany({
+      where: {
+        pageId,
+        stage: 'customer',
+        labels: { equals: [] },
+      },
+      data: { labels: ['Đã chốt'] },
+    });
+
+    return { scanned, matched, created };
+  }
+
+  /** Gán INBOX/COMMENT cho lead thiếu loại — không gọi Pancake. */
+  private async persistMissingConversationTypes(pageId: string) {
+    await this.prisma.pancakeLead.updateMany({
+      where: { pageId, conversationType: null, conversationId: { not: null } },
+      data: { conversationType: 'INBOX' },
+    });
+    await this.prisma.pancakeLead.updateMany({
+      where: {
+        pageId,
+        conversationId: { not: null },
+        OR: [
+          { conversationId: { contains: 'comment', mode: 'insensitive' } },
+          { conversationId: { contains: 'feed', mode: 'insensitive' } },
+          { conversationId: { contains: '_post' } },
+        ],
+      },
+      data: { conversationType: 'COMMENT' },
+    });
+  }
+
+  /** Trang danh sách đang xem: lấy tin cuối nếu DB đang trống / placeholder. */
+  private async hydrateListedLeadMeta<
+    T extends {
+      id: string;
+      conversationId: string | null;
+      conversationType: string | null;
+      lastMessage: string | null;
+    },
+  >(pageId: string, rows: T[], tenantId?: string | null): Promise<T[]> {
+    const inferred = rows.map((r) => ({
+      ...r,
+      conversationType:
+        r.conversationType ||
+        inferConversationType(r.conversationId) ||
+        (r.conversationId ? 'INBOX' : r.conversationType),
+    }));
+    const need = inferred.filter(
+      (r) =>
+        r.conversationId &&
+        lastMessageNeedsHydrate(r.lastMessage) &&
+        !this.hydratedLeadIds.has(r.id),
+    );
+    if (!need.length) return inferred;
+
+    const updates = new Map<
+      string,
+      { lastMessage: string | null; conversationType: string | null }
+    >();
+    const work = mapPool(need.slice(0, 30), 5, async (lead) => {
+      try {
+        const msgs = await this.listMessages(pageId, lead.conversationId!, {
+          limit: 15,
+          tenantId,
+        });
+        const lastVisible = pickVisibleLastMessage(tidyPancakeMessages(msgs.messages));
+        const nextType =
+          lead.conversationType || inferConversationType(lead.conversationId) || 'INBOX';
+        const nextLast = lastVisible || lead.lastMessage;
+        updates.set(lead.id, { lastMessage: nextLast, conversationType: nextType });
+        await this.prisma.pancakeLead.update({
+          where: { id: lead.id },
+          data: {
+            ...(nextLast ? { lastMessage: nextLast } : {}),
+            conversationType: nextType,
+          },
+        });
+      } catch (e) {
+        this.logger.warn(`hydrate lastMessage lead=${lead.id}: ${(e as Error).message}`);
+      } finally {
+        this.hydratedLeadIds.add(lead.id);
+      }
+    });
+    await work;
+
+    return inferred.map((r) => {
+      const u = updates.get(r.id);
+      return u ? { ...r, ...u } : r;
+    });
+  }
+
+  /** Lead đã có conversationId nhưng thiếu loại / tin cuối — lấy từ messages API. */
+  private async backfillMissingChatMeta(pageId: string, tenantId?: string | null) {
+    const incomplete = await this.prisma.pancakeLead.findMany({
+      where: {
+        pageId,
+        conversationId: { not: null },
+        OR: [
+          { conversationType: null },
+          { lastMessage: null },
+          { lastMessage: '' },
+          { lastMessage: 'Ảnh đính kèm' },
+        ],
+      },
+      orderBy: { dataAt: 'desc' },
+      take: 120,
+    });
+    let filled = 0;
+    for (const lead of incomplete) {
+      if (!lead.conversationId) continue;
+      try {
+        const { result: msgs } = await this.withPageTokenRetry(
+          pageId,
+          tenantId,
+          (pageToken) =>
+            this.client.listMessages(pageId, lead.conversationId!, pageToken, { limit: 20 }),
+        );
+        const lastVisible = pickVisibleLastMessage(tidyPancakeMessages(msgs.messages));
+        const nextType =
+          lead.conversationType || inferConversationType(lead.conversationId) || 'INBOX';
+        if (!lastVisible && lead.conversationType) continue;
+        await this.prisma.pancakeLead.update({
+          where: { id: lead.id },
+          data: {
+            lastMessage: lastVisible || lead.lastMessage,
+            conversationType: nextType,
+          },
+        });
+        filled += 1;
+        await sleep(280);
+      } catch (e) {
+        this.logger.warn(
+          `backfill chat meta lead=${lead.id}: ${(e as Error).message}`,
+        );
+        await sleep(400);
+      }
+    }
+    return filled;
+  }
+
+  private async findLeadForConversation(pageId: string, conv: PancakeConversation) {
+    const keys = conversationCustomerKeys(conv);
+    if (conv.id) {
+      const byThread = await this.prisma.pancakeLead.findFirst({
+        where: { pageId, conversationId: conv.id },
+      });
+      if (byThread) return byThread;
+    }
+    for (const key of keys) {
+      const hit = await this.prisma.pancakeLead.findFirst({
+        where: {
+          pageId,
+          OR: [
+            { pancakeCustomerId: key },
+            { customerId: key },
+            { psid: key },
+          ],
+        },
+      });
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  private async applyConversationToLead(
+    pageId: string,
+    page: PancakePage,
+    conv: PancakeConversation,
+    opts: {
+      tenantId?: string | null;
+      source: string;
+      createIfMissing?: boolean;
+      forcedType?: string;
+    },
+  ): Promise<boolean> {
+    if (!conv.id && !conv.customerId) return false;
+    const raw = conv.raw || {};
+    const keys = conversationCustomerKeys(conv);
+    const custId = keys[0] || conv.id;
+    if (!custId) return false;
+
+    const type =
+      normalizePancakeConversationType(opts.forcedType) ||
+      conv.type ||
+      normalizePancakeConversationType(raw.type) ||
+      inferConversationType(conv.id) ||
+      'INBOX';
+    const phones = [
+      ...new Set([
+        ...collectPhonesFromPancakeRaw(raw),
+        ...collectPhonesFromPancakeRaw(
+          (raw.page_customer as Record<string, unknown> | undefined) ?? undefined,
+        ),
+        ...extractPhonesFromText(conv.lastMessage),
+      ]),
+    ];
+    const address =
+      collectAddressFromPancakeRaw(raw) ||
+      collectAddressFromPancakeRaw(
+        (raw.page_customer as Record<string, unknown> | undefined) ?? undefined,
+      ) ||
+      extractAddressFromText(conv.lastMessage);
+
+    let existing = await this.findLeadForConversation(pageId, conv);
+    if (!existing && opts.createIfMissing) {
+      existing = await this.prisma.pancakeLead.create({
+        data: {
+          pageId,
+          pageName: page.name,
+          platform: page.platform,
+          pancakeCustomerId: custId,
+          customerId: conv.customerId,
+          fullName: conv.customerName,
+          phones,
+          address,
+          conversationId: conv.id || null,
+          lastMessage: storeableLastMessage(conv.lastMessage),
+          conversationType: type,
+          dataAt: parseOptionalDate(conv.updatedAt),
+          source: opts.source,
+          labels: ensureDefaultLabels('conversation', [
+            'follow',
+            ...conv.tags.filter((t) => t && t !== 'follow'),
+          ]),
+          raw: raw as Prisma.InputJsonValue,
+          tenantId: opts.tenantId || null,
+        },
+      });
+      return true;
+    }
+    if (!existing) return false;
+
+    const mergedPhones = [...new Set([...existing.phones, ...phones])];
+    const labels = ensureDefaultLabels(
+      existing.stage === 'customer' || existing.labels.includes('Đã chốt')
+        ? 'customer'
+        : existing.stage,
+      [...(existing.labels ?? []), ...conv.tags],
+    );
+    const nextLastMessage =
+      storeableLastMessage(conv.lastMessage) ||
+      storeableLastMessage(existing.lastMessage);
+    await this.prisma.pancakeLead.update({
+      where: { id: existing.id },
+      data: {
+        pageName: page.name,
+        platform: page.platform,
+        fullName: existing.fullName || conv.customerName,
+        phones: mergedPhones,
+        ...(address && !existing.address ? { address } : {}),
+        conversationId: conv.id || existing.conversationId,
+        lastMessage: nextLastMessage,
+        conversationType: type || existing.conversationType,
+        dataAt: parseOptionalDate(conv.updatedAt) ?? existing.dataAt,
+        labels,
+        source: opts.source,
+        raw: raw as Prisma.InputJsonValue,
+        ...(labels.includes('Đã chốt')
+          ? { stage: 'customer' as const, followAt: null }
+          : {}),
+      },
+    });
+
+    // Nhận diện chốt đơn từ tin gần nhất (và tải thêm tin nếu có dấu hiệu)
+    let orderTexts: Array<string | null | undefined> = [conv.lastMessage];
+    let chatPhones = mergedPhones;
+    const hint =
+      /มัดจำ|สั่งซื้อ|โอนเงิน|โอนสำเร็จ|ได้ส่งเงิน|ยอดรวม|deposit|đặt\s*cọc|đơn\s*hàng|chuyển\s*khoản|thanh\s*toán|khoản\s*thanh\s*toán|฿|บาท|ชำระเงิน|ご注文|入金/i.test(
+        conv.lastMessage || '',
+      );
+    if (hint && existing.stage !== 'customer') {
+      try {
+        const { result: msgs } = await this.withPageTokenRetry(
+          pageId,
+          opts.tenantId,
+          (pageToken) => this.client.listMessages(pageId, conv.id, pageToken, { limit: 40 }),
+        );
+        orderTexts = [
+          conv.lastMessage,
+          ...msgs.messages.flatMap((m) => collectDetectTextsFromMessage(m)),
+        ];
+        chatPhones = [
+          ...new Set([...mergedPhones, ...extractPhonesFromMessages(msgs.messages)]),
+        ];
+        await sleep(350);
+      } catch (e) {
+        this.logger.warn(
+          `chat-order scan messages failed conv=${conv.id}: ${(e as Error).message}`,
+        );
+      }
+      const signal = detectOrderClosedFromTexts(orderTexts);
+      if (signal.closed) {
+        await this.upgradeLeadFromChatOrder({
+          pageId,
+          conversationId: conv.id,
+          customerId: custId,
+          fullName: conv.customerName || existing.fullName,
+          phones: chatPhones,
+          address: address || existing.address,
+          lastMessage: conv.lastMessage,
+          signal,
+          tenantId: opts.tenantId,
+        });
+      }
+    }
+
+    return true;
+  }
+
+  /** Đồng bộ tuần tự mọi kênh chat (FB / IG / TikTok…) đã activated. */
+  async syncAllPages(opts?: {
+    tenantId?: string | null;
+    maxPages?: number;
+    platforms?: string[];
+  }) {
+    const pages = await this.listPages(opts?.tenantId);
+    const allow = new Set(
+      (opts?.platforms?.length
+        ? opts.platforms
+        : [
+            'facebook',
+            'instagram',
+            'instagram_official',
+            'tiktok',
+            'tiktok_business_messaging',
+          ]
+      ).map((p) => p.toLowerCase()),
+    );
+    const targets = pages.pages.filter(
+      (p) => p.isActivated !== false && (!p.platform || allow.has(p.platform.toLowerCase())),
+    );
+
+    const results: Array<{
+      pageId: string;
+      pageName: string | null;
+      ok: boolean;
+      upserted?: number;
+      storedInDb?: number;
+      error?: string;
+    }> = [];
+
+    for (const page of targets) {
+      try {
+        this.logger.log(`Pancake syncAll → ${page.id} (${page.name})`);
+        const r = await this.syncPageCustomers(page.id, {
+          tenantId: opts?.tenantId,
+          maxPages: opts?.maxPages ?? 40,
+        });
+        results.push({
+          pageId: page.id,
+          pageName: page.name,
+          ok: true,
+          upserted: r.upserted,
+          storedInDb: r.storedInDb,
+        });
+      } catch (e) {
+        this.logger.warn(
+          `Pancake syncAll failed page=${page.id}: ${(e as Error).message}`,
+        );
+        results.push({
+          pageId: page.id,
+          pageName: page.name,
+          ok: false,
+          error: (e as Error).message,
+        });
+      }
+      await sleep(800);
+    }
+
+    return {
+      totalPages: targets.length,
+      ok: results.filter((r) => r.ok).length,
+      failed: results.filter((r) => !r.ok).length,
+      results,
+    };
+  }
+
+  /**
    * Quét tin nhắn hội thoại → gán nhãn:
    * - Có tín hiệu chuyển khoản / xác nhận đơn → Đã chốt (+ stage customer)
    * - Chưa → follow
@@ -1303,7 +1683,7 @@ export class PancakeService {
         else if (hasPhone) score += 50;
         else if (hasAddr) score += 30;
         if (
-          /มัดจำ|สั่งซื้อ|โอนเงิน|ยอดรวม|deposit|đặt\s*cọc|đơn\s*hàng|chuyển\s*khoản|ご注文|入金|โอนสำเร็จ/i.test(
+          /มัดจำ|สั่งซื้อ|โอนเงิน|โอนสำเร็จ|ยอดรวม|deposit|đặt\s*cọc|đơn\s*hàng|chuyển\s*khoản|thanh\s*toán|khoản\s*thanh\s*toán|฿|บาท|ご注文|入金|ชำระเงิน/i.test(
             l.lastMessage || '',
           )
         ) {
@@ -1329,7 +1709,10 @@ export class PancakeService {
           (pageToken) =>
             this.client.listMessages(pageId, lead.conversationId!, pageToken, { limit: 50 }),
         );
-        const texts = [lead.lastMessage, ...msgs.messages.map((m) => m.message)];
+        const texts = [
+          lead.lastMessage,
+          ...msgs.messages.flatMap((m) => collectDetectTextsFromMessage(m)),
+        ];
         const phones = [
           ...new Set([...lead.phones, ...extractPhonesFromMessages(msgs.messages)]),
         ];
@@ -1511,10 +1894,13 @@ export class PancakeService {
         notes: typeof customer.notes === 'string' ? customer.notes : null,
         conversationId: conversationId || null,
         lastMessage: text || null,
-        conversationType: (body.type as string) || null,
+        conversationType:
+          normalizePancakeConversationType(body.type) ||
+          normalizePancakeConversationType(body.conversation_type) ||
+          null,
         dataAt: Number.isNaN(dataAt.getTime()) ? new Date() : dataAt,
         source: 'webhook',
-        labels: ['follow'],
+        labels: ensureDefaultLabels('conversation', ['follow']),
         raw: body as Prisma.InputJsonValue,
         tenantId: pageCfg?.tenantId ?? null,
       },
@@ -1524,7 +1910,10 @@ export class PancakeService {
         address: address || undefined,
         conversationId: conversationId || undefined,
         lastMessage: text || undefined,
-        conversationType: (body.type as string) || undefined,
+        conversationType:
+          normalizePancakeConversationType(body.type) ||
+          normalizePancakeConversationType(body.conversation_type) ||
+          undefined,
         dataAt: Number.isNaN(dataAt.getTime()) ? undefined : dataAt,
         source: 'webhook',
         raw: body as Prisma.InputJsonValue,
@@ -1607,6 +1996,7 @@ export class PancakeService {
           orderRef: `chat-${input.conversationId.slice(0, 12)}`,
           source: 'chat_order_detect',
           tenantId: input.tenantId || null,
+          followAt: null,
         },
       });
       this.logger.log(
@@ -1657,6 +2047,7 @@ export class PancakeService {
         orderedAt: lead.orderedAt ?? new Date(),
         orderRef: lead.orderRef || `chat-${input.conversationId.slice(0, 12)}`,
         source: 'chat_order_detect',
+        followAt: null,
       },
     });
     this.logger.log(
@@ -1813,6 +2204,29 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Các khóa customer có thể dùng để khớp lead ↔ hội thoại Pancake. */
+function conversationCustomerKeys(conv: PancakeConversation): string[] {
+  const raw = conv.raw || {};
+  const pageCustomer = (raw.page_customer as Record<string, unknown> | undefined) ?? {};
+  const firstCustomer =
+    (raw.customers as Record<string, unknown>[] | undefined)?.[0] ??
+    (raw.customer as Record<string, unknown> | undefined) ??
+    {};
+  const keys = [
+    firstCustomer.id,
+    pageCustomer.id,
+    firstCustomer.psid,
+    pageCustomer.psid,
+    firstCustomer.customer_id,
+    pageCustomer.customer_id,
+    conv.customerId,
+    raw.customer_id,
+  ]
+    .map((k) => (k != null && String(k).trim() ? String(k).trim() : null))
+    .filter((k): k is string => Boolean(k));
+  return [...new Set(keys)];
+}
+
 /** Nhãn mặc định: đã chốt (customer) hoặc follow (chưa chốt). */
 function ensureDefaultLabels(stage: string | null | undefined, labels: string[] | null | undefined): string[] {
   const set = new Set((labels ?? []).filter(Boolean));
@@ -1842,4 +2256,151 @@ function parseOptionalDate(raw: string | null | undefined): Date | null {
   if (!raw) return null;
   const d = new Date(raw);
   return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Gom text tin + template/attachment để nhận diện CK / chốt đơn. */
+function collectDetectTextsFromMessage(m: {
+  message?: string | null;
+  attachments?: Array<{ name?: string | null }>;
+  raw?: Record<string, unknown>;
+}): string[] {
+  const out: string[] = [];
+  const push = (v: unknown) => {
+    if (typeof v === 'string' && v.trim() && v.length < 800) out.push(v.trim());
+  };
+  push(m.message);
+  for (const a of m.attachments ?? []) push(a.name);
+  const walk = (node: unknown, depth: number) => {
+    if (!node || depth > 4) return;
+    if (typeof node === 'string') {
+      if (!/^https?:/i.test(node)) push(node);
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, depth + 1);
+      return;
+    }
+    if (typeof node !== 'object') return;
+    const o = node as Record<string, unknown>;
+    for (const k of [
+      'title',
+      'subtitle',
+      'description',
+      'caption',
+      'text',
+      'message',
+      'original_message',
+      'name',
+    ]) {
+      push(o[k]);
+    }
+    walk(o.payload, depth + 1);
+    walk(o.attachments, depth + 1);
+    walk(o.elements, depth + 1);
+    walk(o.contents, depth + 1);
+  };
+  walk(m.raw, 0);
+  return out;
+}
+
+function isNoiseChatText(text: string): boolean {
+  const t = text.trim();
+  if (!t) return true;
+  return (
+    /^\[?attachments?\]?$/i.test(t) ||
+    /^(tệp\s*)?đính kèm$/i.test(t) ||
+    /^ảnh đính kèm$/i.test(t) ||
+    t === '[Ảnh]' ||
+    t === '[File]' ||
+    t === '[Video]' ||
+    t === '[Sticker]' ||
+    /tin nhắn đã hết hạn/i.test(t)
+  );
+}
+
+function looksLikeMediaUrl(text: string): boolean {
+  return (
+    /^https?:\/\//i.test(text) &&
+    (/\.(jpg|jpeg|png|gif|webp|bmp)(\?|$)/i.test(text) ||
+      /fbcdn|scontent|cdninstagram|tiktokcdn/i.test(text))
+  );
+}
+
+function firstImageUrlFromMessage(m: {
+  attachments?: Array<{ url?: string; type?: string | null }> | unknown[];
+}): string | null {
+  for (const raw of m.attachments ?? []) {
+    if (!raw || typeof raw !== 'object') continue;
+    const a = raw as { url?: string; type?: string | null };
+    const url = (a.url || '').trim();
+    if (!url) continue;
+    if (/\.(mp4|mov|webm|pdf|zip|docx?)(\?|$)/i.test(url)) continue;
+    if (
+      /image|photo|sticker|gif/i.test(a.type || '') ||
+      looksLikeMediaUrl(url)
+    ) {
+      return url;
+    }
+  }
+  return null;
+}
+
+function storeableLastMessage(text: string | null | undefined): string | null {
+  if (!text?.trim()) return null;
+  const t = text.trim();
+  if (isFacebookMarketingNoise(t)) return null;
+  if (looksLikeMediaUrl(t)) return t;
+  if (/tin nhắn đã hết hạn/i.test(t)) return 'Tin nhắn đã hết hạn';
+  if (isNoiseChatText(t)) return null;
+  return t;
+}
+
+function pickVisibleLastMessage(
+  messages: Array<{
+    message?: string | null;
+    attachments?: Array<{ url?: string; type?: string | null }> | unknown[];
+  }>,
+): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    const stored = storeableLastMessage(m.message);
+    if (stored && stored !== 'Tin nhắn đã hết hạn') return stored;
+    const img = firstImageUrlFromMessage(m);
+    if (img) return img;
+    if (stored === 'Tin nhắn đã hết hạn') return stored;
+  }
+  return null;
+}
+
+function lastMessageNeedsHydrate(text: string | null | undefined): boolean {
+  if (!text?.trim()) return true;
+  const t = text.trim();
+  if (looksLikeMediaUrl(t)) return false;
+  if (isFacebookMarketingNoise(t)) return true;
+  return isNoiseChatText(t) || /^ảnh đính kèm$/i.test(t);
+}
+
+async function mapPool<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(concurrency, Math.max(items.length, 1)) }, async () => {
+    for (;;) {
+      const idx = next++;
+      if (idx >= items.length) return;
+      out[idx] = await fn(items[idx]);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
+function inferConversationType(conversationId: string | null | undefined): string | null {
+  const id = (conversationId || '').toLowerCase();
+  if (!id) return null;
+  if (id.includes('comment') || id.includes('feed') || id.includes('_post')) return 'COMMENT';
+  return 'INBOX';
 }

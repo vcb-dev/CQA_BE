@@ -1,4 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  BadGatewayException,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import axios from 'axios';
 import http from 'http';
 import https from 'https';
@@ -84,7 +88,6 @@ function parseActionItemsFromAi(
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
-  private readonly aiBaseUrl = process.env.AI_SERVICE_URL || 'http://localhost:8000';
   private readonly auditAiTimeoutMs = Number(process.env.CSKH_AUDIT_AI_TIMEOUT_MS || 120_000);
   private readonly aiHttp = axios.create({
     timeout: this.auditAiTimeoutMs,
@@ -95,6 +98,15 @@ export class AiService {
   private auditAgentUserCache = new Map<string, bigint | null>();
 
   constructor(private readonly prisma: PrismaService) {}
+
+  private getAiBaseUrl() {
+    const raw = (process.env.AI_SERVICE_URL || 'http://localhost:8001').replace(/\/$/, '');
+    // Máy local: :8000 đang bị service khác chiếm; CQA_AI chạy :8001
+    if (/^https?:\/\/(localhost|127\.0\.0\.1):8000$/i.test(raw)) {
+      return 'http://localhost:8001';
+    }
+    return raw;
+  }
 
   resetAuditBatchCaches() {
     this.auditAgentUserCache.clear();
@@ -140,7 +152,7 @@ export class AiService {
     message?: string;
   }> {
     try {
-      const { data } = await axios.get(`${this.aiBaseUrl}/deepseek/balance`, {
+      const { data } = await axios.get(`${this.getAiBaseUrl()}/deepseek/balance`, {
         timeout: 15000,
       });
       if (data?.error) {
@@ -174,7 +186,7 @@ export class AiService {
   }) {
     try {
       this.logger.log(`Sending chat transcript to AI service for audit... noReply=${data.noReply}`);
-      const response = await this.aiHttp.post(`${this.aiBaseUrl}/audit`, {
+      const response = await this.aiHttp.post(`${this.getAiBaseUrl()}/audit`, {
         transcript: data.aiTranscript ?? data.transcript,
         no_reply: data.noReply || false,
         agent_name: data.agentName || null,
@@ -327,7 +339,7 @@ export class AiService {
     }
     try {
       const { data: result } = await axios.post(
-        `${this.aiBaseUrl}/cskh/translate`,
+        `${this.getAiBaseUrl()}/cskh/translate`,
         {
           text,
           source_lang: sourceLang,
@@ -387,7 +399,7 @@ export class AiService {
 
     try {
       const { data: result } = await axios.post(
-        `${this.aiBaseUrl}/cskh/translate-batch`,
+        `${this.getAiBaseUrl()}/cskh/translate-batch`,
         {
           items: items.map((it) => ({
             id: it.id,
@@ -442,15 +454,12 @@ export class AiService {
         };
       });
     } catch (error: unknown) {
-      const err = error as { message?: string };
-      this.logger.warn(`Translate batch failed: ${err.message}`);
-      return items.map((it) => ({
-        id: it.id,
-        originalText: it.text,
-        translatedText: it.text,
-        detectedLang: 'und',
-        sameLanguage: true,
-      }));
+      const err = error as { message?: string; response?: { status?: number } };
+      const url = `${this.getAiBaseUrl()}/cskh/translate-batch`;
+      this.logger.warn(`Translate batch failed ${url}: ${err.message}`);
+      throw new BadGatewayException(
+        'Không kết nối được dịch vụ AI. Kiểm tra CQA_AI đang chạy (python3 main.py, cổng 8001).',
+      );
     }
   }
 
@@ -465,7 +474,7 @@ export class AiService {
     }
     try {
       const { data: result } = await axios.post(
-        `${this.aiBaseUrl}/cskh/detect-lang`,
+        `${this.getAiBaseUrl()}/cskh/detect-lang`,
         { texts: samples },
         { timeout: 30_000 },
       );
@@ -495,7 +504,7 @@ export class AiService {
   }> {
     try {
       const { data: result } = await axios.post(
-        `${this.aiBaseUrl}/cskh/customer-intent`,
+        `${this.getAiBaseUrl()}/cskh/customer-intent`,
         {
           messages: data.messages,
           customer_name: data.customerName ?? null,

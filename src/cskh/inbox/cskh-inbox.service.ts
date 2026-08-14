@@ -1865,25 +1865,23 @@ export class CskhInboxService {
 
   /** Kích hoạt sync nhẹ từ Graph sau khi trả danh sách — không block request. */
   private async maybeTriggerListSync(pageId?: string, tenantId?: string): Promise<void> {
+    // Page đang xem: luôn quét Graph nhẹ (webhook app mới / Dev mode hay hỏng thì list vẫn lên tin mới).
+    if (pageId) {
+      const syncKey = `${pageId}:${tenantId ?? ''}`;
+      const lastSync = this.lastListSync.get(syncKey) ?? 0;
+      if (Date.now() - lastSync < this.listSyncCooldownMs) return;
+      this.lastListSync.set(syncKey, Date.now());
+      void this.syncFromGraph(pageId, tenantId, { lightweight: true }).catch((e) => {
+        this.logger.warn(`[list-sync] page ${pageId}: ${(e as Error).message}`);
+      });
+      return;
+    }
+
     const redisOff = !this.redisQueue.isRedisQueueEnabled();
     if (!this.rotatingSyncEnabled && !redisOff) return;
 
     if (redisOff) {
       await this.maybeCatchUpSyncWithoutRedis(pageId, tenantId);
-      return;
-    }
-
-    if (pageId) {
-      const auditRunning = await this.isAuditJobRunning(tenantId);
-      const inboxHot = await this.redisQueue.isInboxHot();
-      if (auditRunning || inboxHot) return;
-
-      const syncKey = `${pageId}:${tenantId ?? ''}`;
-      const lastSync = this.lastListSync.get(syncKey) ?? 0;
-      if (Date.now() - lastSync < this.listSyncCooldownMs) return;
-
-      this.lastListSync.set(syncKey, Date.now());
-      await this.syncFromGraph(pageId, tenantId, { lightweight: true });
       return;
     }
 
@@ -2533,13 +2531,20 @@ export class CskhInboxService {
         undefined,
         Math.min(safeLimit, this.msgLimit),
       );
-      if (syncedRows.length) {
-        const recent = syncedRows.slice(-20);
+      const liveCutoff = Date.now() - 180_000;
+      const liveRows = syncedRows.filter(
+        (m) => m.sentAt instanceof Date && m.sentAt.getTime() >= liveCutoff,
+      );
+      if (liveRows.length) {
+        const freshConv = await this.prisma.cskhInboxConversation.findUnique({
+          where: { id: conversationId },
+        });
         this.realtime.publish({
           type: 'message',
           pageId,
           conversationId,
-          messages: recent.map((m) => this.formatMessageRow(m as CskhInboxMessage)),
+          messages: liveRows.slice(-20).map((m) => this.formatMessageRow(m as CskhInboxMessage)),
+          conversation: freshConv ? this.formatConversationRow(freshConv) : undefined,
           tenantId,
         });
       }

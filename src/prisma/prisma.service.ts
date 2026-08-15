@@ -59,28 +59,24 @@ function resolveDatabaseUrl(): string {
 }
 
 function resolvePrismaConnectionLimit(): number {
-  const envOverride = Number(process.env.CSKH_PRISMA_CONNECTION_LIMIT);
-  if (Number.isFinite(envOverride) && envOverride > 0) {
-    return envOverride;
-  }
-
-  // Supabase session pooler thường pool_size=15 — để reserve cho dashboard/scripts/hot-reload.
+  // Supabase session pool ~15. API + worker + dashboard/HRM phải chia nhau.
+  // CSKH_PRISMA_CONNECTION_LIMIT=7 trên cả hai process hôm qua = 14 slot → tràn pool.
   const dbPoolSize = Number(process.env.CSKH_DB_POOL_SIZE || 15);
   const reserve = Number(process.env.CSKH_DB_POOL_RESERVE || 6);
-  const available = Math.max(3, dbPoolSize - reserve);
+  const available = Math.max(4, dbPoolSize - reserve);
 
   if (getCskhRunMode() === 'worker') {
     const worker = Number(process.env.CSKH_PRISMA_WORKER_CONNECTIONS || 2);
-    return Math.min(worker, Math.max(2, Math.floor(available / 3)));
+    const wanted = Number.isFinite(worker) && worker > 0 ? worker : 2;
+    return Math.max(1, Math.min(wanted, 3));
   }
 
   const workerBudget = Number(process.env.CSKH_PRISMA_WORKER_CONNECTIONS || 2);
-  const apiEnv = Number(process.env.CSKH_PRISMA_API_CONNECTIONS);
-  if (Number.isFinite(apiEnv) && apiEnv > 0) {
-    return Math.max(2, Math.min(apiEnv, available - workerBudget));
-  }
-  // API local/dev: 3 connection — tránh EMAXCONNSESSION khi nest --watch + FE gọi nhiều API.
-  return Math.min(3, Math.max(2, available - workerBudget));
+  const apiEnv = Number(
+    process.env.CSKH_PRISMA_API_CONNECTIONS || process.env.CSKH_PRISMA_CONNECTION_LIMIT,
+  );
+  const wanted = Number.isFinite(apiEnv) && apiEnv > 0 ? apiEnv : 3;
+  return Math.max(2, Math.min(wanted, 4, Math.max(2, available - workerBudget)));
 }
 
 @Injectable()

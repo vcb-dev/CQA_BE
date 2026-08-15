@@ -3,7 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { CskhService } from './cskh.service';
 import { CskhInboxService } from './inbox/cskh-inbox.service';
 import { RedisQueueService } from './redis/redis-queue.service';
-import { isCskhApiProcess } from './cskh-run-mode';
+import { isCskhApiProcess, isCskhWorkerProcess } from './cskh-run-mode';
 
 @Injectable()
 export class CskhCronService {
@@ -83,9 +83,8 @@ export class CskhCronService {
           });
           if (!queued) {
             this.logger.warn(
-              `[cron] Redis queue off — audit inline job ${job.id.slice(0, 8)} page=${page.pageId}`,
+              `[cron] Redis queue off — bỏ audit page=${page.pageId} (không chạy inline trên API)`,
             );
-            void this.cskh.runAuditJob(job.id, auditOpts);
           }
           enqueued++;
           this.logger.log(
@@ -112,7 +111,7 @@ export class CskhCronService {
    */
   @Cron('0 0 4 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async scheduledPageAdSpendSync() {
-    if (!isCskhApiProcess()) return;
+    if (!isCskhWorkerProcess()) return;
     if (process.env.CSKH_PAGE_AD_SYNC_CRON_ENABLED === 'false') return;
     if (await this.redisQueue.shouldDeferInboxSync()) {
       this.logger.log('[cron] Bỏ qua chi tiêu QC — inbox đang bận');

@@ -24,7 +24,7 @@ async function bootstrapWorker() {
     logger: ['log', 'error', 'warn'],
   });
 
-  logger.log(`CSKH Worker started (mode=${mode}) — webhook + backfill + audit + intent queues`);
+  logger.log(`CSKH Worker started (mode=${mode}) — webhook + pancake-sync/label + backfill + audit + intent`);
 
   const shutdown = async (signal: string) => {
     logger.warn(`${signal} — shutting down worker`);

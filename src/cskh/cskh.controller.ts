@@ -815,8 +815,18 @@ export class CskhController {
 
   @Get('inbox/conversation-stats')
   @UseGuards(JwtAuthGuard)
-  inboxConversationStats(@CurrentUser() user: User, @Query('pageId') pageId?: string) {
-    return this.inbox.getConversationStats(pageId?.trim(), user.tenantId || undefined);
+  inboxConversationStats(
+    @CurrentUser() user: User,
+    @Query('pageId') pageId?: string,
+    @Query('platform') platform?: string,
+  ) {
+    const graphPlatform: 'instagram' | 'messenger' | undefined =
+      platform === 'instagram' ? 'instagram' : platform === 'messenger' ? 'messenger' : undefined;
+    return this.inbox.getConversationStats(
+      pageId?.trim(),
+      user.tenantId || undefined,
+      graphPlatform,
+    );
   }
 
   @Get('inbox/conversations')
@@ -835,9 +845,12 @@ export class CskhController {
     @Query('unlabeledOnly') unlabeledOnly?: string,
     @Query('includeLabels') includeLabels?: string,
     @Query('legacy') legacy?: string,
+    @Query('platform') platform?: string,
   ) {
     const parsedLimit = limit ? Number(limit) : undefined;
     const parsedSinceDays = sinceDays ? Number(sinceDays) : undefined;
+    const graphPlatform: 'instagram' | 'messenger' | undefined =
+      platform === 'instagram' ? 'instagram' : platform === 'messenger' ? 'messenger' : undefined;
     const opts = {
       fromAdOnly: fromAdOnly === '1' || fromAdOnly === 'true',
       unreadOnly: unreadOnly === '1' || unreadOnly === 'true',
@@ -850,6 +863,7 @@ export class CskhController {
       labelId: labelId?.trim() || undefined,
       unlabeledOnly: unlabeledOnly === '1' || unlabeledOnly === 'true',
       includeLabels: includeLabels === '1' || includeLabels === 'true',
+      platform: graphPlatform as 'instagram' | 'messenger' | undefined,
     };
     if (legacy === '1' || legacy === 'true') {
       return this.inbox.listConversationsLegacy(pageId?.trim(), user.tenantId || undefined, opts);

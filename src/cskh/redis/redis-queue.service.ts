@@ -46,6 +46,8 @@ const AUDIT_QUEUE = 'cskh:audit_queue';
 const BACKFILL_QUEUE = 'cskh:backfill_queue';
 const PANCAKE_AUTOLABEL_QUEUE = 'cskh:pancake:autolabel';
 const PANCAKE_AUTOLABEL_DEDUP = 'cskh:pancake:autolabel:dedup:';
+const PANCAKE_SYNC_QUEUE = 'cskh:pancake:sync';
+const PANCAKE_SYNC_DEDUP = 'cskh:pancake:sync:dedup:';
 const LIVE_CATCHUP_LOCK = 'cskh:inbox:live-catchup';
 const VIEWED_PAGE_KEY = 'cskh:inbox:viewed-page';
 const BRPOP_TIMEOUT_SEC = 30;
@@ -66,6 +68,12 @@ export type PancakeAutoLabelPayload = {
   tenantId?: string;
   maxScan?: number;
   onlyWithContact?: boolean;
+};
+
+export type PancakeSyncPayload = {
+  kind: 'page' | 'all';
+  pageId?: string;
+  tenantId?: string;
 };
 
 @Injectable()
@@ -141,7 +149,7 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
       void this.touchAuditWorkerHeartbeat();
     } else {
         this.logger.log(
-        'Queue consumers OFF on API — webhook inbox vẫn chạy inline trên process này; worker lo audit/backfill/intent/pancake-label',
+        'Queue consumers OFF on API — webhook inbox vẫn chạy inline; worker lo audit/backfill/intent/pancake-sync+label',
       );
     }
   }
@@ -418,7 +426,9 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
       );
       return;
     }
-    this.logger.log('Unified queue worker started (webhook + intent + pancake-label + backfill + audit).');
+    this.logger.log(
+      'Unified queue worker started (webhook + intent + pancake-sync + pancake-label + backfill + audit).',
+    );
     while (this.running) {
       if (!this.canUseRedis()) {
         await new Promise((r) => setTimeout(r, 60_000));
@@ -428,6 +438,7 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
         const result = await this.blockingConsumer.brpop(
           WEBHOOK_MESSAGING_QUEUE,
           INTENT_QUEUE,
+          PANCAKE_SYNC_QUEUE,
           PANCAKE_AUTOLABEL_QUEUE,
           BACKFILL_QUEUE,
           AUDIT_QUEUE,
@@ -466,12 +477,24 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
           this.logger.log(`Audit Worker: job ${payload.jobId.slice(0, 8)}`);
           await this.cskhService.runAuditJob(payload.jobId, payload.options ?? {});
           this.logger.log(`Audit Worker: done ${payload.jobId.slice(0, 8)}`);
+        } else if (queue === PANCAKE_SYNC_QUEUE) {
+          const payload = JSON.parse(raw) as PancakeSyncPayload;
+          this.logger.log(`Pancake sync Worker: kind=${payload.kind} page=${payload.pageId ?? 'all'}`);
+          await this.waitWhileInboxHot(20_000);
+          if (payload.kind === 'all') {
+            await this.pancakeService.syncAllPages({ tenantId: payload.tenantId });
+          } else if (payload.pageId) {
+            await this.pancakeService.syncPageCustomers(payload.pageId, {
+              tenantId: payload.tenantId,
+            });
+          }
         } else if (queue === PANCAKE_AUTOLABEL_QUEUE) {
           const payload = JSON.parse(raw) as PancakeAutoLabelPayload;
           if (!payload?.pageId) continue;
           this.logger.log(
             `Pancake label Worker: page=${payload.pageId} onlyContact=${Boolean(payload.onlyWithContact)}`,
           );
+          await this.waitWhileInboxHot(20_000);
           await this.pancakeService.scanAndAutoLabelPageLeads(payload.pageId, {
             tenantId: payload.tenantId,
             maxScan: payload.maxScan,
@@ -539,6 +562,27 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
     } catch (e) {
       this.handleRedisError(e);
       this.logger.error(`Failed to enqueue backfill job: ${(e as Error).message}`);
+      return false;
+    }
+  }
+
+  async enqueuePancakeSync(payload: PancakeSyncPayload): Promise<boolean> {
+    const redis = this.activeRedis();
+    if (!redis) return false;
+    const dedupId = payload.kind === 'all' ? `all:${payload.tenantId || '_'}` : payload.pageId?.trim();
+    if (!dedupId) return false;
+    try {
+      const dedupKey = `${PANCAKE_SYNC_DEDUP}${dedupId}`;
+      const locked = await redis.set(dedupKey, '1', 'EX', 90, 'NX');
+      if (locked !== 'OK') {
+        this.logger.log(`Pancake sync skip duplicate ${dedupId}`);
+        return true;
+      }
+      await redis.lpush(PANCAKE_SYNC_QUEUE, JSON.stringify(payload));
+      return true;
+    } catch (e) {
+      this.handleRedisError(e);
+      this.logger.error(`Failed to enqueue pancake sync: ${(e as Error).message}`);
       return false;
     }
   }

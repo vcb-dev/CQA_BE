@@ -4,13 +4,14 @@ import {
   Logger,
   NotFoundException,
   UnauthorizedException,
+  ServiceUnavailableException,
   Inject,
   forwardRef,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisQueueService } from '../cskh/redis/redis-queue.service';
-import { isCskhWorkerProcess } from '../cskh/cskh-run-mode';
+import { getCskhRunMode, isCskhWorkerProcess } from '../cskh/cskh-run-mode';
 import {
   PancakeClient,
   isFacebookMarketingNoise,
@@ -870,38 +871,53 @@ export class PancakeService {
       where.NOT = { phones: { equals: [] } };
     }
 
-    const baseWhere: Prisma.PancakeLeadWhereInput = { pageId };
-    if (opts?.tenantId) baseWhere.tenantId = opts.tenantId;
+    const statsRows = await this.prisma.$queryRaw<
+      Array<{
+        total: number;
+        with_phone: number;
+        conversation: number;
+        customer: number;
+        follow: number;
+      }>
+    >(Prisma.sql`
+      SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE cardinality(phones) > 0)::int AS with_phone,
+        COUNT(*) FILTER (WHERE stage = 'conversation')::int AS conversation,
+        COUNT(*) FILTER (WHERE stage = 'customer')::int AS customer,
+        COUNT(*) FILTER (WHERE follow_at IS NOT NULL)::int AS follow
+      FROM pancake_leads
+      WHERE page_id = ${pageId}
+      ${opts?.tenantId ? Prisma.sql`AND tenant_id = ${opts.tenantId}::uuid` : Prisma.empty}
+    `);
+    const stats = statsRows[0] ?? {
+      total: 0,
+      with_phone: 0,
+      conversation: 0,
+      customer: 0,
+      follow: 0,
+    };
+    const total = Number(stats.total) || 0;
+    const withPhoneCount = Number(stats.with_phone) || 0;
+    const conversationCount = Number(stats.conversation) || 0;
+    const customerCount = Number(stats.customer) || 0;
+    const followCount = Number(stats.follow) || 0;
 
-    const [total, rows, withPhoneCount, conversationCount, customerCount, followCount] =
-      await Promise.all([
-        this.prisma.pancakeLead.count({ where: baseWhere }),
-        this.prisma.pancakeLead.findMany({
-          where,
-          orderBy: [{ followAt: 'desc' }, { dataAt: 'desc' }, { updatedAt: 'desc' }],
-          take: limit,
-          skip: offset,
-        }),
-        this.prisma.pancakeLead.count({
-          where: { ...baseWhere, NOT: { phones: { equals: [] } } },
-        }),
-        this.prisma.pancakeLead.count({
-          where: { ...baseWhere, stage: 'conversation' },
-        }),
-        this.prisma.pancakeLead.count({
-          where: { ...baseWhere, stage: 'customer' },
-        }),
-        this.prisma.pancakeLead.count({
-          where: { ...baseWhere, followAt: { not: null } },
-        }),
-      ]);
+    const rows = await this.prisma.pancakeLead.findMany({
+      where,
+      orderBy: [{ followAt: 'desc' }, { dataAt: 'desc' }, { updatedAt: 'desc' }],
+      take: limit,
+      skip: offset,
+    });
 
-    void this.persistMissingConversationTypes(pageId).catch((e) =>
-      this.logger.warn(`persist types page=${pageId}: ${(e as Error).message}`),
-    );
-    void this.hydrateListedLeadMeta(pageId, rows, opts?.tenantId).catch((e) =>
-      this.logger.warn(`hydrate listed meta page=${pageId}: ${(e as Error).message}`),
-    );
+    if (getCskhRunMode() !== 'api') {
+      void this.persistMissingConversationTypes(pageId).catch((e) =>
+        this.logger.warn(`persist types page=${pageId}: ${(e as Error).message}`),
+      );
+      void this.hydrateListedLeadMeta(pageId, rows, opts?.tenantId).catch((e) =>
+        this.logger.warn(`hydrate listed meta page=${pageId}: ${(e as Error).message}`),
+      );
+    }
 
     const hydrated = rows.map((r) => ({
       ...r,
@@ -929,10 +945,11 @@ export class PancakeService {
             ? ensureDefaultLabels('customer', r.labels, { hasConversation: false })
             : [];
         if (
-          labelsNeedPersist(r.labels ?? [], labels) ||
+          getCskhRunMode() !== 'api' &&
+          (labelsNeedPersist(r.labels ?? [], labels) ||
           (closedFromChat && r.stage !== 'customer') ||
           (closedFromChat && r.followAt) ||
-          (!hasConversation && (r.followAt || (r.labels ?? []).length > 0) && stage !== 'customer')
+          (!hasConversation && (r.followAt || (r.labels ?? []).length > 0) && stage !== 'customer'))
         ) {
           void this.prisma.pancakeLead
             .update({
@@ -1002,6 +1019,78 @@ export class PancakeService {
         total === 0
           ? 'Chưa có lead trong DB. Bấm Đồng bộ để kéo hội thoại từ Pancake.'
           : `Lead hội thoại: ${conversationCount} · Đã lên khách (có đơn): ${customerCount} · Có SĐT: ${withPhoneCount}.`,
+    };
+  }
+
+  /**
+   * API: xếp hàng đồng bộ cho worker. Worker gọi syncPageCustomers rồi quét nhãn.
+   */
+  async requestSyncPageCustomers(
+    pageId: string,
+    opts?: { tenantId?: string | null; maxPages?: number },
+  ) {
+    if (isCskhWorkerProcess()) {
+      return this.syncPageCustomers(pageId, opts);
+    }
+    const queued = await this.redisQueue.enqueuePancakeSync({
+      kind: 'page',
+      pageId,
+      tenantId: opts?.tenantId || undefined,
+    });
+    if (!queued) {
+      throw new ServiceUnavailableException(
+        'Worker Pancake chưa nhận job đồng bộ. Kiểm tra Redis / CSKH_RUN_MODE=worker.',
+      );
+    }
+    return {
+      queued: true,
+      pageId,
+      pageName: null as string | null,
+      fetched: 0,
+      upserted: 0,
+      totalFromPancake: null as number | null,
+      storedInDb: 0,
+      withPhoneCount: 0,
+      withAddressCount: 0,
+      closedCount: 0,
+      autoLabelQueued: true,
+      truncated: false,
+      pageTokenRegenerated: false,
+      warning: null as string | null,
+      note: 'Đã gửi worker đồng bộ Pancake. Nhãn chat gán sau khi kéo xong — danh sách tự cập nhật.',
+    };
+  }
+
+  async requestSyncAllPages(opts?: {
+    tenantId?: string | null;
+    maxPages?: number;
+    platforms?: string[];
+  }) {
+    if (isCskhWorkerProcess()) {
+      return this.syncAllPages(opts);
+    }
+    const queued = await this.redisQueue.enqueuePancakeSync({
+      kind: 'all',
+      tenantId: opts?.tenantId || undefined,
+    });
+    if (!queued) {
+      throw new ServiceUnavailableException(
+        'Worker Pancake chưa nhận job đồng bộ. Kiểm tra Redis / CSKH_RUN_MODE=worker.',
+      );
+    }
+    return {
+      queued: true,
+      totalPages: 0,
+      ok: 0,
+      failed: 0,
+      results: [] as Array<{
+        pageId: string;
+        pageName: string | null;
+        ok: boolean;
+        upserted?: number;
+        storedInDb?: number;
+        error?: string;
+      }>,
     };
   }
 
@@ -1167,12 +1256,26 @@ export class PancakeService {
       this.logger.warn(`backfill chat meta failed: ${(e as Error).message}`);
     }
 
-    // Quét nhãn chat → worker (API không giữ connection pool vì scan nặng)
-    const queuedLabel = await this.redisQueue.enqueuePancakeAutoLabel({
-      pageId,
-      tenantId: opts?.tenantId || undefined,
-      maxScan: 40,
-    });
+    // Quét nhãn: worker làm luôn sau sync (output đúng). API không scan.
+    let queuedLabel = false;
+    let autoLabel: {
+      scanned: number;
+      closed: number;
+      follow: number;
+      candidates: number;
+    } | null = null;
+    if (isCskhWorkerProcess()) {
+      autoLabel = await this.scanAndAutoLabelPageLeads(pageId, {
+        tenantId: opts?.tenantId,
+        maxScan: 40,
+      });
+    } else {
+      queuedLabel = await this.redisQueue.enqueuePancakeAutoLabel({
+        pageId,
+        tenantId: opts?.tenantId || undefined,
+        maxScan: 40,
+      });
+    }
 
     const stored = await this.prisma.pancakeLead.count({ where: { pageId } });
     const withPhone = await this.prisma.pancakeLead.count({
@@ -1219,13 +1322,22 @@ export class PancakeService {
       withPhoneCount: withPhone,
       withAddressCount: withAddress,
       closedCount,
-      autoLabelQueued: queuedLabel,
+      autoLabelQueued: queuedLabel || Boolean(autoLabel),
+      autoLabel: autoLabel ?? undefined,
       truncated,
       pageTokenRegenerated,
       warning: warnings.length ? warnings.join(' ') : null,
       note: usedConversationsFallback
-        ? `Đã đồng bộ ${upserted} lead từ hội thoại (fallback). Nhãn chat đang quét trên worker.`
-        : `Đã đồng bộ ${upserted} khách (Pancake tổng ${total ?? '?'}). Nhãn chat đang quét trên worker. Có SĐT: ${withPhone} · địa chỉ: ${withAddress}.`,
+        ? `Đã đồng bộ ${upserted} lead từ hội thoại (fallback). ${
+            autoLabel
+              ? `Nhãn: quét ${autoLabel.scanned} → ${autoLabel.closed} Đã chốt · ${autoLabel.follow} follow.`
+              : 'Nhãn chat đang quét trên worker.'
+          }`
+        : `Đã đồng bộ ${upserted} khách (Pancake tổng ${total ?? '?'}). ${
+            autoLabel
+              ? `Nhãn: quét ${autoLabel.scanned} → ${autoLabel.closed} Đã chốt · ${autoLabel.follow} follow.`
+              : 'Nhãn chat đang quét trên worker.'
+          } Có SĐT: ${withPhone} · địa chỉ: ${withAddress}.`,
     };
   }
 
@@ -1691,8 +1803,13 @@ export class PancakeService {
       maxScan: opts?.maxScan,
       onlyWithContact: opts?.onlyWithContact,
     });
+    if (!queued) {
+      throw new ServiceUnavailableException(
+        'Worker Pancake chưa nhận job quét nhãn. Kiểm tra Redis / CSKH_RUN_MODE=worker.',
+      );
+    }
     return {
-      queued,
+      queued: true,
       candidates: 0,
       scanned: 0,
       closed: 0,

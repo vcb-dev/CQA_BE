@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
-import { GRAPH_BASE } from './facebook-oauth.util';
+import { GRAPH_BASE, type CskhInboxGraphPlatform } from './facebook-oauth.util';
 import {
   dedupeChatMessages,
   dedupeMediaUrls,
@@ -161,7 +161,12 @@ export class FacebookGraphService {
     });
   }
 
-  async fetchConversations(pageId: string, token: string, maxCount: number): Promise<FbConversation[]> {
+  async fetchConversations(
+    pageId: string,
+    token: string,
+    maxCount: number,
+    platform: CskhInboxGraphPlatform = 'messenger',
+  ): Promise<FbConversation[]> {
     const convs: FbConversation[] = [];
     let nextUrl: string | null = null;
     let first = true;
@@ -169,7 +174,7 @@ export class FacebookGraphService {
       type Page = { data?: FbConversation[]; paging?: { next?: string } };
       const data: Page = first
         ? await this.graphRequest<Page>(`/${pageId}/conversations`, token, {
-            platform: 'messenger',
+            platform,
             fields: 'id,updated_time,participants,unread_count',
             limit: Math.min(50, maxCount - convs.length),
           })
@@ -190,6 +195,7 @@ export class FacebookGraphService {
     pageId: string,
     token: string,
     maxCount: number,
+    platform: CskhInboxGraphPlatform = 'messenger',
   ): Promise<FbConversation[]> {
     const convs: FbConversation[] = [];
     let nextUrl: string | null = null;
@@ -200,7 +206,7 @@ export class FacebookGraphService {
       type Page = { data?: FbConversation[]; paging?: { next?: string } };
       const data: Page = first
         ? await this.graphRequest<Page>(`/${pageId}/conversations`, token, {
-            platform: 'messenger',
+            platform,
             fields,
             limit: Math.min(50, maxCount - convs.length),
           })
@@ -307,6 +313,7 @@ export class FacebookGraphService {
     /** Dừng quét inbox khi đủ số hội thoại mới cần chấm (ô Giới hạn trên FE). */
     maxNewMatches = 0,
     onMatch?: (conv: FbConversation) => void | Promise<void>,
+    platform: CskhInboxGraphPlatform = 'messenger',
   ): Promise<FbConversation[]> {
     const auditDateToResolved = auditDateTo?.trim() || auditDateFrom;
     const { start, end } = this.vietnamDateRange(auditDateFrom, auditDateToResolved);
@@ -348,7 +355,7 @@ export class FacebookGraphService {
       type Page = { data?: FbConversation[]; paging?: { next?: string } };
       const data: Page = first
         ? await this.graphRequest<Page>(`/${pageId}/conversations`, token, {
-            platform: 'messenger',
+            platform,
             fields,
             limit: 50,
           }, { priority: 'low' })
@@ -602,6 +609,7 @@ export class FacebookGraphService {
     msgLimit = 25,
     onBatch?: (fetchedOnPage: number) => void | Promise<void>,
     shouldStop?: () => boolean,
+    platform: CskhInboxGraphPlatform = 'messenger',
   ): Promise<FbConversation[]> {
     const convs: FbConversation[] = [];
     let nextUrl: string | null = null;
@@ -616,7 +624,7 @@ export class FacebookGraphService {
       const pageLimit = unlimited ? 50 : Math.min(50, maxCount - convs.length);
       const data: Page = first
         ? await this.graphRequest<Page>(`/${pageId}/conversations`, token, {
-            platform: 'messenger',
+            platform,
             fields,
             limit: pageLimit,
           }, { priority: 'low' })
@@ -643,6 +651,7 @@ export class FacebookGraphService {
       onBatch: (convs: FbConversation[]) => Promise<'continue' | 'stop'>;
       shouldStop?: () => boolean;
     },
+    platform: CskhInboxGraphPlatform = 'messenger',
   ): Promise<number> {
     let total = 0;
     let nextUrl: string | null = null;
@@ -658,7 +667,7 @@ export class FacebookGraphService {
         ? await this.graphRequest<Page>(
             `/${pageId}/conversations`,
             token,
-            { platform: 'messenger', fields, limit: 50 },
+            { platform, fields, limit: 50 },
             { priority: 'low' },
           )
         : await this.graphRequest<Page>(nextUrl!, token, {}, { priority: 'low' });

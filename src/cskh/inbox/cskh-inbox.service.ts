@@ -24,7 +24,7 @@ import {
   type FbWebhookReferral,
   parseWebhookReferral,
 } from '../facebook/facebook-referral.util';
-import { getFacebookWebhookVerifyToken } from '../facebook/facebook-oauth.util';
+import { getFacebookWebhookVerifyToken, cskhInboxGraphPlatform } from '../facebook/facebook-oauth.util';
 import {
   CskhInboxRealtimeService,
   type CustomerIntentPayload,
@@ -1000,7 +1000,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         messaging?: WebhookMessagingEvent[];
       }>;
     };
-    if (body.object !== 'page' || !Array.isArray(body.entry)) return { ok: true };
+    if ((body.object !== 'page' && body.object !== 'instagram') || !Array.isArray(body.entry)) {
+      return { ok: true };
+    }
 
     let eventCount = 0;
     let inlineCount = 0;
@@ -1536,11 +1538,15 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       labelId?: string;
       unlabeledOnly?: boolean;
       cursor?: { lastMessageAt: Date; id: string } | null;
+      pageIds?: string[];
     },
     flags: { includeAwaitingInUnread: boolean; includeLabelFilters: boolean },
   ): Prisma.CskhInboxConversationWhereInput {
     const andClauses: Prisma.CskhInboxConversationWhereInput[] = [];
     if (pageId) andClauses.push({ pageId });
+    else if (opts.pageIds && opts.pageIds.length > 0) {
+      andClauses.push({ pageId: { in: opts.pageIds } });
+    }
     if (tenantId) andClauses.push({ tenantId });
     if (opts.fromAdOnly) andClauses.push({ fromAd: true });
     if (opts.unreadOnly) andClauses.push(this.unreadStatusWhere(flags.includeAwaitingInUnread));
@@ -1582,8 +1588,25 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     return andClauses.length > 0 ? { AND: andClauses } : {};
   }
 
-  async getConversationStats(pageId?: string, tenantId?: string) {
-    const cacheKey = `${tenantId ?? '__all__'}:${pageId ?? '__all__'}`;
+  private async pageIdsForGraphPlatform(
+    platform: 'messenger' | 'instagram',
+    tenantId?: string,
+  ): Promise<string[]> {
+    const rows = await this.prisma.facebookCskhConfig.findMany({
+      where: tenantId ? { tenantId } : undefined,
+      select: { pageId: true, metadata: true },
+    });
+    return rows
+      .filter((r) => cskhInboxGraphPlatform(r.metadata) === platform)
+      .map((r) => r.pageId);
+  }
+
+  async getConversationStats(
+    pageId?: string,
+    tenantId?: string,
+    platform?: 'messenger' | 'instagram',
+  ) {
+    const cacheKey = `${tenantId ?? '__all__'}:${pageId ?? '__all__'}:${platform ?? 'all'}`;
     const cached = this.conversationStatsCache.get(cacheKey);
     if (cached && Date.now() - cached.at < this.conversationStatsTtlMs) {
       return cached.data;
@@ -1591,34 +1614,62 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
     const where: Prisma.CskhInboxConversationWhereInput = {};
     if (pageId) where.pageId = pageId;
+    else if (platform) {
+      const ids = await this.pageIdsForGraphPlatform(platform, tenantId);
+      if (!ids.length) {
+        const empty = { total: 0, fromAd: 0, unread: 0, normal: 0 };
+        this.conversationStatsCache.set(cacheKey, { at: Date.now(), data: empty });
+        return empty;
+      }
+      where.pageId = { in: ids };
+    }
     if (tenantId) where.tenantId = tenantId;
 
-    const [total, fromAd] = await Promise.all([
-      this.prisma.cskhInboxConversation.count({ where }),
-      this.prisma.cskhInboxConversation.count({ where: { ...where, fromAd: true } }),
-    ]);
-
-    let unread = 0;
     try {
-      unread = await this.prisma.cskhInboxConversation.count({
-        where: { ...where, ...this.unreadStatusWhere(true) },
+      // 1 query groupBy thay 2 COUNT song song — đừng giữ 2 connection khi bảng lớn.
+      const grouped = await this.prisma.cskhInboxConversation.groupBy({
+        by: ['fromAd'],
+        where,
+        _count: { _all: true },
       });
-    } catch (e) {
-      if (!this.isInboxSchemaMigrationError(e)) throw e;
-      this.logger.warn('[getConversationStats] awaiting_label chưa migrate — fallback unreadCount');
-      unread = await this.prisma.cskhInboxConversation.count({
-        where: { ...where, unreadCount: { gt: 0 } },
-      });
-    }
+      let total = 0;
+      let fromAd = 0;
+      for (const row of grouped) {
+        const n = row._count._all;
+        total += n;
+        if (row.fromAd) fromAd += n;
+      }
 
-    const result = {
-      total,
-      fromAd,
-      unread,
-      normal: Math.max(0, total - fromAd),
-    };
-    this.conversationStatsCache.set(cacheKey, { at: Date.now(), data: result });
-    return result;
+      let unread = 0;
+      try {
+        unread = await this.prisma.cskhInboxConversation.count({
+          where: { ...where, ...this.unreadStatusWhere(true) },
+        });
+      } catch (e) {
+        if (!this.isInboxSchemaMigrationError(e)) throw e;
+        this.logger.warn('[getConversationStats] awaiting_label chưa migrate — fallback unreadCount');
+        unread = await this.prisma.cskhInboxConversation.count({
+          where: { ...where, unreadCount: { gt: 0 } },
+        });
+      }
+
+      const result = {
+        total,
+        fromAd,
+        unread,
+        normal: Math.max(0, total - fromAd),
+      };
+      this.conversationStatsCache.set(cacheKey, { at: Date.now(), data: result });
+      return result;
+    } catch (e) {
+      const msg = (e as Error).message || '';
+      if (cached) {
+        this.logger.warn(`[getConversationStats] ${msg.slice(0, 160)} — trả cache cũ`);
+        return cached.data;
+      }
+      this.logger.warn(`[getConversationStats] ${msg.slice(0, 160)} — trả 0, không 500 pool`);
+      return { total: 0, fromAd: 0, unread: 0, normal: 0 };
+    }
   }
 
   async listConversations(
@@ -1635,9 +1686,17 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       labelId?: string;
       unlabeledOnly?: boolean;
       includeLabels?: boolean;
+      platform?: 'messenger' | 'instagram';
     },
   ): Promise<{ items: CskhInboxConversation[]; nextCursor: string | null; hasMore: boolean }> {
     this.touchUserActivity(pageId);
+    let platformPageIds: string[] | undefined;
+    if (!pageId && opts?.platform) {
+      platformPageIds = await this.pageIdsForGraphPlatform(opts.platform, tenantId);
+      if (!platformPageIds.length) {
+        return { items: [], nextCursor: null, hasMore: false };
+      }
+    }
     const pageSize = Math.min(Math.max(Math.floor(opts?.limit ?? 50), 10), 100);
     const isScrollPage = !!opts?.cursor;
     const cursor = this.decodeInboxListCursor(opts?.cursor);
@@ -1660,6 +1719,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       labelId: opts?.labelId,
       unlabeledOnly: opts?.unlabeledOnly,
       cursor,
+      pageIds: platformPageIds,
     };
 
     if (!isScrollPage && !hasListFilter) {
@@ -4507,6 +4567,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       liveHead?: boolean;
     },
   ): Promise<number> {
+    const graphPlatform = cskhInboxGraphPlatform(page.metadata);
     let synced = 0;
     const backfillMode = options?.backfillMode === true;
     const liveHead = options?.liveHead === true;
@@ -4808,6 +4869,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
               this.backfillPauseRequested ||
               this.backfillCancelRequested,
           ),
+        undefined,
+        0,
+        undefined,
+        graphPlatform,
       );
       for (const fbConv of convs) {
         if (options?.shouldStop?.()) break;
@@ -4840,6 +4905,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
             return r === 'stop' ? 'stop' : 'continue';
           },
         },
+        graphPlatform,
       );
       this.logger.log(
         `[backfill] ${page.pageName || page.pageId}: đã quét ${total} hội thoại, +${synced} tin`,
@@ -4855,11 +4921,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           this.msgLimit,
           undefined,
           options?.shouldStop,
+          graphPlatform,
         )
       : await this.graph.fetchConversationsForMonitor(
           page.pageId,
           page.pageAccessToken,
           liveHead ? this.catchUpConvLimit : this.syncLimit,
+          graphPlatform,
         );
     if (!liveHead) {
       this.logger.log(

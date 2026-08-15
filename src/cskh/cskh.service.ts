@@ -25,6 +25,7 @@ import {
   getFacebookAppSecret,
   getFacebookOAuthRedirectUri,
   verifyOAuthState,
+  cskhInboxGraphPlatform,
   GRAPH_BASE,
 } from './facebook/facebook-oauth.util';
 import { isAllowedFacebookMediaUrl } from './facebook/facebook-message.util';
@@ -42,6 +43,7 @@ type EnabledFacebookPage = {
   pageId: string;
   pageName: string | null;
   pageAccessToken: string;
+  metadata?: Prisma.JsonValue | null;
 };
 
 @Injectable()
@@ -248,13 +250,17 @@ export class CskhService implements OnModuleInit {
   async resubscribeAllPagesWebhook() {
     const pages = await this.prisma.facebookCskhConfig.findMany({
       where: { pageAccessToken: { not: '' } },
-      select: { pageId: true, pageName: true, pageAccessToken: true },
+      select: { pageId: true, pageName: true, pageAccessToken: true, metadata: true },
     });
     let ok = 0;
     for (const p of pages) {
       if (!p.pageAccessToken) continue;
       try {
-        await this.subscribePageToWebhook(p.pageId, p.pageAccessToken);
+        if (cskhInboxGraphPlatform(p.metadata) === 'instagram') {
+          await this.subscribeInstagramToWebhook(p.pageId, p.pageAccessToken);
+        } else {
+          await this.subscribePageToWebhook(p.pageId, p.pageAccessToken);
+        }
         ok++;
       } catch (e) {
         this.logger.warn(`Resubscribe ${p.pageName || p.pageId} lỗi: ${(e as Error).message}`);
@@ -612,7 +618,11 @@ export class CskhService implements OnModuleInit {
     const totalMessageStatsMap = inboundDate ? dayTotalMessageMap : pageStats.messageMap;
 
     const missingPictureIds = rows
-      .filter((r) => !this.pagePictureUrl(r.metadata))
+      .filter(
+        (r) =>
+          !this.pagePictureUrl(r.metadata) &&
+          cskhInboxGraphPlatform(r.metadata) !== 'instagram',
+      )
       .map((r) => r.pageId);
     if (missingPictureIds.length) {
       void this.enrichPagePictures(missingPictureIds).catch((e) =>
@@ -705,6 +715,7 @@ export class CskhService implements OnModuleInit {
         enabled: row.enabled,
         updatedAt: row.updatedAt,
         pagePictureUrl: this.pagePictureUrl(row.metadata),
+        platform: cskhInboxGraphPlatform(row.metadata),
         conversationCount: convCountMap.get(row.pageId) || 0,
         messageCount: totalMessageStatsMap.get(row.pageId) || 0,
         unreadConversationCount: unreadCountMap.get(row.pageId) || 0,
@@ -786,6 +797,7 @@ export class CskhService implements OnModuleInit {
         enabled: row.enabled,
         updatedAt: row.updatedAt,
         pagePictureUrl: this.pagePictureUrl(row.metadata),
+        platform: cskhInboxGraphPlatform(row.metadata),
       })),
       oauthConnected: Boolean(oauth),
       oauthUser: oauth?.fbUserName || oauth?.fbUserId || null,
@@ -1084,19 +1096,22 @@ export class CskhService implements OnModuleInit {
 
     const pages = await this.prisma.facebookCskhConfig.findMany({
       where: { enabled: true, ...(tenantId ? { tenantId } : {}) },
-      select: { pageId: true, pageName: true },
+      select: { pageId: true, pageName: true, metadata: true },
       orderBy: { pageName: 'asc' },
     });
+    const facebookPages = pages.filter(
+      (p) => cskhInboxGraphPlatform(p.metadata) !== 'instagram',
+    );
 
     const delayMs = Number(process.env.CSKH_PAGE_AD_SYNC_DELAY_MS || 2_500);
     const freshSkipMs = Number(process.env.CSKH_PAGE_AD_SYNC_FRESH_SKIP_MS || 3_600_000);
     let synced = 0;
 
     for (const statDate of uniqueDates) {
-      for (const page of pages) {
+      for (const page of facebookPages) {
         if (await this.redisQueue.shouldDeferInboxSync()) {
           this.logger.log('[page-ad-spend] Dừng giữa chừng — nhường inbox/webhook');
-          return { synced, pages: pages.length, dates: uniqueDates };
+          return { synced, pages: facebookPages.length, dates: uniqueDates };
         }
         try {
           const existing = await this.prisma.cskhPageAdSpendDaily.findUnique({
@@ -1121,7 +1136,7 @@ export class CskhService implements OnModuleInit {
       }
     }
 
-    return { synced, pages: pages.length, dates: uniqueDates };
+    return { synced, pages: facebookPages.length, dates: uniqueDates };
   }
 
   /** Kiểm tra / làm mới danh sách tài khoản QC từ token OAuth (dùng khi load Cài đặt). */
@@ -1955,6 +1970,7 @@ export class CskhService implements OnModuleInit {
         select: { pageId: true, pageAccessToken: true, metadata: true },
       });
       for (const cfg of configs) {
+        if (cskhInboxGraphPlatform(cfg.metadata) === 'instagram') continue;
         try {
           const url = await this.graph.getPagePictureUrl(cfg.pageId, cfg.pageAccessToken);
           if (!url) continue;
@@ -2093,6 +2109,12 @@ export class CskhService implements OnModuleInit {
       access_token: string;
       tasks?: string[];
       picture?: { data?: { url?: string } };
+      instagram_business_account?: {
+        id?: string;
+        username?: string;
+        name?: string;
+        profile_picture_url?: string;
+      };
     };
     type FbAccountsResponse = { data?: FbPage[]; paging?: { next?: string } };
 
@@ -2100,7 +2122,8 @@ export class CskhService implements OnModuleInit {
     let nextUrl: string | null = `${GRAPH_BASE}/me/accounts`;
     let useParams = true;
     const params: Record<string, string | number> = {
-      fields: 'id,name,access_token,tasks,picture{url}',
+      fields:
+        'id,name,access_token,tasks,picture{url},instagram_business_account{id,username,name,profile_picture_url}',
       limit: 100,
       access_token: userAccessToken,
     };
@@ -2125,6 +2148,12 @@ export class CskhService implements OnModuleInit {
       access_token: string;
       tasks?: string[];
       picture?: { data?: { url?: string } };
+      instagram_business_account?: {
+        id?: string;
+        username?: string;
+        name?: string;
+        profile_picture_url?: string;
+      };
     }>,
     source: 'oauth' | 'refresh',
     tenantId?: string,
@@ -2180,6 +2209,53 @@ export class CskhService implements OnModuleInit {
         void this.subscribePageToWebhook(acc.id, acc.access_token).catch((e) => {
           this.logger.error(`Auto subscribe failed for page ${acc.id} via OAuth: ${e.message}`);
         });
+
+        const ig = acc.instagram_business_account;
+        const igId = String(ig?.id || '').trim();
+        if (igId) {
+          const igName = ig?.username
+            ? `@${ig.username}`
+            : ig?.name || acc.name || igId;
+          const igExisting = await this.prisma.facebookCskhConfig.findUnique({
+            where: { pageId: igId },
+            select: { metadata: true },
+          });
+          const igPrev = (igExisting?.metadata as Record<string, unknown>) || {};
+          const igMeta = {
+            ...igPrev,
+            platform: 'instagram',
+            facebookPageId: acc.id,
+            facebookPageName: acc.name,
+            instagramUsername: ig?.username || null,
+            connectedVia: source,
+            ...(ig?.profile_picture_url ? { pictureUrl: ig.profile_picture_url } : {}),
+            ...(oauthFbUserId ? { oauthFbUserId } : {}),
+            refreshedAt: new Date().toISOString(),
+          } as Prisma.InputJsonValue;
+
+          await this.prisma.facebookCskhConfig.upsert({
+            where: { pageId: igId },
+            create: {
+              pageId: igId,
+              pageName: igName,
+              pageAccessToken: acc.access_token,
+              enabled: canMessage,
+              tenantId,
+              metadata: igMeta,
+            },
+            update: {
+              pageName: igName,
+              pageAccessToken: acc.access_token,
+              enabled: canMessage,
+              tenantId,
+              metadata: igMeta,
+            },
+          });
+          void this.subscribeInstagramToWebhook(igId, acc.access_token).catch((e) => {
+            this.logger.warn(`Instagram subscribe ${igId}: ${(e as Error).message}`);
+          });
+          savedCount++;
+        }
 
         savedCount++;
       } catch (e: any) {
@@ -2351,7 +2427,7 @@ export class CskhService implements OnModuleInit {
     return this.prisma.facebookCskhConfig.findMany({
       where: { enabled: true, tenantId: tenantId || undefined },
       orderBy: { pageName: 'asc' },
-      select: { pageId: true, pageName: true, pageAccessToken: true },
+      select: { pageId: true, pageName: true, pageAccessToken: true, metadata: true },
     });
   }
 
@@ -2360,7 +2436,7 @@ export class CskhService implements OnModuleInit {
     return this.prisma.facebookCskhConfig.findMany({
       where: tenantId ? { tenantId } : undefined,
       orderBy: { pageName: 'asc' },
-      select: { pageId: true, pageName: true, pageAccessToken: true },
+      select: { pageId: true, pageName: true, pageAccessToken: true, metadata: true },
     });
   }
 
@@ -2598,9 +2674,10 @@ export class CskhService implements OnModuleInit {
     pageId: string,
     token: string,
     maxCount: number,
+    platform: ReturnType<typeof cskhInboxGraphPlatform> = 'messenger',
   ) {
     try {
-      return await this.graph.fetchConversationsForMonitor(pageId, token, maxCount);
+      return await this.graph.fetchConversationsForMonitor(pageId, token, maxCount, platform);
     } catch (e) {
       this.logger.warn(
         `Monitor fallback N+1 cho Page ${pageId}: ${(e as Error).message}`,
@@ -2667,6 +2744,7 @@ export class CskhService implements OnModuleInit {
               config.pageId,
               config.pageAccessToken,
               maxFetch,
+              cskhInboxGraphPlatform(config.metadata),
             );
             totalConversations += conversations.length;
 
@@ -3131,7 +3209,10 @@ export class CskhService implements OnModuleInit {
           aiTranscript,
           agentName,
           customerName,
-          channel: 'Facebook Messenger',
+          channel:
+            cskhInboxGraphPlatform(config.metadata) === 'instagram'
+              ? 'Instagram Direct'
+              : 'Facebook Messenger',
           noReply: noReplyForAi,
           metadata: {
             jobRunId: jobId,
@@ -3348,6 +3429,7 @@ export class CskhService implements OnModuleInit {
                   },
                   effectiveCapForPage > 0 ? effectiveCapForPage : 0,
                   onMatch,
+                  cskhInboxGraphPlatform(config.metadata),
                 );
               }
 
@@ -4182,6 +4264,25 @@ export class CskhService implements OnModuleInit {
       },
       audits: includeAudits ? audits : [],
     };
+  }
+
+  async subscribeInstagramToWebhook(igUserId: string, pageAccessToken: string) {
+    try {
+      const url = `${GRAPH_BASE}/${igUserId}/subscribed_apps`;
+      const res = await axios.post(url, null, {
+        params: { access_token: pageAccessToken },
+        timeout: 10_000,
+      });
+      this.logger.log(`Subscribed Instagram ${igUserId} to webhook: ${JSON.stringify(res.data)}`);
+      return res.data;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Unknown error';
+      this.logger.warn(`Failed to subscribe Instagram ${igUserId}: ${msg}`);
+      if (axios.isAxiosError(e) && e.response) {
+        this.logger.warn(`Instagram subscribe response ${igUserId}: ${JSON.stringify(e.response.data)}`);
+      }
+      throw e;
+    }
   }
 
   async subscribePageToWebhook(pageId: string, pageAccessToken: string) {

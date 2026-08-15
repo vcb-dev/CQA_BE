@@ -4,16 +4,32 @@ const GRAPH_VERSION = process.env.FB_GRAPH_VERSION?.trim() || 'v21.0';
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
 
 /**
- * Messenger + Marketing API (đọc chi phí QC).
- * Meta App → App Review: pages_* + ads_read, rồi OAuth lại.
+ * Messenger + Instagram Messaging + Marketing API.
+ * Instagram: Fanpage gắn Instagram Professional — OAuth lại sau khi thêm scope.
+ * Meta App → Instagram → Webhooks: messages.
  */
 export const FB_OAUTH_SCOPES = [
   'pages_show_list',
   'pages_messaging',
   'pages_manage_metadata',
   'pages_read_engagement',
+  'instagram_basic',
+  'instagram_manage_messages',
   'ads_read',
 ].join(',');
+
+export type CskhInboxGraphPlatform = 'messenger' | 'instagram';
+
+export function cskhInboxGraphPlatform(metadata: unknown): CskhInboxGraphPlatform {
+  if (
+    metadata &&
+    typeof metadata === 'object' &&
+    (metadata as { platform?: unknown }).platform === 'instagram'
+  ) {
+    return 'instagram';
+  }
+  return 'messenger';
+}
 
 export function getFacebookAppId(): string {
   return process.env.FB_APP_ID?.trim() || '';

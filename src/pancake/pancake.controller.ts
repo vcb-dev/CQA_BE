@@ -72,7 +72,7 @@ export class PancakeController {
   /** Đồng bộ page_customers → pancake_leads (+ quét chat tự gán nhãn). */
   @Post('pages/:pageId/sync')
   syncPage(@CurrentUser() user: User, @Param('pageId') pageId: string) {
-    return this.pancake.syncPageCustomers(pageId, {
+    return this.pancake.requestSyncPageCustomers(pageId, {
       tenantId: user.tenantId || undefined,
     });
   }
@@ -80,7 +80,7 @@ export class PancakeController {
   /** Đồng bộ tuần tự mọi kênh chat đã activated (FB / IG / TikTok…). */
   @Post('sync-all')
   syncAll(@CurrentUser() user: User) {
-    return this.pancake.syncAllPages({
+    return this.pancake.requestSyncAllPages({
       tenantId: user.tenantId || undefined,
     });
   }

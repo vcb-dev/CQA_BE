@@ -4342,43 +4342,41 @@ export class CskhService implements OnModuleInit {
     };
 
     try {
-      // Chia 2 batch — tránh 6 query song song chiếm hết session pool (15).
-      const [totalPages, enabledPages, totalAudits] = await Promise.all([
-        this.prisma.facebookCskhConfig.count({ where: whereTenant }),
-        this.prisma.facebookCskhConfig.count({ where: { ...whereTenant, enabled: true } }),
-        this.prisma.chatAudit.count({ where: whereTenant }),
-      ]);
-      const [avgScoreResult, recentAudits, latestJobs] = await Promise.all([
-        this.prisma.chatAudit.aggregate({
-          where: whereTenant,
-          _avg: { score: true },
-        }),
-        this.prisma.chatAudit.findMany({
-          where: whereTenant,
-          orderBy: { createdAt: 'desc' },
-          take: 5,
-          select: {
-            id: true,
-            agentName: true,
-            customerName: true,
-            channel: true,
-            score: true,
-            createdAt: true,
-          },
-        }),
-        this.prisma.cskhJobRun.findMany({
-          where: whereTenant,
-          orderBy: { startedAt: 'desc' },
-          take: 5,
-          select: {
-            id: true,
-            type: true,
-            status: true,
-            startedAt: true,
-            finishedAt: true,
-          },
-        }),
-      ]);
+      // Sequential — pool API chỉ 2 slot; Promise.all 3 query + JWT là hết pool.
+      const totalPages = await this.prisma.facebookCskhConfig.count({ where: whereTenant });
+      const enabledPages = await this.prisma.facebookCskhConfig.count({
+        where: { ...whereTenant, enabled: true },
+      });
+      const totalAudits = await this.prisma.chatAudit.count({ where: whereTenant });
+      const avgScoreResult = await this.prisma.chatAudit.aggregate({
+        where: whereTenant,
+        _avg: { score: true },
+      });
+      const recentAudits = await this.prisma.chatAudit.findMany({
+        where: whereTenant,
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+        select: {
+          id: true,
+          agentName: true,
+          customerName: true,
+          channel: true,
+          score: true,
+          createdAt: true,
+        },
+      });
+      const latestJobs = await this.prisma.cskhJobRun.findMany({
+        where: whereTenant,
+        orderBy: { startedAt: 'desc' },
+        take: 5,
+        select: {
+          id: true,
+          type: true,
+          status: true,
+          startedAt: true,
+          finishedAt: true,
+        },
+      });
 
       const avgScore = avgScoreResult._avg.score ? Math.round(avgScoreResult._avg.score) : 0;
       const result = {
@@ -4409,15 +4407,34 @@ export class CskhService implements OnModuleInit {
     if (cached && Date.now() - cached.at < this.dashboardHeavyCountsTtlMs) {
       return cached.data;
     }
+    const empty = { totalConversations: 0, totalMessages: 0 };
 
-    const whereTenant = tenantId ? { tenantId } : {};
-    const [totalConversations, totalMessages] = await Promise.all([
-      this.prisma.cskhInboxConversation.count({ where: whereTenant }),
-      this.prisma.cskhInboxMessage.count({ where: whereTenant }),
-    ]);
-
-    const result = { totalConversations, totalMessages };
-    this.dashboardHeavyCountsCache.set(cacheKey, { at: Date.now(), data: result });
-    return result;
+    try {
+      // pg_class.reltuples: O(1), không COUNT(*) bảng inbox lớn (giữ hết Prisma pool).
+      const rows = await this.prisma.$queryRaw<Array<{ relname: string; n: bigint }>>`
+        SELECT c.relname, GREATEST(c.reltuples, 0)::bigint AS n
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relname IN ('cskh_inbox_conversations', 'cskh_inbox_messages')
+      `;
+      const map = new Map(rows.map((r) => [r.relname, Number(r.n)]));
+      const result = {
+        totalConversations: map.get('cskh_inbox_conversations') ?? 0,
+        totalMessages: map.get('cskh_inbox_messages') ?? 0,
+      };
+      this.dashboardHeavyCountsCache.set(cacheKey, { at: Date.now(), data: result });
+      return result;
+    } catch (e) {
+      const msg = (e as Error)?.message || '';
+      if (/EMAXCONNSESSION|max clients reached|connection pool|Timed out fetching|P1001/i.test(msg)) {
+        this.logger.warn(
+          `getDashboardHeavyStats pool busy — ${cached ? 'serving stale cache' : 'empty fallback'}`,
+        );
+        if (cached) return cached.data;
+        return empty;
+      }
+      throw e;
+    }
   }
 }

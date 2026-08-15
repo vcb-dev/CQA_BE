@@ -7,7 +7,33 @@ import { parseUserId, prismaRolesFromCqaRole, toPublicUser } from './user-role.u
 
 @Injectable()
 export class UsersService {
+  /** JWT gọi findById mọi request — cache ngắn để auth không tranh Prisma pool với COUNT nặng. */
+  private readonly byIdCache = new Map<string, { at: number; user: User | null }>();
+  private readonly byIdTtlMs = Number(process.env.CSKH_JWT_USER_CACHE_MS || 60_000);
+
   constructor(private readonly prisma: PrismaService) {}
+
+  private cacheKey(id: bigint): string {
+    return String(id);
+  }
+
+  private readCached(id: bigint): User | null | undefined {
+    const hit = this.byIdCache.get(this.cacheKey(id));
+    if (!hit) return undefined;
+    if (Date.now() - hit.at >= this.byIdTtlMs) {
+      this.byIdCache.delete(this.cacheKey(id));
+      return undefined;
+    }
+    return hit.user;
+  }
+
+  private writeCached(id: bigint, user: User | null) {
+    this.byIdCache.set(this.cacheKey(id), { at: Date.now(), user });
+  }
+
+  private invalidateCached(id: bigint) {
+    this.byIdCache.delete(this.cacheKey(id));
+  }
 
   async create(createUserDto: CreateUserDto): Promise<User> {
     const { fullName, password, phoneNumber, role, ...rest } = createUserDto;
@@ -30,9 +56,14 @@ export class UsersService {
   }
 
   async findById(id: string | number | bigint): Promise<User | null> {
-    return this.prisma.user.findUnique({
-      where: { id: parseUserId(id) },
+    const userId = parseUserId(id);
+    const cached = this.readCached(userId);
+    if (cached !== undefined) return cached;
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
     });
+    this.writeCached(userId, user);
+    return user;
   }
 
   async findByEmail(email: string): Promise<User | null> {
@@ -50,7 +81,7 @@ export class UsersService {
     }
 
     const { fullName, password, phoneNumber, role, ...rest } = updateUserDto;
-    return this.prisma.user.update({
+    const updated = await this.prisma.user.update({
       where: { id: userId },
       data: {
         ...rest,
@@ -60,6 +91,8 @@ export class UsersService {
         ...(role !== undefined ? { roles: prismaRolesFromCqaRole(role) } : {}),
       },
     });
+    this.writeCached(userId, updated);
+    return updated;
   }
 
   async remove(id: string | number | bigint): Promise<void> {
@@ -71,5 +104,6 @@ export class UsersService {
     await this.prisma.user.delete({
       where: { id: userId },
     });
+    this.invalidateCached(userId);
   }
 }

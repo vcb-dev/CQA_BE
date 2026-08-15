@@ -1263,6 +1263,7 @@ model CskhInboxConversation {
   @@index([tenantId, lastMessageAt(sort: Desc), id(sort: Desc)])
   @@index([pageId, lastMessageAt(sort: Desc), id(sort: Desc)])
   @@index([tenantId, fromAd, lastMessageAt(sort: Desc), id(sort: Desc)])
+  @@index([lastMessageAt(sort: Desc), id(sort: Desc)])
   @@map("cskh_inbox_conversations")
 }
 

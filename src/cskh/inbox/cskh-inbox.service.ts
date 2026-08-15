@@ -50,6 +50,7 @@ import { findInboxConversationById,
   findInboxConversationByPageParticipant,
   isInboxSchemaMigrationError,
   isPrismaPoolTimeout,
+  isPrismaRetryableDbError,
   type InboxConversationAccess,
 } from './cskh-inbox-conversation.util';
 import { getCskhRunMode, isCskhWorkerProcess } from '../cskh-run-mode';
@@ -1723,11 +1724,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     };
 
     if (!isScrollPage && !hasListFilter) {
-      const redisOff = !this.redisQueue.isRedisQueueEnabled();
-      if (!redisOff && !this.backgroundInboxSyncRunning) {
-        void this.maybeBackfillAdReferralsFromDb(tenantId).catch((e) => {
-          this.logger.warn(`Ad referral backfill failed: ${(e as Error).message}`);
-        });
+      if (isCskhWorkerProcess()) {
+        const redisOff = !this.redisQueue.isRedisQueueEnabled();
+        if (!redisOff && !this.backgroundInboxSyncRunning) {
+          void this.maybeBackfillAdReferralsFromDb(tenantId).catch((e) => {
+            this.logger.warn(`Ad referral backfill failed: ${(e as Error).message}`);
+          });
+        }
       }
       void this.maybeTriggerListSync(pageId, tenantId).catch((e) => {
         this.logger.warn(`Background list sync trigger failed: ${(e as Error).message}`);
@@ -1809,6 +1812,12 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     try {
       rows = await fetchPage({ includeAwaitingInUnread: true, includeLabelFilters: true });
     } catch (e) {
+      if (isPrismaRetryableDbError(e)) {
+        this.logger.warn(
+          `[listConversations] DB timeout/pool — trả list rỗng, không 500: ${String((e as Error).message || e).slice(0, 160)}`,
+        );
+        return { items: [], nextCursor: null, hasMore: false };
+      }
       if (!this.isInboxSchemaMigrationError(e)) throw e;
       this.logger.warn('[listConversations] schema chưa migrate — fallback không nhãn/awaiting_label');
       if (opts?.labelId || opts?.unlabeledOnly) {
@@ -1939,6 +1948,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async maybeBackfillAdReferralsFromDb(tenantId?: string): Promise<void> {
+    if (!isCskhWorkerProcess()) return;
     if (this.adReferralBackfillRunning) return;
     if (Date.now() - this.lastAdReferralBackfillAt < this.adReferralBackfillCooldownMs) return;
     this.adReferralBackfillRunning = true;

@@ -17,13 +17,10 @@ export class UsersService {
     return String(id);
   }
 
-  private readCached(id: bigint): User | null | undefined {
+  private readCached(id: bigint, allowStale = false): User | null | undefined {
     const hit = this.byIdCache.get(this.cacheKey(id));
     if (!hit) return undefined;
-    if (Date.now() - hit.at >= this.byIdTtlMs) {
-      this.byIdCache.delete(this.cacheKey(id));
-      return undefined;
-    }
+    if (Date.now() - hit.at >= this.byIdTtlMs && !allowStale) return undefined;
     return hit.user;
   }
 
@@ -59,11 +56,20 @@ export class UsersService {
     const userId = parseUserId(id);
     const cached = this.readCached(userId);
     if (cached !== undefined) return cached;
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-    });
-    this.writeCached(userId, user);
-    return user;
+    try {
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+      });
+      this.writeCached(userId, user);
+      return user;
+    } catch (e) {
+      const msg = String((e as Error)?.message ?? e ?? '');
+      if (/connection pool|Timed out fetching|statement timeout|57014|P1001/i.test(msg)) {
+        const stale = this.readCached(userId, true);
+        if (stale) return stale;
+      }
+      throw e;
+    }
   }
 
   async findByEmail(email: string): Promise<User | null> {

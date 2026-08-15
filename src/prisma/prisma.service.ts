@@ -131,7 +131,20 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   }
 
   async onModuleInit(): Promise<void> {
-    await this.$connect();
+    const attempts = 5;
+    for (let i = 1; i <= attempts; i++) {
+      try {
+        await this.$connect();
+        break;
+      } catch (e) {
+        if (i === attempts) throw e;
+        const delay = i * 2_000;
+        this.logger.warn(
+          `Prisma connect failed (${i}/${attempts}): ${(e as Error).message}. Retry in ${delay}ms`,
+        );
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
     // Session có thể inherit default_transaction_read_only=on từ role/pooler.
     try {
       await this.$executeRawUnsafe('SET default_transaction_read_only = off');

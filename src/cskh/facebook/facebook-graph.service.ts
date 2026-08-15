@@ -611,7 +611,6 @@ export class FacebookGraphService {
     shouldStop?: () => boolean,
     platform: CskhInboxGraphPlatform = 'messenger',
   ): Promise<FbConversation[]> {
-  ): Promise<FbConversation[]> {
     const convs: FbConversation[] = [];
     let nextUrl: string | null = null;
     let first = true;

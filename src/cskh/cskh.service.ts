@@ -4035,7 +4035,9 @@ export class CskhService implements OnModuleInit {
   private async fetchAndCacheCustomerPicture(pageId: string, psid: string): Promise<string | null> {
     const config = await this.prisma.facebookCskhConfig.findUnique({ where: { pageId } });
     if (!config?.pageAccessToken) return null;
-    const profile = await this.graph.getMessengerUserProfile(psid, config.pageAccessToken);
+    const profile = await this.graph.getMessengerUserProfile(psid, config.pageAccessToken, {
+      platform: cskhInboxGraphPlatform(config.metadata),
+    });
     if (!profile.pictureUrl?.startsWith('http')) return null;
 
     await this.prisma.cskhInboxConversation
@@ -4151,14 +4153,24 @@ export class CskhService implements OnModuleInit {
     const config = await this.prisma.facebookCskhConfig.findUnique({ where: { pageId: pid } });
     if (!config?.pageAccessToken) throw new NotFoundException('Page chưa liên kết');
 
+    const conv = await this.prisma.cskhInboxConversation.findFirst({
+      where: { pageId: pid, participantPsid: uid },
+      select: { customerPictureUrl: true },
+    });
+    if (conv?.customerPictureUrl?.startsWith('http')) {
+      return this.proxyMediaUrl(conv.customerPictureUrl, res);
+    }
+
     let profile: { name: string | null; pictureUrl: string | null };
     try {
-      profile = await this.graph.getMessengerUserProfile(uid, config.pageAccessToken);
-    } catch {
+      profile = await this.graph.getMessengerUserProfile(uid, config.pageAccessToken, {
+        platform: cskhInboxGraphPlatform(config.metadata),
+      });
+    } catch (e) {
+      this.logger.warn(`[avatar] stream ${pid}/${uid.slice(0, 8)}… ${(e as Error).message}`);
       profile = { name: null, pictureUrl: null };
     }
     if (!profile.pictureUrl?.startsWith('http')) {
-      // Trả về ảnh SVG đại diện mặc định cho Khách hàng để làm sạch log và nâng cao trải nghiệm người dùng
       const svg = `
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
           <rect width="100" height="100" fill="#E2E8F0"/>

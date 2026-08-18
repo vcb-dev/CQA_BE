@@ -6,7 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   UseGuards,
-  Request,
+  Req,
   Res,
   Query,
   UnauthorizedException,
@@ -15,11 +15,12 @@ import {
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import { Throttle } from '@nestjs/throttler';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
+import { CookieAuthService } from './cookie-auth.service';
+import { COOKIE_REFRESH, LEGACY_COOKIE_REFRESH } from './cookie.constants';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
-import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { User } from '@prisma/client';
@@ -30,29 +31,9 @@ import type { User } from '@prisma/client';
 export class AuthController {
   constructor(
     private readonly authService: AuthService,
+    private readonly cookies: CookieAuthService,
     private readonly configService: ConfigService,
   ) {}
-
-  private setAuthCookies(res: Response, accessToken: string, refreshToken: string) {
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL') || '';
-    const isHttps = frontendUrl.startsWith('https://');
-    const secure = isHttps;
-    const sameSite = isHttps ? 'none' : 'lax';
-
-    res.cookie('accessToken', accessToken, {
-      httpOnly: true,
-      secure: secure,
-      sameSite: sameSite,
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
-
-    res.cookie('refreshToken', refreshToken, {
-      httpOnly: true,
-      secure: secure,
-      sameSite: sameSite,
-      maxAge: 30 * 24 * 60 * 60 * 1000,
-    });
-  }
 
   private extractHttpErrorMessage(err: unknown): string {
     if (err instanceof HttpException) {
@@ -70,26 +51,22 @@ export class AuthController {
     return 'Đăng nhập Google thất bại';
   }
 
-  private clearAuthCookies(res: Response) {
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL') || '';
-    const isHttps = frontendUrl.startsWith('https://');
-    const secure = isHttps;
-    const sameSite = isHttps ? 'none' : 'lax';
-    
-    res.clearCookie('accessToken', {
-      httpOnly: true,
-      secure: secure,
-      sameSite: sameSite,
-    });
-    
-    res.clearCookie('refreshToken', {
-      httpOnly: true,
-      secure: secure,
-      sameSite: sameSite,
-    });
+  private readRefreshCookie(req: Request): string | undefined {
+    const token =
+      (req.cookies?.[COOKIE_REFRESH] as string | undefined) ||
+      (req.cookies?.[LEGACY_COOKIE_REFRESH] as string | undefined);
+    return typeof token === 'string' && token.length > 0 ? token : undefined;
   }
 
-  // POST /auth/register
+  /** CSRF double-submit — FE đọc cookie hoặc gọi endpoint này khi khác origin. */
+  @Get('csrf')
+  csrf(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    return {
+      success: true,
+      data: { csrfToken: this.cookies.ensureCsrfCookie(req, res) },
+    };
+  }
+
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
@@ -98,19 +75,18 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const result = await this.authService.register(registerDto);
-    this.setAuthCookies(res, result.accessToken, result.refreshToken);
+    const csrfToken = this.cookies.setAuthCookies(res, {
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+    });
     return {
       success: true,
       message: 'Đăng ký thành công',
-      data: {
-        user: result.user,
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
-      },
+      data: { user: result.user, csrfToken },
     };
   }
 
-  // POST /auth/login — tài khoản + mật khẩu
+  /** Email + mật khẩu → HttpOnly cookies (không trả token trong JSON) */
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post('login')
   @HttpCode(HttpStatus.OK)
@@ -119,45 +95,40 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const result = await this.authService.login(loginDto);
-    this.setAuthCookies(res, result.accessToken, result.refreshToken);
+    const csrfToken = this.cookies.setAuthCookies(res, {
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+    });
     return {
       success: true,
       message: 'Đăng nhập thành công',
-      data: {
-        user: result.user,
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
-      },
+      data: { user: result.user, csrfToken },
     };
   }
 
-  // POST /auth/refresh
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   async refreshToken(
-    @Request() req: any,
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
-    @Body() refreshTokenDto?: RefreshTokenDto,
   ) {
-    const token = req.cookies?.refreshToken || refreshTokenDto?.refreshToken;
+    const token = this.readRefreshCookie(req);
     if (!token) {
       throw new UnauthorizedException('Không tìm thấy Refresh Token');
     }
 
     const result = await this.authService.refreshToken(token);
-    this.setAuthCookies(res, result.accessToken, result.refreshToken);
+    const csrfToken = this.cookies.setAuthCookies(res, {
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+    });
     return {
       success: true,
       message: 'Làm mới token thành công',
-      data: {
-        user: result.user,
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
-      },
+      data: { user: result.user, csrfToken },
     };
   }
 
-  // GET /auth/me
   @Get('me')
   @ApiBearerAuth('JWT-auth')
   @UseGuards(JwtAuthGuard)
@@ -169,20 +140,16 @@ export class AuthController {
     };
   }
 
-  // POST /auth/logout
   @Post('logout')
-  @ApiBearerAuth('JWT-auth')
-  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   async logout(@Res({ passthrough: true }) res: Response) {
-    this.clearAuthCookies(res);
+    this.cookies.clearAuthCookies(res);
     return {
       success: true,
       message: 'Đăng xuất thành công',
     };
   }
 
-  // GET /auth/google
   @Get('google')
   async googleAuth(@Res() res: Response) {
     const clientId = this.configService.get<string>('GOOGLE_CLIENT_ID');
@@ -205,14 +172,14 @@ export class AuthController {
     return res.redirect(googleUrl);
   }
 
-  // GET /auth/google/callback
   @Get('google/callback')
   async googleAuthCallback(
     @Query('code') code: string,
     @Query('error') error: string,
     @Res() res: Response,
   ) {
-    const rawFrontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173';
+    const rawFrontendUrl =
+      this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173';
     const frontendUrl = rawFrontendUrl.replace(/\/+$/, '');
 
     if (error) {
@@ -229,13 +196,16 @@ export class AuthController {
 
     try {
       const tokens = await this.authService.loginWithGoogle(code);
-      this.setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
-      return res.redirect(
-        `${frontendUrl}/login#token=${tokens.accessToken}&refreshToken=${tokens.refreshToken}`,
-      );
+      this.cookies.setAuthCookies(res, {
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+      });
+      return res.redirect(`${frontendUrl}/login?oauth=ok`);
     } catch (err: unknown) {
       const errMsg = this.extractHttpErrorMessage(err);
-      return res.redirect(`${frontendUrl}/login?error=${encodeURIComponent(errMsg)}`);
+      return res.redirect(
+        `${frontendUrl}/login?error=${encodeURIComponent(errMsg)}`,
+      );
     }
   }
 }

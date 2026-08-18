@@ -468,6 +468,25 @@ export function dedupeChatMessages(messages: NormalizedChatMessage[]): Normalize
   return result;
 }
 
+export function inboxListPreview(input: {
+  text?: string | null;
+  messageType?: string | null;
+  attachmentCount?: number;
+}): string {
+  const text = (input.text ?? '').trim();
+  const n = Math.max(0, input.attachmentCount ?? 0);
+  const type = (input.messageType ?? '').toLowerCase();
+  if (n > 1 && (type === 'image' || type === 'photo' || type === 'file' || !text || text === '[Ảnh]')) {
+    return `[${n} ảnh]`;
+  }
+  if (text && text !== '[Không có tin nhắn]') return text;
+  if (type === 'video') return '[Video]';
+  if (type === 'sticker') return '[Sticker]';
+  if (type === 'audio') return '[Audio]';
+  if (n > 0 || type === 'image' || type === 'photo' || type === 'file') return '[Ảnh]';
+  return '';
+}
+
 export const FB_ATTACHMENT_FIELDS =
   'type,mime_type,id,url,image_url,image_data{url,preview_url,media_url,width,height},video_data{url,preview_url},file_url,payload{url,template_type,elements{image_url,title,subtitle}}';
 

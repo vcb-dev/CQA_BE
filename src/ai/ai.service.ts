@@ -2,6 +2,7 @@ import {
   BadGatewayException,
   Injectable,
   Logger,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import axios from 'axios';
 import http from 'http';
@@ -9,6 +10,8 @@ import https from 'https';
 import { PrismaService } from '../prisma/prisma.service';
 import { User, ChatAudit } from '@prisma/client';
 import { buildAnalysisPayloadFromAi } from '../cskh/audit/audit-analytics.util';
+import { cqaRoleFromPrisma } from '../users/user-role.util';
+import { AssistantChatDto } from './dto/assistant-chat.dto';
 
 function normalizeAuditListField(value: unknown): string | null {
   if (value == null) return null;
@@ -541,6 +544,71 @@ export class AiService {
         suggestedFocus: 'Đọc tin nhắn mới và phản hồi khách.',
         suggestedReply: '',
       };
+    }
+  }
+
+  async assistantChat(user: User, body: AssistantChatDto) {
+    const secret = (process.env.ASSISTANT_INTERNAL_SECRET || '').trim();
+    if (!secret) {
+      throw new ServiceUnavailableException(
+        'Trợ lý AI nội bộ chưa được cấu hình (ASSISTANT_INTERNAL_SECRET).',
+      );
+    }
+    const timeoutMs = Number(process.env.ASSISTANT_CHAT_TIMEOUT_MS || 90_000);
+    const ctx = body.conversationContext;
+    try {
+      const { data } = await this.aiHttp.post(
+        `${this.getAiBaseUrl()}/assistant/chat`,
+        {
+          message: body.message,
+          history: (body.history ?? []).map((item) => ({
+            role: item.role,
+            content: item.content,
+          })),
+          user_context: {
+            user_id: String(user.id),
+            email: user.email,
+            full_name: user.name || undefined,
+            app_role: cqaRoleFromPrisma(user.roles ?? []),
+          },
+          conversation_context: ctx
+            ? {
+                conversation_id: ctx.conversationId,
+                customer_name: ctx.customerName,
+                platform: ctx.platform,
+                page_name: ctx.pageName,
+                from_ad: ctx.fromAd,
+                labels: ctx.labels ?? [],
+                recent_messages: (ctx.recentMessages ?? []).map((m) => ({
+                  sender: m.sender,
+                  text: m.text,
+                })),
+              }
+            : undefined,
+        },
+        {
+          timeout: Number.isFinite(timeoutMs) ? timeoutMs : 90_000,
+          headers: { 'X-Assistant-Secret': secret },
+        },
+      );
+      return {
+        reply: String(data?.reply ?? '').trim(),
+        blocked: Boolean(data?.blocked),
+        blockReason: data?.block_reason ?? data?.blockReason ?? null,
+        sources: Array.isArray(data?.sources) ? data.sources : [],
+        scope: data?.scope ?? 'in_scope',
+      };
+    } catch (error: unknown) {
+      const err = error as { message?: string; response?: { status?: number; data?: { detail?: unknown } } };
+      this.logger.warn(`Assistant chat failed: ${err.message}`);
+      const detail = err.response?.data?.detail;
+      const detailText = typeof detail === 'string' ? detail : '';
+      if (err.response?.status === 401) {
+        throw new ServiceUnavailableException('Trợ lý AI nội bộ chưa xác thực được với dịch vụ AI.');
+      }
+      throw new BadGatewayException(
+        detailText || 'Trợ lý AI tạm thời không phản hồi. Thử lại sau.',
+      );
     }
   }
 }

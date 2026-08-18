@@ -26,8 +26,9 @@ export function lastMessagePreviewMismatch(
   messages: Array<{ text?: string | null }>,
 ): boolean {
   const preview = convLastMessage?.trim();
-  if (!preview) return false;
-  if (!messages.length) return true;
+  if (!messages.length) return Boolean(preview);
+  if (!preview) return true;
   const lastText = messages[messages.length - 1]?.text?.trim() ?? '';
+  if (!lastText && preview) return false;
   return lastText !== preview;
 }

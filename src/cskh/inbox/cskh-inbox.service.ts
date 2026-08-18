@@ -17,6 +17,7 @@ import {
   computeTrailingCustomerUnread,
   isMessengerFromCustomer,
   resolveMessengerCustomerPsid,
+  inboxListPreview,
 } from '../facebook/facebook-message.util';
 import {
   detectAdFromFbMessages,
@@ -131,6 +132,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   private allPagesSyncCursor = 0;
   private lastAllPagesRotatingSync = 0;
   private backgroundInboxSyncRunning = false;
+  private avatarEnrichRunning = false;
   /** Tắt mặc định — tránh quét inbox nền khi mở danh sách (chỉ bật khi CSKH_INBOX_ROTATING_SYNC_ENABLED=true). */
   private readonly rotatingSyncEnabled =
     process.env.CSKH_INBOX_ROTATING_SYNC_ENABLED === 'true';
@@ -1173,6 +1175,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     let customerName = existingConv?.customerName ?? null;
     let customerPictureUrl = existingConv?.customerPictureUrl ?? null;
 
+    const webhookAttachments = msg.attachments ?? [];
+    const listPreview = inboxListPreview({
+      text: msg.text,
+      messageType: webhookAttachments[0]?.type,
+      attachmentCount: webhookAttachments.length,
+    });
+
     const conv = await this.prisma.cskhInboxConversation.upsert({
       where: { pageId_participantPsid: { pageId, participantPsid: customerPsid } },
       create: {
@@ -1181,7 +1190,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         participantPsid: customerPsid,
         customerName: customerName || 'Khách hàng Messenger',
         customerPictureUrl,
-        lastMessage: msg.text ?? '',
+        lastMessage: listPreview || msg.text || '[Ảnh]',
         lastMessageAt: new Date(event.timestamp ?? Date.now()),
         unreadCount: isFromPage ? 0 : 1,
         tenantId: config?.tenantId || null,
@@ -1190,7 +1199,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         pageName: pageName ?? undefined,
         customerName: customerName ?? undefined,
         customerPictureUrl: customerPictureUrl ?? undefined,
-        lastMessage: msg.text ?? undefined,
+        lastMessage: listPreview || undefined,
         lastMessageAt: new Date(event.timestamp ?? Date.now()),
         unreadCount: isFromPage ? 0 : { increment: 1 },
         tenantId: config?.tenantId || undefined,
@@ -1203,10 +1212,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       unreadCount: conv.unreadCount,
     });
 
-    // Asynchronously fetch profile for new conversations in the background
-    if (!existingConv && !isFromPage && config?.pageAccessToken) {
+    // Lấy avatar/tên nếu hội thoại mới hoặc chưa có ảnh
+    if ((!existingConv?.customerPictureUrl || !existingConv?.customerName) && config?.pageAccessToken) {
       void this.enrichNewConversationProfile(conv.id, customerPsid, config.pageAccessToken).catch((e) => {
-        this.logger.warn(`Background new profile enrichment failed: ${(e as Error).message}`);
+        this.logger.warn(`Background profile enrichment failed: ${(e as Error).message}`);
       });
     }
 
@@ -1264,7 +1273,6 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         }
       }
     }
-    const webhookAttachments = msg.attachments ?? [];
     let mediaItems: Array<{ url: string | null; messageType: string }> = [];
     let needsBackgroundMedia = false;
 
@@ -1284,7 +1292,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     if (
       msg.mid &&
       config?.pageAccessToken &&
-      mediaItems.some((m) => !m.url && m.messageType !== 'text' && m.messageType !== 'sticker')
+      (mediaItems.length > 1 ||
+        mediaItems.some((m) => !m.url && m.messageType !== 'text' && m.messageType !== 'sticker'))
     ) {
       // Không chờ Graph khi audit/inbox đang bận — push SSE trước, resolve media nền sau.
       needsBackgroundMedia = true;
@@ -1339,14 +1348,15 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           continue;
         }
       } else if (item.url) {
+        const urlPath = item.url.split('?')[0];
         const sibling = await this.prisma.cskhInboxMessage.findFirst({
           where: {
             conversationId: conv.id,
             senderType: isFromPage ? 'staff' : 'customer',
-            attachmentUrl: item.url,
+            attachmentUrl: { startsWith: urlPath },
             sentAt: {
-              gte: new Date(sentAt.getTime() - 2000),
-              lte: new Date(sentAt.getTime() + 2000),
+              gte: new Date(sentAt.getTime() - 10_000),
+              lte: new Date(sentAt.getTime() + 10_000),
             },
           },
         });
@@ -1368,6 +1378,22 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         },
       });
       createdMessages.push(created);
+    }
+
+    const previewAfter = inboxListPreview({
+      text: createdMessages[0]?.text || text,
+      messageType: createdMessages[0]?.messageType || mediaItems[0]?.messageType,
+      attachmentCount: createdMessages.filter((m) => m.messageType === 'image' || m.messageType === 'video').length
+        || mediaItems.length,
+    });
+    if (previewAfter && previewAfter !== conv.lastMessage) {
+      await this.prisma.cskhInboxConversation
+        .update({
+          where: { id: conv.id },
+          data: { lastMessage: previewAfter },
+        })
+        .catch(() => undefined);
+      conv.lastMessage = previewAfter;
     }
 
     await this.publishMessageRealtime(
@@ -1416,21 +1442,21 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const existing = await this.prisma.cskhInboxMessage.findUnique({
       where: { fbMessageId },
     });
-    if (!existing || existing.attachmentUrl) return;
+    if (!existing) return;
 
-    let resolvedItems: Array<{ url: string | null; messageType: string }> = [];
     const resolvedAll = await this.graph.resolveAllMessageMediaUrls(fbMessageId, pageAccessToken);
-    if (resolvedAll.length) {
-      resolvedItems = resolvedAll.map((r) => ({ url: r.url, messageType: r.messageType }));
-    } else {
+    const resolvedItems = resolvedAll.length
+      ? resolvedAll.map((r) => ({ url: r.url, messageType: r.messageType }))
+      : [];
+    if (!resolvedItems.length) {
       const resolved = await this.graph.resolveMessageMediaUrl(fbMessageId, pageAccessToken);
       if (resolved.url) {
-        resolvedItems = [{ url: resolved.url, messageType: resolved.messageType ?? 'image' }];
+        resolvedItems.push({ url: resolved.url, messageType: resolved.messageType ?? 'image' });
       }
     }
     if (!resolvedItems.length) return;
 
-    const updated = await this.prisma.cskhInboxMessage.update({
+    const updatedPrimary = await this.prisma.cskhInboxMessage.update({
       where: { id: existing.id },
       data: {
         attachmentUrl: resolvedItems[0].url,
@@ -1438,11 +1464,53 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         text: existing.text === '[Ảnh]' ? '' : existing.text,
       },
     });
+    const published = [updatedPrimary];
+
+    for (let i = 1; i < resolvedItems.length; i++) {
+      const item = resolvedItems[i];
+      const sibling = await this.prisma.cskhInboxMessage.findFirst({
+        where: {
+          conversationId,
+          senderType: existing.senderType,
+          attachmentUrl: { startsWith: item.url.split('?')[0] },
+          sentAt: {
+            gte: new Date(existing.sentAt.getTime() - 10_000),
+            lte: new Date(existing.sentAt.getTime() + 10_000),
+          },
+        },
+      });
+      if (sibling) continue;
+      const created = await this.prisma.cskhInboxMessage.create({
+        data: {
+          conversationId,
+          direction: existing.direction,
+          senderType: existing.senderType,
+          text: '',
+          messageType: item.messageType,
+          attachmentUrl: item.url,
+          sentAt: existing.sentAt,
+          status: 'sent',
+          tenantId: tenantId || existing.tenantId,
+        },
+      });
+      published.push(created);
+    }
+
+    const preview = inboxListPreview({
+      text: updatedPrimary.text,
+      messageType: updatedPrimary.messageType,
+      attachmentCount: published.length,
+    });
+    if (preview) {
+      await this.prisma.cskhInboxConversation
+        .update({ where: { id: conversationId }, data: { lastMessage: preview } })
+        .catch(() => undefined);
+    }
 
     this.publishMessageRealtime(
       pageId,
       conversationId,
-      [updated],
+      published,
       false,
       tenantId,
     );
@@ -1852,6 +1920,21 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       labels: needLabels ? (labelMap.get(i.id) ?? []) : [],
       labelsLocked: needLabels ? (labelMap.get(i.id) ?? []).length > 0 : false,
     }));
+
+    const missingPictureIds = itemsWithLabels
+      .filter((i) => !i.customerPictureUrl && i.participantPsid)
+      .slice(0, 3)
+      .map((i) => i.id);
+    if (missingPictureIds.length && !this.avatarEnrichRunning) {
+      this.avatarEnrichRunning = true;
+      void this.enrichCustomerPictures(missingPictureIds)
+        .catch((e) => {
+          this.logger.debug(`Background avatar enrich failed: ${(e as Error).message}`);
+        })
+        .finally(() => {
+          this.avatarEnrichRunning = false;
+        });
+    }
 
     return { items: itemsWithLabels, nextCursor, hasMore };
   }
@@ -2350,37 +2433,37 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const convs = await this.prisma.cskhInboxConversation.findMany({
       where: { id: { in: conversationIds } },
     });
-    await Promise.all(
-      convs.map(async (conv) => {
-        const config = await this.prisma.facebookCskhConfig.findUnique({
-          where: { pageId: conv.pageId },
+    for (const conv of convs) {
+      const config = await this.prisma.facebookCskhConfig.findUnique({
+        where: { pageId: conv.pageId },
+      });
+      if (!config?.pageAccessToken) continue;
+      if (conv.customerPictureUrl?.startsWith('http')) continue;
+      try {
+        const profile = await this.graph.getMessengerUserProfile(
+          conv.participantPsid,
+          config.pageAccessToken,
+          { platform: cskhInboxGraphPlatform(config.metadata) },
+        );
+        if (!profile.pictureUrl && !profile.name) continue;
+        const updatedConv = await this.prisma.cskhInboxConversation.update({
+          where: { id: conv.id },
+          data: {
+            customerName: profile.name ?? undefined,
+            customerPictureUrl: profile.pictureUrl ?? undefined,
+          },
         });
-        if (!config?.pageAccessToken) return;
-        try {
-          const profile = await this.graph.getMessengerUserProfile(
-            conv.participantPsid,
-            config.pageAccessToken,
-          );
-          if (!profile.pictureUrl && !profile.name) return;
-          const updatedConv = await this.prisma.cskhInboxConversation.update({
-            where: { id: conv.id },
-            data: {
-              customerName: profile.name ?? undefined,
-              customerPictureUrl: profile.pictureUrl ?? undefined,
-            },
-          });
-          this.realtime.publish({
-            type: 'conversation',
-            conversationId: conv.id,
-            pageId: conv.pageId,
-            conversation: this.formatConversationRow(updatedConv),
-            tenantId: conv.tenantId || undefined,
-          });
-        } catch (e) {
-          this.logger.warn(`Failed to enrich picture for conv ${conv.id}: ${(e as Error).message}`);
-        }
-      }),
-    );
+        this.realtime.publish({
+          type: 'conversation',
+          conversationId: conv.id,
+          pageId: conv.pageId,
+          conversation: this.formatConversationRow(updatedConv),
+          tenantId: conv.tenantId || undefined,
+        });
+      } catch (e) {
+        this.logger.warn(`Failed to enrich picture for conv ${conv.id}: ${(e as Error).message}`);
+      }
+    }
   }
 
   private async enrichNewConversationProfile(
@@ -2389,7 +2472,19 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     pageAccessToken: string,
   ) {
     try {
-      const profile = await this.graph.getMessengerUserProfile(customerPsid, pageAccessToken);
+      const convRow = await this.prisma.cskhInboxConversation.findUnique({
+        where: { id: conversationId },
+        select: { pageId: true },
+      });
+      const pageMeta = convRow?.pageId
+        ? await this.prisma.facebookCskhConfig.findUnique({
+            where: { pageId: convRow.pageId },
+            select: { metadata: true },
+          })
+        : null;
+      const profile = await this.graph.getMessengerUserProfile(customerPsid, pageAccessToken, {
+        platform: cskhInboxGraphPlatform(pageMeta?.metadata),
+      });
       if (!profile.name && !profile.pictureUrl) return;
       const updatedConv = await this.prisma.cskhInboxConversation.update({
         where: { id: conversationId },
@@ -3016,11 +3111,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
     const attCount = enriched.attachments?.data?.length ?? 0;
     const needsResolve =
-      token &&
-      enriched.id &&
-      (attCount > 1 ||
-        !normalized.attachmentUrl ||
-        (normalized.attachmentUrls?.length ?? 0) < attCount);
+      Boolean(token && enriched.id) &&
+      (attCount >= 1 ||
+        normalized.messageType === 'image' ||
+        normalized.messageType === 'video');
     if (needsResolve) {
       const looksLikeMedia =
         normalized.messageType === 'image' ||
@@ -3119,7 +3213,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
             }
           }
         }
-        return { text: normalized.text };
+        return {
+          text: inboxListPreview({
+            text: normalized.text,
+            messageType: normalized.messageType,
+            attachmentCount: 0,
+          }) || normalized.text,
+        };
       }
       try {
         await this.prisma.cskhInboxMessage.create({
@@ -3137,7 +3237,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       } catch (e) {
         if ((e as { code?: string }).code !== 'P2002') throw e;
       }
-      return { text: normalized.text };
+      return {
+        text: inboxListPreview({
+          text: normalized.text,
+          messageType: normalized.messageType,
+          attachmentCount: 0,
+        }) || normalized.text,
+      };
     }
 
     for (let i = 0; i < mediaUrls.length; i++) {
@@ -3159,14 +3265,15 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         ? await this.prisma.cskhInboxMessage.findUnique({ where: { fbMessageId: rowFbMessageId } })
         : null;
       if (!exists && attachmentUrl) {
+        const urlPath = attachmentUrl.split('?')[0];
         exists = await this.prisma.cskhInboxMessage.findFirst({
           where: {
             conversationId,
             senderType: isStaff ? 'staff' : 'customer',
-            attachmentUrl,
+            attachmentUrl: { startsWith: urlPath },
             sentAt: {
-              gte: new Date(sentAt.getTime() - 2000),
-              lte: new Date(sentAt.getTime() + 2000),
+              gte: new Date(sentAt.getTime() - 10_000),
+              lte: new Date(sentAt.getTime() + 10_000),
             },
           },
         });
@@ -3232,7 +3339,14 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       });
     }
 
-    return { text: normalized.text };
+    return {
+      text:
+        inboxListPreview({
+          text: normalized.text,
+          messageType: normalized.messageType,
+          attachmentCount: mediaUrls.length,
+        }) || normalized.text,
+    };
   }
 
   private findStoredMessageNearSentAt(
@@ -3402,7 +3516,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     conversationId: string,
     text: string,
     tenantId?: string,
-    options?: { autoTranslate?: boolean },
+    options?: { autoTranslate?: boolean; originalText?: string },
   ) {
     const trimmed = text.trim();
     if (!trimmed) throw new BadRequestException('Tin nhắn trống');
@@ -3423,7 +3537,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     conversationId: string,
     trimmed: string,
     tenantId?: string,
-    options?: { autoTranslate?: boolean },
+    options?: { autoTranslate?: boolean; originalText?: string },
   ) {
 
     const conv = await findInboxConversationById(this.prisma, conversationId, tenantId);
@@ -3447,22 +3561,48 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     let translatedText: string | null = null;
     let sourceLang: string | null = 'vi';
 
-    if (options?.autoTranslate) {
+    const reviewedOriginal = options?.originalText?.trim() || '';
+    if (reviewedOriginal && reviewedOriginal !== trimmed) {
+      outboundText = trimmed;
+      originalText = reviewedOriginal;
+      translatedText = reviewedOriginal;
+    } else if (options?.autoTranslate) {
       const langInfo = await this.resolveCustomerLang(conv, tenantId);
-      if (langInfo.lang && langInfo.lang !== 'vi' && langInfo.lang !== 'und') {
+      const target = (langInfo.lang || '').trim().toLowerCase();
+      const shouldTranslate =
+        Boolean(target) &&
+        target !== 'vi' &&
+        target !== 'und' &&
+        !this.looksLikeForeignScript(trimmed);
+      if (shouldTranslate) {
         const contextMessages = await this.loadTranslateContext(conv.id);
         const tr = await this.ai.translateText({
           text: trimmed,
           sourceLang: 'vi',
-          targetLang: langInfo.lang,
+          targetLang: target,
           direction: 'outbound',
           contextMessages,
         });
-        if (!tr.sameLanguage && tr.translatedText.trim() && tr.translatedText.trim() !== trimmed) {
-          outboundText = tr.translatedText.trim();
+        const translated = tr.translatedText.trim();
+        const isRewriteNotTranslate =
+          translated !== trimmed &&
+          this.looksLikeVietnamese(trimmed) &&
+          this.looksLikeVietnamese(translated) &&
+          !this.looksLikeForeignScript(translated);
+        if (
+          !tr.sameLanguage &&
+          translated &&
+          translated !== trimmed &&
+          !isRewriteNotTranslate
+        ) {
+          outboundText = translated;
           originalText = trimmed;
           translatedText = trimmed;
-          sourceLang = langInfo.lang;
+          sourceLang = target;
+        } else if (isRewriteNotTranslate) {
+          this.logger.warn(
+            `Bỏ auto-translate — AI viết lại tiếng Việt thay vì dịch (conv=${conv.id})`,
+          );
         }
       }
     }
@@ -3546,7 +3686,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Preview dịch VI → ngôn ngữ khách (không lưu DB). */
+  /** Preview dịch sang tiếng Việt (không lưu DB) — NV xem rồi mới gửi. */
   async translatePreview(
     conversationId: string,
     text: string,
@@ -3559,12 +3699,18 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const conv = await findInboxConversationById(this.prisma, conversationId, tenantId);
     if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
 
-    const langInfo = targetLang?.trim()
-      ? { lang: targetLang.trim().toLowerCase(), langLabel: targetLang.trim() }
-      : await this.resolveCustomerLang(conv, tenantId);
+    const langInfo = await this.resolveCustomerLang(conv, tenantId).catch(() => ({
+      lang: conv.customerLang || 'vi',
+      langLabel: conv.customerLangLabel || 'Tiếng Việt',
+    }));
 
-    const target = langInfo.lang && langInfo.lang !== 'und' ? langInfo.lang : 'vi';
-    if (target === 'vi') {
+    const target = (targetLang?.trim() || 'vi').toLowerCase() || 'vi';
+    const alreadyVi =
+      target === 'vi' &&
+      this.looksLikeVietnamese(trimmed) &&
+      !this.looksLikeForeignScript(trimmed);
+
+    if (alreadyVi) {
       return {
         originalText: trimmed,
         translatedText: trimmed,
@@ -3578,20 +3724,25 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
     const tr = await this.ai.translateText({
       text: trimmed,
-      sourceLang: 'vi',
+      sourceLang: 'auto',
       targetLang: target,
       direction: 'outbound',
       contextMessages: await this.loadTranslateContext(conv.id),
     });
 
+    const translated = (tr.translatedText || '').trim() || trimmed;
+    const inputIsVi =
+      this.looksLikeVietnamese(trimmed) && !this.looksLikeForeignScript(trimmed);
+    const same = translated === trimmed || (target === 'vi' && inputIsVi);
+
     return {
       originalText: trimmed,
-      translatedText: tr.translatedText,
+      translatedText: same ? trimmed : translated,
       detectedLang: tr.detectedLang,
       targetLang: target,
       customerLang: langInfo.lang,
       customerLangLabel: langInfo.langLabel,
-      sameLanguage: tr.sameLanguage,
+      sameLanguage: same,
     };
   }
 
@@ -3606,6 +3757,31 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       customerLangLabel: langInfo.langLabel,
       confidence: langInfo.confidence,
     };
+  }
+
+  /** Nút Dịch trên header — dịch cả tin khách lẫn tin shop sang tiếng Việt (await). */
+  async translateConversationMessages(conversationId: string, tenantId?: string) {
+    const conv = await findInboxConversationById(this.prisma, conversationId, tenantId);
+    if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
+
+    const rows = await this.prisma.cskhInboxMessage.findMany({
+      where: {
+        conversationId: conv.id,
+        messageType: 'text',
+      },
+      orderBy: { sentAt: 'desc' },
+      take: 80,
+      select: {
+        id: true,
+        direction: true,
+        messageType: true,
+        text: true,
+        originalText: true,
+        translatedText: true,
+      },
+    });
+    const translated = await this.runMessageTranslations(conv, rows.reverse(), tenantId);
+    return { translated, total: rows.length };
   }
 
   private async resolveCustomerLang(
@@ -3690,16 +3866,31 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     >,
     tenantId?: string,
   ): void {
+    void this.runMessageTranslations(conv, messages, tenantId);
+  }
+
+  private async runMessageTranslations(
+    conv: CskhInboxConversation | InboxConversationAccess,
+    messages: Array<
+      Pick<CskhInboxMessage, 'id' | 'direction' | 'messageType' | 'text'> & {
+        translatedText?: string | null;
+        originalText?: string | null;
+      }
+    >,
+    tenantId?: string,
+  ): Promise<number> {
     const noise = new Set(['[Ảnh]', '[Video]', '[Sticker]', '[attachment]']);
     const need = messages.filter((m) => {
       if (m.messageType !== 'text' || !m.text?.trim() || noise.has(m.text)) return false;
-      const hasVi = Boolean((m.originalText || m.translatedText || '').trim());
-      return !hasVi;
+      const vi = (m.originalText || m.translatedText || '').trim();
+      if (this.looksLikeForeignScript(m.text)) {
+        return !vi || vi === m.text.trim() || this.looksLikeForeignScript(vi);
+      }
+      return !vi;
     });
-    if (!need.length) return;
+    if (!need.length) return 0;
 
-    // Ưu tiên tin mới nhất (cuối danh sách)
-    const prioritized = [...need].reverse().slice(0, 36);
+    const prioritized = [...need].reverse().slice(0, 48);
 
     const contextMessages = messages
       .filter((m) => m.messageType === 'text' && m.text?.trim() && !noise.has(m.text))
@@ -3709,77 +3900,77 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         return `${who}: ${m.text.slice(0, 180)}`;
       });
 
-    void (async () => {
-      // 1) Skip nhanh tin đã là tiếng Việt — không gọi AI
-      const needAi: typeof prioritized = [];
-      const instant: CskhInboxMessage[] = [];
-      for (const msg of prioritized) {
-        if (this.looksLikeVietnamese(msg.text) && !this.looksLikeForeignScript(msg.text)) {
+    let translated = 0;
+    const needAi: typeof prioritized = [];
+    const instant: CskhInboxMessage[] = [];
+    for (const msg of prioritized) {
+      if (this.looksLikeVietnamese(msg.text) && !this.looksLikeForeignScript(msg.text)) {
+        try {
+          const patched = await this.prisma.cskhInboxMessage.update({
+            where: { id: msg.id },
+            data: { sourceLang: 'vi', translatedText: msg.text },
+          });
+          instant.push(patched);
+          translated += 1;
+        } catch {
+          /* ignore */
+        }
+      } else {
+        needAi.push(msg);
+      }
+    }
+    if (instant.length) {
+      this.publishMessageRealtime(conv.pageId, conv.id, instant, false, tenantId, conv);
+    }
+    if (!needAi.length) return translated;
+
+    const chunkSize = 12;
+    for (let i = 0; i < needAi.length; i += chunkSize) {
+      const chunk = needAi.slice(i, i + chunkSize);
+      try {
+        const results = await this.ai.translateBatch({
+          items: chunk.map((m) => ({
+            id: m.id,
+            text: m.text,
+            direction: m.direction === 'outbound' ? 'outbound' : 'inbound',
+          })),
+          targetLang: 'vi',
+          contextMessages,
+        });
+        const updated: CskhInboxMessage[] = [];
+        for (const tr of results) {
+          const src = chunk.find((c) => c.id === tr.id);
+          if (!src) continue;
+          const same =
+            tr.sameLanguage ||
+            !tr.translatedText.trim() ||
+            tr.translatedText.trim() === src.text.trim();
           try {
             const patched = await this.prisma.cskhInboxMessage.update({
-              where: { id: msg.id },
-              data: { sourceLang: 'vi', translatedText: msg.text },
+              where: { id: tr.id },
+              data: {
+                sourceLang: same
+                  ? tr.detectedLang === 'und'
+                    ? 'vi'
+                    : tr.detectedLang
+                  : tr.detectedLang,
+                translatedText: same ? src.text : tr.translatedText,
+              },
             });
-            instant.push(patched);
-          } catch {
-            /* ignore */
+            updated.push(patched);
+            translated += 1;
+          } catch (e) {
+            this.logger.debug(`batch persist skip ${tr.id}: ${(e as Error).message}`);
           }
-        } else {
-          needAi.push(msg);
         }
-      }
-      if (instant.length) {
-        this.publishMessageRealtime(conv.pageId, conv.id, instant, false, tenantId, conv);
-      }
-      if (!needAi.length) return;
-
-      // 2) Batch LLM — chunk 12, publish SSE sau mỗi chunk (UI hiện dần)
-      const chunkSize = 12;
-      for (let i = 0; i < needAi.length; i += chunkSize) {
-        const chunk = needAi.slice(i, i + chunkSize);
-        try {
-          const results = await this.ai.translateBatch({
-            items: chunk.map((m) => ({
-              id: m.id,
-              text: m.text,
-              direction: m.direction === 'outbound' ? 'outbound' : 'inbound',
-            })),
-            targetLang: 'vi',
-            contextMessages,
-          });
-          const updated: CskhInboxMessage[] = [];
-          for (const tr of results) {
-            const src = chunk.find((c) => c.id === tr.id);
-            if (!src) continue;
-            const same =
-              tr.sameLanguage ||
-              !tr.translatedText.trim() ||
-              tr.translatedText.trim() === src.text.trim();
-            try {
-              const patched = await this.prisma.cskhInboxMessage.update({
-                where: { id: tr.id },
-                data: {
-                  sourceLang: same
-                    ? tr.detectedLang === 'und'
-                      ? 'vi'
-                      : tr.detectedLang
-                    : tr.detectedLang,
-                  translatedText: same ? src.text : tr.translatedText,
-                },
-              });
-              updated.push(patched);
-            } catch (e) {
-              this.logger.debug(`batch persist skip ${tr.id}: ${(e as Error).message}`);
-            }
-          }
-          if (updated.length) {
-            this.publishMessageRealtime(conv.pageId, conv.id, updated, false, tenantId, conv);
-          }
-        } catch (e) {
-          this.logger.warn(`translate batch chunk failed: ${(e as Error).message}`);
+        if (updated.length) {
+          this.publishMessageRealtime(conv.pageId, conv.id, updated, false, tenantId, conv);
         }
+      } catch (e) {
+        this.logger.warn(`translate batch chunk failed: ${(e as Error).message}`);
       }
-    })();
+    }
+    return translated;
   }
 
   /** Heuristic nhanh: có dấu Việt / chữ đ. */
@@ -4633,6 +4824,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           const profile = await this.graph.getMessengerUserProfile(
             String(customer.id),
             page.pageAccessToken,
+            { platform: graphPlatform },
           );
           customerPictureUrl = profile.pictureUrl;
         }
@@ -4666,7 +4858,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           : null;
         const unreadCount = newestNorm?.sender === 'Staff' ? 0 : trailingUnread;
         const lastMessagePreview =
-          newestNorm?.text ?? rawMsgs[0]?.message?.trim() ?? null;
+          inboxListPreview({
+            text: newestNorm?.text ?? rawMsgs[0]?.message,
+            messageType: newestNorm?.messageType,
+            attachmentCount: newestNorm?.attachmentUrls?.length ?? (newestNorm?.attachmentUrl ? 1 : 0),
+          }) || newestNorm?.text || rawMsgs[0]?.message?.trim() || null;
 
         const conv = await this.prisma.cskhInboxConversation.upsert({
           where: {
@@ -4978,13 +5174,18 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const customerPictureUrl: string | null = null;
-    const finalCustomerName = customerName;
-
     const page = await this.prisma.facebookCskhConfig.findFirst({
       where: tenantId ? { pageId, tenantId } : { pageId },
     });
     const pageName = page?.pageName ?? null;
+    const graphPlatform = cskhInboxGraphPlatform(page?.metadata);
+    const profile = pageAccessToken
+      ? await this.graph.getMessengerUserProfile(participantPsid, pageAccessToken, {
+          platform: graphPlatform,
+        })
+      : { name: null, pictureUrl: null };
+    const customerPictureUrl = profile.pictureUrl;
+    const finalCustomerName = profile.name ?? customerName;
 
     const inboxConv = await this.prisma.cskhInboxConversation.upsert({
       where: { pageId_participantPsid: { pageId, participantPsid } },
@@ -5163,7 +5364,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     }
 
     let customerPictureUrl: string | null = null;
-    const profile = await this.graph.getMessengerUserProfile(participantPsid, page.pageAccessToken);
+    const profile = await this.graph.getMessengerUserProfile(participantPsid, page.pageAccessToken, {
+      platform: cskhInboxGraphPlatform(page.metadata),
+    });
     customerName = profile.name ?? customerName;
     customerPictureUrl = profile.pictureUrl;
 

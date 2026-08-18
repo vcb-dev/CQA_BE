@@ -23,6 +23,7 @@ import type { Response, Request } from 'express';
 import type { RawBodyRequest } from '@nestjs/common';
 import { merge, interval, map, filter, Observable, tap, finalize } from 'rxjs';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { COOKIE_ACCESS, LEGACY_COOKIE_ACCESS } from '../auth/cookie.constants';
 import { CskhService } from './cskh.service';
 import { CskhInsightService } from './cskh-insight.service';
 import { CskhInboxService } from './inbox/cskh-inbox.service';
@@ -47,6 +48,7 @@ import { CustomerAnalyticsService } from './customer-analytics.service';
 import { isSapoApiReady } from './sapo/sapo-api.util';
 import { ConfigService } from '@nestjs/config';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
 import { JwtService } from '@nestjs/jwt';
 import { UsersService } from '../users/users.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -54,6 +56,7 @@ import type { User } from '@prisma/client';
 
 @ApiTags('cskh')
 @ApiBearerAuth('JWT-auth')
+@SkipThrottle()
 @Controller('cskh')
 export class CskhController {
   private readonly logger = new Logger(CskhController.name);
@@ -96,7 +99,11 @@ export class CskhController {
     token: string | undefined,
     req: Request,
   ): Promise<string | undefined> {
-    const candidates = [token, req.cookies?.accessToken as string | undefined].filter(
+    const candidates = [
+      token,
+      req.cookies?.[COOKIE_ACCESS] as string | undefined,
+      req.cookies?.[LEGACY_COOKIE_ACCESS] as string | undefined,
+    ].filter(
       (v): v is string => typeof v === 'string' && v.length > 0,
     );
     const secret = this.configService.get<string>('jwt.secret');
@@ -1017,10 +1024,11 @@ export class CskhController {
   sendInboxMessage(
     @CurrentUser() user: User,
     @Param('id') id: string,
-    @Body() body: { text?: string; autoTranslate?: boolean },
+    @Body() body: { text?: string; autoTranslate?: boolean; originalText?: string },
   ) {
     return this.inbox.sendMessage(id, body.text ?? '', user.tenantId || undefined, {
       autoTranslate: Boolean(body.autoTranslate),
+      originalText: body.originalText,
     });
   }
 
@@ -1037,6 +1045,12 @@ export class CskhController {
       user.tenantId || undefined,
       body.targetLang,
     );
+  }
+
+  @Post('inbox/conversations/:id/translate')
+  @UseGuards(JwtAuthGuard)
+  translateInboxConversation(@CurrentUser() user: User, @Param('id') id: string) {
+    return this.inbox.translateConversationMessages(id, user.tenantId || undefined);
   }
 
   @Post('inbox/conversations/:id/detect-lang')

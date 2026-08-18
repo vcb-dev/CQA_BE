@@ -36,6 +36,25 @@
         ]
       }
     },
+    "/api/v1/auth/csrf": {
+      "get": {
+        "operationId": "AuthController_csrf",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/v1/auth/register": {
       "post": {
         "operationId": "AuthController_register",
@@ -98,16 +117,6 @@
       "post": {
         "operationId": "AuthController_refreshToken",
         "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RefreshTokenDto"
-              }
-            }
-          }
-        },
         "responses": {
           "200": {
             "description": ""
@@ -155,9 +164,6 @@
           }
         },
         "security": [
-          {
-            "JWT-auth": []
-          },
           {
             "JWT-auth": []
           }
@@ -1079,6 +1085,139 @@
         ]
       }
     },
+    "/api/v1/cskh/products/operations": {
+      "get": {
+        "operationId": "CskhController_getProductsOperations",
+        "parameters": [
+          {
+            "name": "month",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "categoryId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "locationId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "topLimit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stockoutPage",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stockoutPageSize",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "cskh"
+        ]
+      }
+    },
+    "/api/v1/cskh/oms/categories": {
+      "get": {
+        "operationId": "CskhController_getOmsCategories",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "cskh"
+        ]
+      }
+    },
+    "/api/v1/cskh/oms/locations": {
+      "get": {
+        "operationId": "CskhController_getOmsLocations",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "cskh"
+        ]
+      }
+    },
     "/api/v1/cskh/customers": {
       "get": {
         "operationId": "CskhController_listCustomers",
@@ -1762,6 +1901,14 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "platform",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -1880,6 +2027,14 @@
           },
           {
             "name": "legacy",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
             "required": true,
             "in": "query",
             "schema": {
@@ -2269,6 +2424,34 @@
     "/api/v1/cskh/inbox/conversations/{id}/translate-preview": {
       "post": {
         "operationId": "CskhController_translateInboxPreview",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "cskh"
+        ]
+      }
+    },
+    "/api/v1/cskh/inbox/conversations/{id}/translate": {
+      "post": {
+        "operationId": "CskhController_translateInboxConversation",
         "parameters": [
           {
             "name": "id",
@@ -2768,6 +2951,35 @@
         ]
       }
     },
+    "/api/v1/ai/assistant/chat": {
+      "post": {
+        "operationId": "AiController_assistantChat",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantChatDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "ai"
+        ]
+      }
+    },
     "/api/v1/pancake/connect": {
       "post": {
         "operationId": "PancakeController_connect",
@@ -2918,7 +3130,14 @@
         ],
         "responses": {
           "201": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2937,7 +3156,14 @@
         "parameters": [],
         "responses": {
           "201": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2965,7 +3191,14 @@
         ],
         "responses": {
           "201": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -3306,17 +3539,6 @@
           "password"
         ]
       },
-      "RefreshTokenDto": {
-        "type": "object",
-        "properties": {
-          "refreshToken": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "refreshToken"
-        ]
-      },
       "UpdateUserDto": {
         "type": "object",
         "properties": {
@@ -3333,6 +3555,109 @@
             "type": "boolean"
           }
         }
+      },
+      "AssistantHistoryItemDto": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "type": "string"
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8000
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ]
+      },
+      "AssistantRecentMessageDto": {
+        "type": "object",
+        "properties": {
+          "sender": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40,
+            "example": "customer"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "sender",
+          "text"
+        ]
+      },
+      "AssistantConversationContextDto": {
+        "type": "object",
+        "properties": {
+          "conversationId": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "customerName": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "platform": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "pageName": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "fromAd": {
+            "type": "boolean"
+          },
+          "labels": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "recentMessages": {
+            "maxItems": 24,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssistantRecentMessageDto"
+            }
+          }
+        }
+      },
+      "AssistantChatDto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000,
+            "example": "Nên hỏi nhu cầu khách này thế nào?"
+          },
+          "history": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssistantHistoryItemDto"
+            }
+          },
+          "conversationContext": {
+            "$ref": "#/components/schemas/AssistantConversationContextDto"
+          }
+        },
+        "required": [
+          "message"
+        ]
       }
     }
   }

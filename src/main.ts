@@ -75,6 +75,7 @@ async function bootstrap() {
         'Accept',
         'Origin',
         'X-Requested-With',
+        'X-CSRF-Token',
       ],
       optionsSuccessStatus: 204,
     }),

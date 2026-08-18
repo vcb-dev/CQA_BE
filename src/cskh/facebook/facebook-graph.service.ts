@@ -63,6 +63,10 @@ export class FacebookGraphService {
   private readonly logger = new Logger(FacebookGraphService.name);
   private readonly graphVersion = process.env.FB_GRAPH_VERSION?.trim() || 'v21.0';
   private readonly failedProfileFetches = new Map<string, number>();
+  private readonly inflightProfiles = new Map<
+    string,
+    Promise<{ name: string | null; pictureUrl: string | null }>
+  >();
 
   constructor(
     private readonly graphCoordinator: GraphApiCoordinatorService,
@@ -110,6 +114,35 @@ export class FacebookGraphService {
       return await this.graphRequestRaw<T>(urlOrPath, token, params);
     } finally {
       release();
+    }
+  }
+
+  /** Gọi Graph 1 lần, không xếp hàng inbox — dùng cho avatar khách (tránh treo HTTP). */
+  private async graphRequestOnce<T>(
+    urlOrPath: string,
+    token: string,
+    params: Record<string, string | number> = {},
+    timeoutMs = 8000,
+  ): Promise<T> {
+    const url = `${GRAPH_BASE}${urlOrPath.startsWith('/') ? '' : '/'}${urlOrPath}`;
+    try {
+      const res = await axios.get<T>(url, {
+        params: { access_token: token, ...params },
+        timeout: timeoutMs,
+      });
+      return res.data;
+    } catch (e: unknown) {
+      const err = e as {
+        response?: { status?: number; data?: { error?: { message?: string; code?: number; type?: string } } };
+        message?: string;
+      };
+      const fbErr = err.response?.data?.error;
+      const bits = [
+        fbErr?.message || err.message || 'Graph API error',
+        fbErr?.code != null ? `code=${fbErr.code}` : null,
+        err.response?.status ? `http=${err.response.status}` : null,
+      ].filter(Boolean);
+      throw new Error(bits.join(' '));
     }
   }
 
@@ -840,11 +873,80 @@ export class FacebookGraphService {
   async getMessengerUserProfile(
     psid: string,
     pageToken: string,
+    opts?: { platform?: CskhInboxGraphPlatform },
   ): Promise<{ name: string | null; pictureUrl: string | null }> {
-    // Tạm thời tắt toàn bộ cuộc gọi lấy thông tin khách hàng từ Facebook Graph API
-    // để tránh bị Meta khóa API (rate limit) khi ứng dụng chưa qua Xét duyệt (App Review).
-    // Khi ứng dụng đã được duyệt, bạn có thể khôi phục lại code cũ ở git history.
-    return { name: null, pictureUrl: null };
+    const id = (psid || '').trim();
+    if (!id) return { name: null, pictureUrl: null };
+
+    const cacheKey = `${opts?.platform ?? 'messenger'}:${id}`;
+    const inflight = this.inflightProfiles.get(cacheKey);
+    if (inflight) return inflight;
+
+    const run = this.fetchMessengerUserProfile(id, pageToken, opts).finally(() => {
+      this.inflightProfiles.delete(cacheKey);
+    });
+    this.inflightProfiles.set(cacheKey, run);
+    return run;
+  }
+
+  private async fetchMessengerUserProfile(
+    id: string,
+    pageToken: string,
+    opts?: { platform?: CskhInboxGraphPlatform },
+  ): Promise<{ name: string | null; pictureUrl: string | null }> {
+    const failedAt = this.failedProfileFetches.get(id);
+    if (failedAt && Date.now() - failedAt < 15 * 60 * 1000) {
+      return { name: null, pictureUrl: null };
+    }
+
+    try {
+      const instagram = opts?.platform === 'instagram';
+      const data = await this.graphRequestOnce<{
+        name?: string;
+        first_name?: string;
+        last_name?: string;
+        username?: string;
+        profile_pic?: string | { data?: { url?: string } };
+        picture?: { data?: { url?: string } };
+      }>(
+        `/${id}`,
+        pageToken,
+        {
+          fields: instagram
+            ? 'name,username,profile_pic'
+            : 'name,first_name,last_name,profile_pic',
+        },
+        8000,
+      );
+      const name =
+        data.name?.trim() ||
+        [data.first_name, data.last_name].filter(Boolean).join(' ').trim() ||
+        data.username?.trim() ||
+        null;
+      const pic =
+        typeof data.profile_pic === 'string'
+          ? data.profile_pic
+          : data.profile_pic?.data?.url || data.picture?.data?.url;
+      const pictureUrl = pic?.startsWith('http') ? pic : null;
+      if (!name && !pictureUrl) {
+        this.failedProfileFetches.set(id, Date.now());
+        this.logger.warn(
+          `[avatar] Graph trả rỗng ${instagram ? 'IG' : 'MSG'} ${id.slice(0, 10)}… (không có name/profile_pic)`,
+        );
+      } else {
+        this.failedProfileFetches.delete(id);
+        this.logger.log(
+          `[avatar] ${instagram ? 'IG' : 'MSG'} ${id.slice(0, 10)}… name=${name || '—'} pic=${pictureUrl ? 'yes' : 'no'}`,
+        );
+      }
+      return { name: name || null, pictureUrl };
+    } catch (e) {
+      this.failedProfileFetches.set(id, Date.now());
+      this.logger.warn(
+        `[avatar] Graph lỗi ${opts?.platform === 'instagram' ? 'IG' : 'MSG'} ${id.slice(0, 10)}… ${(e as Error).message}`,
+      );
+      return { name: null, pictureUrl: null };
+    }
   }
 
   async getMessengerUserName(psid: string, pageToken: string): Promise<string | null> {
@@ -1146,8 +1248,22 @@ export class FacebookGraphService {
   ): Promise<Array<{ url: string; messageType: 'image' | 'video' }>> {
     const id = messageId.trim();
     if (!id || !token) return [];
-    // Skip internal UUIDs — only Facebook message IDs (m_xxx) are valid for Graph API
-    if (!id.startsWith('m_')) return [];
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      return [];
+    }
+
+    const collected: Array<{ url: string; messageType: 'image' | 'video' }> = [];
+    const pushAtt = async (
+      att: NonNullable<NonNullable<FbMessage['attachments']>['data']>[number],
+    ) => {
+      let url = pickAttachmentUrl(att);
+      if (!url && att?.id) {
+        url = await this.fetchAttachmentMediaById(att.id, token);
+      }
+      if (url) {
+        collected.push({ url, messageType: this.mediaKindFromAttachment(att, url) });
+      }
+    };
 
     try {
       const detail = await this.graphRequest<{ attachments?: FbMessage['attachments'] }>(
@@ -1155,26 +1271,48 @@ export class FacebookGraphService {
         token,
         { fields: `attachments{${FB_ATTACHMENT_FIELDS}}` },
       );
-      const attachments = detail.attachments?.data ?? [];
-      const results: Array<{ url: string; messageType: 'image' | 'video' }> = [];
-      for (const att of attachments) {
-        let url = pickAttachmentUrl(att);
-        if (!url && att?.id) {
-          url = await this.fetchAttachmentMediaById(att.id, token);
-        }
-        if (url) {
-          results.push({ url, messageType: this.mediaKindFromAttachment(att, url) });
-        }
-      }
-      const deduped = dedupeMediaUrls(results.map((r) => r.url));
-      if (deduped.length) {
-        return deduped.map((url) => {
-          const hit = results.find((r) => r.url === url || r.url.split('?')[0] === url.split('?')[0]);
-          return { url, messageType: hit?.messageType ?? 'image' };
-        });
+      for (const att of detail.attachments?.data ?? []) {
+        await pushAtt(att);
       }
     } catch (e) {
-      this.logger.debug(`resolveAllMessageMediaUrls ${id}: ${(e as Error).message}`);
+      this.logger.debug(`resolveAllMessageMediaUrls fields ${id}: ${(e as Error).message}`);
+    }
+
+    try {
+      type Page = {
+        data?: NonNullable<FbMessage['attachments']>['data'];
+        paging?: { next?: string };
+      };
+      let nextUrl: string | null = null;
+      let first = true;
+      let pages = 0;
+      while (pages < 5) {
+        const edge: Page = first
+          ? await this.graphRequest<Page>(`/${id}/attachments`, token, {
+              fields: FB_ATTACHMENT_FIELDS,
+              limit: 10,
+            })
+          : await this.graphRequest<Page>(nextUrl!, token);
+        first = false;
+        pages += 1;
+        for (const att of edge.data ?? []) {
+          await pushAtt(att);
+        }
+        nextUrl = edge.paging?.next ?? null;
+        if (!nextUrl || !edge.data?.length) break;
+      }
+    } catch (e) {
+      this.logger.debug(`resolveAllMessageMediaUrls edge ${id}: ${(e as Error).message}`);
+    }
+
+    const deduped = dedupeMediaUrls(collected.map((r) => r.url));
+    if (deduped.length) {
+      return deduped.map((url) => {
+        const hit = collected.find(
+          (r) => r.url === url || r.url.split('?')[0] === url.split('?')[0],
+        );
+        return { url, messageType: hit?.messageType ?? 'image' };
+      });
     }
 
     const single = await this.resolveMessageMediaUrl(id, token);

@@ -50,6 +50,8 @@ describe('cskh-inbox-unread.util', () => {
       ).toBe(false);
       expect(lastMessagePreviewMismatch(null, [])).toBe(false);
       expect(lastMessagePreviewMismatch('hello', [])).toBe(true);
+      expect(lastMessagePreviewMismatch('', [{ text: '[Ảnh]' }])).toBe(true);
+      expect(lastMessagePreviewMismatch(null, [{ text: '' }])).toBe(true);
     });
   });
 });

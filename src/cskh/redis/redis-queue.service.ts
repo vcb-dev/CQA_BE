@@ -427,7 +427,7 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
       return;
     }
     this.logger.log(
-      'Unified queue worker started (webhook + intent + pancake-sync + pancake-label + backfill + audit).',
+      'Unified queue worker started (webhook + intent + pancake-sync + pancake-label + backfill + audit). Pancake chỉ chạy khi có job Đồng bộ/nhãn — không log khi chỉ catch-up Facebook.',
     );
     while (this.running) {
       if (!this.canUseRedis()) {
@@ -478,28 +478,14 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
           await this.cskhService.runAuditJob(payload.jobId, payload.options ?? {});
           this.logger.log(`Audit Worker: done ${payload.jobId.slice(0, 8)}`);
         } else if (queue === PANCAKE_SYNC_QUEUE) {
-          const payload = JSON.parse(raw) as PancakeSyncPayload;
-          this.logger.log(`Pancake sync Worker: kind=${payload.kind} page=${payload.pageId ?? 'all'}`);
-          await this.waitWhileInboxHot(20_000);
-          if (payload.kind === 'all') {
-            await this.pancakeService.syncAllPages({ tenantId: payload.tenantId });
-          } else if (payload.pageId) {
-            await this.pancakeService.syncPageCustomers(payload.pageId, {
-              tenantId: payload.tenantId,
-            });
-          }
+          await this.runPancakeSyncJob(JSON.parse(raw) as PancakeSyncPayload);
         } else if (queue === PANCAKE_AUTOLABEL_QUEUE) {
-          const payload = JSON.parse(raw) as PancakeAutoLabelPayload;
-          if (!payload?.pageId) continue;
-          this.logger.log(
-            `Pancake label Worker: page=${payload.pageId} onlyContact=${Boolean(payload.onlyWithContact)}`,
-          );
-          await this.waitWhileInboxHot(20_000);
-          await this.pancakeService.scanAndAutoLabelPageLeads(payload.pageId, {
-            tenantId: payload.tenantId,
-            maxScan: payload.maxScan,
-            onlyWithContact: payload.onlyWithContact,
-          });
+          await this.runPancakeLabelJob(JSON.parse(raw) as PancakeAutoLabelPayload);
+        }
+
+        // BRPOP ưu tiên webhook/intent — tranh thủ 1 job Pancake để không đói queue.
+        if (queue === WEBHOOK_MESSAGING_QUEUE || queue === INTENT_QUEUE) {
+          await this.tryRunOnePancakeJob();
         }
       } catch (e) {
         if (isRedisQuotaError(e)) {
@@ -537,6 +523,59 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
     if (this.intentMemCache.size > 500) {
       const oldest = this.intentMemCache.keys().next().value;
       if (oldest) this.intentMemCache.delete(oldest);
+    }
+  }
+
+  private async runPancakeSyncJob(payload: PancakeSyncPayload): Promise<void> {
+    this.logger.log(`Pancake sync Worker: kind=${payload.kind} page=${payload.pageId ?? 'all'}`);
+    const hot = await this.isInboxHot();
+    if (hot) {
+      this.logger.log('Pancake sync Worker: inbox đang nóng — chờ tối đa 20s rồi chạy');
+    }
+    await this.waitWhileInboxHot(20_000);
+    if (payload.kind === 'all') {
+      await this.pancakeService.syncAllPages({ tenantId: payload.tenantId });
+    } else if (payload.pageId) {
+      await this.pancakeService.syncPageCustomers(payload.pageId, {
+        tenantId: payload.tenantId,
+      });
+    }
+    this.logger.log(`Pancake sync Worker: done kind=${payload.kind} page=${payload.pageId ?? 'all'}`);
+  }
+
+  private async runPancakeLabelJob(payload: PancakeAutoLabelPayload): Promise<void> {
+    if (!payload?.pageId) return;
+    this.logger.log(
+      `Pancake label Worker: page=${payload.pageId} onlyContact=${Boolean(payload.onlyWithContact)}`,
+    );
+    const hot = await this.isInboxHot();
+    if (hot) {
+      this.logger.log('Pancake label Worker: inbox đang nóng — chờ tối đa 20s rồi chạy');
+    }
+    await this.waitWhileInboxHot(20_000);
+    await this.pancakeService.scanAndAutoLabelPageLeads(payload.pageId, {
+      tenantId: payload.tenantId,
+      maxScan: payload.maxScan,
+      onlyWithContact: payload.onlyWithContact,
+    });
+    this.logger.log(`Pancake label Worker: done page=${payload.pageId}`);
+  }
+
+  private async tryRunOnePancakeJob(): Promise<void> {
+    const redis = this.activeRedis();
+    if (!redis) return;
+    try {
+      const syncRaw = await redis.rpop(PANCAKE_SYNC_QUEUE);
+      if (syncRaw) {
+        await this.runPancakeSyncJob(JSON.parse(syncRaw) as PancakeSyncPayload);
+        return;
+      }
+      const labelRaw = await redis.rpop(PANCAKE_AUTOLABEL_QUEUE);
+      if (labelRaw) {
+        await this.runPancakeLabelJob(JSON.parse(labelRaw) as PancakeAutoLabelPayload);
+      }
+    } catch (e) {
+      this.logger.warn(`tryRunOnePancakeJob: ${(e as Error).message}`);
     }
   }
 
@@ -579,6 +618,7 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
         return true;
       }
       await redis.lpush(PANCAKE_SYNC_QUEUE, JSON.stringify(payload));
+      this.logger.log(`Pancake sync queued kind=${payload.kind} page=${payload.pageId ?? 'all'}`);
       return true;
     } catch (e) {
       this.handleRedisError(e);
@@ -600,6 +640,7 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
         return true;
       }
       await redis.lpush(PANCAKE_AUTOLABEL_QUEUE, JSON.stringify(payload));
+      this.logger.log(`Pancake auto-label queued page=${pageId}`);
       return true;
     } catch (e) {
       this.handleRedisError(e);

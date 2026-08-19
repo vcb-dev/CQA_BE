@@ -44,6 +44,7 @@ import { SapoDisplayService } from './sapo/sapo-display.service';
 import { ProductAnalyticsService } from './product-analytics.service';
 import { OmsCatalogService } from './oms/oms-catalog.service';
 import { OmsProductOperationsService } from './oms/oms-product-operations.service';
+import { OmsOrderService } from './oms/oms-order.service';
 import { CustomerAnalyticsService } from './customer-analytics.service';
 import { isSapoApiReady } from './sapo/sapo-api.util';
 import { ConfigService } from '@nestjs/config';
@@ -76,6 +77,7 @@ export class CskhController {
     private readonly productAnalytics: ProductAnalyticsService,
     private readonly omsCatalog: OmsCatalogService,
     private readonly omsProductOperations: OmsProductOperationsService,
+    private readonly omsOrders: OmsOrderService,
     private readonly customerAnalytics: CustomerAnalyticsService,
     private readonly jwtService: JwtService,
     private readonly usersService: UsersService,
@@ -504,6 +506,45 @@ export class CskhController {
   @UseGuards(JwtAuthGuard)
   getOmsLocations() {
     return this.omsCatalog.getLocations();
+  }
+
+  /** Catalog kho (warehouse-be) — tìm SP / variant để tạo đơn inbox. */
+  @Get('oms/catalog')
+  @UseGuards(JwtAuthGuard)
+  getOmsCatalog(@Query('q') q?: string, @Query('page') page?: string) {
+    return this.omsOrders.searchCatalog(q, page ? Number(page) : 1);
+  }
+
+  /** Tạo đơn trên warehouse-be (POST /api/orders) — không lưu đơn trên CRM. */
+  @Post('oms/orders')
+  @UseGuards(JwtAuthGuard)
+  createOmsOrder(
+    @Body()
+    body: {
+      customerName?: string;
+      phone?: string;
+      address?: string;
+      note?: string;
+      conversationId?: string;
+      platform?: string;
+      locationId?: string;
+      lineItems?: Array<{ variantId?: string; quantity?: number; locationId?: string }>;
+    },
+  ) {
+    return this.omsOrders.createOrder({
+      customerName: (body.customerName ?? '').trim() || 'Khách Messenger',
+      phone: body.phone,
+      address: body.address,
+      note: body.note,
+      conversationId: body.conversationId,
+      platform: body.platform,
+      locationId: body.locationId,
+      lineItems: (body.lineItems ?? []).map((item) => ({
+        variantId: String(item.variantId ?? ''),
+        quantity: Number(item.quantity ?? 1),
+        locationId: item.locationId,
+      })),
+    });
   }
 
   /** Danh sách khách đã chốt đơn inbox — filter theo kênh (page) / trạng thái hội thoại. */

@@ -65,6 +65,76 @@ export interface OmsRevenueByProductResponse {
   data: OmsRevenueByProductRow[];
 }
 
+export interface OmsProductListItem {
+  id: string;
+  name: string;
+  image_url: string | null;
+  default_sku: string | null;
+  skus: string[];
+  variant_count: number;
+  price_from: number | null;
+  is_published: boolean;
+}
+
+export interface OmsProductsResponse {
+  data: OmsProductListItem[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface OmsProductVariant {
+  id: string;
+  sku: string | null;
+  price: number;
+  enabled: boolean;
+  option_values: string[];
+  image_url: string | null;
+}
+
+export interface OmsProductDetail {
+  id: string;
+  name: string;
+  image_url: string | null;
+  is_published: boolean;
+  variants: OmsProductVariant[];
+}
+
+export interface OmsProductDetailResponse {
+  data: OmsProductDetail;
+}
+
+export interface OmsInventoryRow {
+  variant_id: string;
+  location_id: string;
+  location_name: string;
+  available: number;
+  on_hand: number;
+}
+
+export interface OmsInventoryResponse {
+  data: OmsInventoryRow[];
+}
+
+export interface OmsCustomer {
+  id: string;
+  name: string | null;
+  first_name: string | null;
+  phone: string | null;
+}
+
+export interface OmsCustomersResponse {
+  data: OmsCustomer[];
+}
+
+export interface OmsOrder {
+  id?: string;
+  name?: string;
+  order_number?: string;
+  total_price?: number | string;
+  [key: string]: unknown;
+}
+
 export interface OmsProductOperationsReport {
   period: { year: number; month: number; from: string; to: string };
   filters: { category_id: string | null; location_id: string | null };

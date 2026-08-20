@@ -75,8 +75,9 @@ function resolvePrismaConnectionLimit(): number {
   const apiEnv = Number(
     process.env.CSKH_PRISMA_API_CONNECTIONS || process.env.CSKH_PRISMA_CONNECTION_LIMIT,
   );
-  const wanted = Number.isFinite(apiEnv) && apiEnv > 0 ? apiEnv : 3;
-  return Math.max(2, Math.min(wanted, 4, Math.max(2, available - workerBudget)));
+  // API cần ≥3: JWT + list hội thoại + stats. 2 slot → list chờ 20s rồi trống.
+  const wanted = Number.isFinite(apiEnv) && apiEnv > 0 ? Math.max(apiEnv, 3) : 4;
+  return Math.max(3, Math.min(wanted, 5, Math.max(3, available - workerBudget)));
 }
 
 @Injectable()

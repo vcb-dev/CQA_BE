@@ -1,5 +1,6 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { isPrismaBusyError } from '../common/prisma-busy.util';
 import { User } from '@prisma/client';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -63,10 +64,10 @@ export class UsersService {
       this.writeCached(userId, user);
       return user;
     } catch (e) {
-      const msg = String((e as Error)?.message ?? e ?? '');
-      if (/connection pool|Timed out fetching|statement timeout|57014|P1001/i.test(msg)) {
+      if (isPrismaBusyError(e)) {
         const stale = this.readCached(userId, true);
-        if (stale) return stale;
+        if (stale !== undefined) return stale;
+        throw new ServiceUnavailableException('Hệ thống đang bận. Thử lại sau vài giây.');
       }
       throw e;
     }

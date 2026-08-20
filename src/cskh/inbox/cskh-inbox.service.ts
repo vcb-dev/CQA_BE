@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException, Inject, forwardRef, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, Inject, forwardRef, OnModuleDestroy, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { CskhInboxConversation, CskhInboxMessage, FacebookCskhConfig } from '@prisma/client';
 import { GraphApiCoordinatorService } from '../facebook/graph-api-coordinator.service';
@@ -50,11 +50,11 @@ import { CskhService } from '../cskh.service';
 import { findInboxConversationById,
   findInboxConversationByPageParticipant,
   isInboxSchemaMigrationError,
-  isPrismaPoolTimeout,
   isPrismaRetryableDbError,
   type InboxConversationAccess,
 } from './cskh-inbox-conversation.util';
 import { getCskhRunMode, isCskhWorkerProcess } from '../cskh-run-mode';
+import { isPrismaRecentlyBusy } from '../../common/prisma-busy.util';
 
 type WebhookMessagingEvent = {
   sender?: { id?: string };
@@ -177,10 +177,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   private readonly configCacheTtlMs = 60_000;
   private readonly conversationStatsCache = new Map<
     string,
-    { at: number; data: Awaited<ReturnType<CskhInboxService['getConversationStats']>> }
+    { at: number; data: { total: number; fromAd: number; unread: number; normal: number } }
   >();
+  private readonly conversationStatsRefreshing = new Set<string>();
   private readonly conversationStatsTtlMs = Number(
-    process.env.CSKH_CONVERSATION_STATS_TTL_MS || 90_000,
+    process.env.CSKH_CONVERSATION_STATS_TTL_MS || 120_000,
   );
   /** Giới hạn webhook xử lý inline trên API khi worker chết — tránh treo web. */
   private inlineWebhookInflight = 0;
@@ -1681,64 +1682,121 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       return cached.data;
     }
 
-    const where: Prisma.CskhInboxConversationWhereInput = {};
-    if (pageId) where.pageId = pageId;
-    else if (platform) {
-      const ids = await this.pageIdsForGraphPlatform(platform, tenantId);
-      if (!ids.length) {
-        const empty = { total: 0, fromAd: 0, unread: 0, normal: 0 };
-        this.conversationStatsCache.set(cacheKey, { at: Date.now(), data: empty });
-        return empty;
-      }
-      where.pageId = { in: ids };
+    // Cache hết hạn: trả số cũ ngay, đếm lại nền — đừng giữ Prisma pool bằng COUNT 1.5 triệu dòng.
+    if (cached) {
+      this.scheduleConversationStatsRefresh(cacheKey, pageId, tenantId, platform);
+      return cached.data;
     }
-    if (tenantId) where.tenantId = tenantId;
 
     try {
-      // 1 query groupBy thay 2 COUNT song song — đừng giữ 2 connection khi bảng lớn.
-      const grouped = await this.prisma.cskhInboxConversation.groupBy({
-        by: ['fromAd'],
-        where,
-        _count: { _all: true },
-      });
-      let total = 0;
-      let fromAd = 0;
-      for (const row of grouped) {
-        const n = row._count._all;
-        total += n;
-        if (row.fromAd) fromAd += n;
-      }
-
-      let unread = 0;
-      try {
-        unread = await this.prisma.cskhInboxConversation.count({
-          where: { ...where, ...this.unreadStatusWhere(true) },
-        });
-      } catch (e) {
-        if (!this.isInboxSchemaMigrationError(e)) throw e;
-        this.logger.warn('[getConversationStats] awaiting_label chưa migrate — fallback unreadCount');
-        unread = await this.prisma.cskhInboxConversation.count({
-          where: { ...where, unreadCount: { gt: 0 } },
-        });
-      }
-
-      const result = {
-        total,
-        fromAd,
-        unread,
-        normal: Math.max(0, total - fromAd),
-      };
+      const result = await this.computeConversationStats(pageId, tenantId, platform);
       this.conversationStatsCache.set(cacheKey, { at: Date.now(), data: result });
       return result;
     } catch (e) {
       const msg = (e as Error).message || '';
-      if (cached) {
-        this.logger.warn(`[getConversationStats] ${msg.slice(0, 160)} — trả cache cũ`);
-        return cached.data;
-      }
       this.logger.warn(`[getConversationStats] ${msg.slice(0, 160)} — trả 0, không 500 pool`);
       return { total: 0, fromAd: 0, unread: 0, normal: 0 };
     }
+  }
+
+  private scheduleConversationStatsRefresh(
+    cacheKey: string,
+    pageId?: string,
+    tenantId?: string,
+    platform?: 'messenger' | 'instagram',
+  ) {
+    if (this.conversationStatsRefreshing.has(cacheKey)) return;
+    this.conversationStatsRefreshing.add(cacheKey);
+    void this.computeConversationStats(pageId, tenantId, platform)
+      .then((result) => {
+        this.conversationStatsCache.set(cacheKey, { at: Date.now(), data: result });
+      })
+      .catch((e) => {
+        this.logger.warn(
+          `[getConversationStats] ${String((e as Error).message || e).slice(0, 160)} — giữ cache cũ`,
+        );
+      })
+      .finally(() => this.conversationStatsRefreshing.delete(cacheKey));
+  }
+
+  private async computeConversationStats(
+    pageId?: string,
+    tenantId?: string,
+    platform?: 'messenger' | 'instagram',
+  ) {
+    let pageIds: string[] | undefined;
+    if (pageId) {
+      pageIds = [pageId];
+    } else if (platform) {
+      pageIds = await this.pageIdsForGraphPlatform(platform, tenantId);
+      if (!pageIds.length) return { total: 0, fromAd: 0, unread: 0, normal: 0 };
+    }
+
+    try {
+      return await this.countConversationStatsTimed(tenantId, pageIds);
+    } catch (e) {
+      if (!pageId && !platform) {
+        const total = await this.estimateInboxConversationRows();
+        return { total, fromAd: 0, unread: 0, normal: total };
+      }
+      throw e;
+    }
+  }
+
+  private async estimateInboxConversationRows(): Promise<number> {
+    const rows = await this.prisma.$queryRaw<Array<{ n: bigint }>>`
+      SELECT GREATEST(c.reltuples, 0)::bigint AS n
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = 'cskh_inbox_conversations'
+      LIMIT 1
+    `;
+    return Number(rows[0]?.n ?? 0);
+  }
+
+  private async countConversationStatsTimed(
+    tenantId?: string,
+    pageIds?: string[],
+  ): Promise<{ total: number; fromAd: number; unread: number; normal: number }> {
+    const filters: Prisma.Sql[] = [];
+    if (tenantId) filters.push(Prisma.sql`AND tenant_id = ${tenantId}::uuid`);
+    if (pageIds?.length === 1) {
+      filters.push(Prisma.sql`AND page_id = ${pageIds[0]}`);
+    } else if (pageIds && pageIds.length > 1) {
+      filters.push(Prisma.sql`AND page_id IN (${Prisma.join(pageIds)})`);
+    }
+    const whereSql = filters.length ? Prisma.join(filters, ' ') : Prisma.empty;
+
+    const run = async (unreadExpr: Prisma.Sql) =>
+      this.prisma.$transaction(
+        async (tx) => {
+          await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = '2000ms'`);
+          return tx.$queryRaw<Array<{ total: bigint; from_ad: bigint; unread: bigint }>>`
+            SELECT
+              COUNT(*)::bigint AS total,
+              COUNT(*) FILTER (WHERE from_ad)::bigint AS from_ad,
+              COUNT(*) FILTER (WHERE ${unreadExpr})::bigint AS unread
+            FROM cskh_inbox_conversations
+            WHERE 1=1 ${whereSql}
+          `;
+        },
+        { maxWait: 3_000, timeout: 4_000 },
+      );
+
+    let rows: Array<{ total: bigint; from_ad: bigint; unread: bigint }>;
+    try {
+      rows = await run(Prisma.sql`unread_count > 0 OR awaiting_label`);
+    } catch (e) {
+      if (!this.isInboxSchemaMigrationError(e)) throw e;
+      this.logger.warn('[getConversationStats] awaiting_label chưa migrate — fallback unreadCount');
+      rows = await run(Prisma.sql`unread_count > 0`);
+    }
+
+    const row = rows[0];
+    const total = Number(row?.total ?? 0);
+    const fromAd = Number(row?.from_ad ?? 0);
+    const unread = Number(row?.unread ?? 0);
+    return { total, fromAd, unread, normal: Math.max(0, total - fromAd) };
   }
 
   async listConversations(
@@ -1899,7 +1957,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const items =
       isScrollPage || !opts?.unreadOnly
         ? (slice as CskhInboxConversation[])
-        : await this.correctUnreadFromLastMessage(slice as CskhInboxConversation[]);
+        : await this.correctUnreadFromLastMessage(slice as CskhInboxConversation[]).catch((e) => {
+            if (isPrismaRetryableDbError(e)) return slice as CskhInboxConversation[];
+            throw e;
+          });
     const last = items[items.length - 1];
     const nextCursor =
       hasMore && last?.lastMessageAt
@@ -1911,7 +1972,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       try {
         labelMap = await this.inboxLabels.attachLabelsMap(items.map((i) => i.id));
       } catch (e) {
-        if (!this.isInboxSchemaMigrationError(e)) throw e;
+        if (!this.isInboxSchemaMigrationError(e) && !isPrismaRetryableDbError(e)) throw e;
       }
     }
 
@@ -2064,6 +2125,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
   /** Kích hoạt sync nhẹ từ Graph sau khi trả danh sách — không block request. */
   private async maybeTriggerListSync(pageId?: string, tenantId?: string): Promise<void> {
+    if (isPrismaRecentlyBusy(20_000)) return;
     // Page đang xem: luôn quét Graph nhẹ (webhook app mới / Dev mode hay hỏng thì list vẫn lên tin mới).
     if (pageId) {
       const syncKey = `${pageId}:${tenantId ?? ''}`;
@@ -2109,6 +2171,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
    * Webhook vẫn là đường tức thì; đây bù khi Meta chưa đẩy event.
    */
   async runLiveGraphCatchUp(tenantId?: string): Promise<void> {
+    if (isPrismaRecentlyBusy(20_000)) return;
     if (this.liveCatchUpRunning || this.backgroundInboxSyncRunning) return;
     if (this.graphCoordinator.inboxSyncActive) return;
     if (Date.now() < this.catchUpBackoffUntil) return;
@@ -2526,7 +2589,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const labelsPromise = this.inboxLabels
       .getLabelsForConversation(conversationId)
       .catch((e) => {
-        if (this.isInboxSchemaMigrationError(e) || isPrismaPoolTimeout(e)) return [] as InboxLabelDto[];
+        if (this.isInboxSchemaMigrationError(e) || isPrismaRetryableDbError(e)) return [] as InboxLabelDto[];
         throw e;
       });
 
@@ -2539,21 +2602,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         this.loadConversationMessages(conversationId, sinceDate, fetchLimit, beforeDate),
       ]);
     } catch (e) {
-      if (isPrismaPoolTimeout(e)) {
+      if (isPrismaRetryableDbError(e)) {
         this.logger.warn(
-          `getMessages pool busy conv=${conversationId.slice(0, 8)} — retry messages`,
+          `getMessages pool busy conv=${conversationId.slice(0, 8)} — 503, không 500/404 giả`,
         );
-        conv = await findInboxConversationById(this.prisma, conversationId, tenantId).catch(
-          () => null,
-        );
-        messages = conv
-          ? await this.loadConversationMessages(conversationId, sinceDate, fetchLimit, beforeDate).catch(
-              () => [],
-            )
-          : [];
-      } else {
-        throw e;
+        throw new ServiceUnavailableException('Hệ thống đang bận. Thử lại sau vài giây.');
       }
+      throw e;
     }
 
     if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');

@@ -1,5 +1,12 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { PrismaService } from '../../prisma/prisma.service';
 import { OmsApiService } from './oms-api.service';
+import {
+  extractSizes,
+  extractVnPhone,
+  pickVariantTitle,
+  rankWarehouseProducts,
+} from './oms-product-match.util';
 import type {
   OmsCustomer,
   OmsCustomersResponse,
@@ -10,6 +17,7 @@ import type {
   OmsOrder,
   OmsProductDetail,
   OmsProductDetailResponse,
+  OmsProductListItem,
   OmsProductsResponse,
 } from './oms-api.types';
 
@@ -25,6 +33,7 @@ export type OmsCatalogItem = {
   inStock: boolean;
   inventoryQuantity: number;
   locationId: string;
+  matchReason?: string;
 };
 
 export type CreateOmsOrderInput = {
@@ -43,6 +52,13 @@ export type CreateOmsOrderResult = {
   orderName: string | null;
   totalPrice: string | null;
   source: 'oms';
+};
+
+export type OmsSuggestResult = {
+  items: OmsCatalogItem[];
+  phone: string | null;
+  queries: string[];
+  note: string | null;
 };
 
 function moneyLabel(n: number): string {
@@ -89,7 +105,10 @@ function asOrder(payload: unknown): OmsOrder {
 
 @Injectable()
 export class OmsOrderService {
-  constructor(private readonly omsApi: OmsApiService) {}
+  constructor(
+    private readonly omsApi: OmsApiService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   async searchCatalog(q?: string, page = 1): Promise<{
     ready: boolean;
@@ -120,6 +139,67 @@ export class OmsOrderService {
       items: chunks.flat(),
       total: res.total ?? products.length,
       page: res.page ?? page,
+    };
+  }
+
+  /**
+   * Quét tin hội thoại → dò GET /products + /inventory trên warehouse.
+   * Trả variant khớp để FE tự chọn khi mở Tạo đơn.
+   */
+  async suggestFromConversation(
+    conversationId: string,
+    extraMentions: string[] = [],
+  ): Promise<OmsSuggestResult> {
+    this.omsApi.assertReady();
+    const id = conversationId.trim();
+    if (!id) throw new BadRequestException('conversationId bắt buộc');
+
+    const messages = await this.prisma.cskhInboxMessage.findMany({
+      where: { conversationId: id },
+      orderBy: { sentAt: 'desc' },
+      take: 50,
+      select: { text: true, originalText: true, translatedText: true },
+    });
+    const transcript = messages
+      .slice()
+      .reverse()
+      .map((m) => [m.translatedText, m.originalText, m.text].filter(Boolean).join(' '))
+      .join('\n');
+    const phone = extractVnPhone(transcript) ?? null;
+    const mentions = extraMentions.map((s) => s.trim()).filter(Boolean);
+    const catalog = await this.listPublishedProducts();
+    const ranked = rankWarehouseProducts(catalog, transcript, mentions, 5);
+    if (!ranked.length) {
+      return {
+        items: [],
+        phone,
+        queries: mentions,
+        note: 'Không khớp sản phẩm kho từ hội thoại — tìm tay bên dưới.',
+      };
+    }
+
+    const sizes = extractSizes(transcript);
+    const location = await this.defaultLocation();
+    const chunks = await Promise.all(
+      ranked.map(async (row) => {
+        const [detail, inv] = await Promise.all([
+          this.getProduct(row.product.id),
+          this.getInventory(row.product.id),
+        ]);
+        const variants = this.flattenProduct(detail, inv, location.id).map((item) => ({
+          ...item,
+          matchReason: row.reason,
+        }));
+        return this.preferMentionedVariant(variants, sizes);
+      }),
+    );
+
+    const items = chunks.flat();
+    return {
+      items,
+      phone,
+      queries: ranked.map((r) => r.product.name),
+      note: items.length ? `Đã chọn ${items.length} sản phẩm từ hội thoại.` : null,
     };
   }
 
@@ -197,6 +277,39 @@ export class OmsOrderService {
     const pick = active.find((l) => l.default_location) ?? active[0] ?? res.data?.[0];
     if (!pick?.id) throw new BadRequestException('Warehouse chưa có kho (location) để tạo đơn');
     return { id: pick.id, name: pick.name };
+  }
+
+  private async listPublishedProducts(): Promise<OmsProductListItem[]> {
+    const out: OmsProductListItem[] = [];
+    for (let page = 1; page <= 4; page += 1) {
+      const res = await this.omsApi.get<OmsProductsResponse>('/products', {
+        page,
+        page_size: 50,
+        is_published: true,
+      });
+      const batch = res.data ?? [];
+      out.push(...batch);
+      if (batch.length < 50 || out.length >= (res.total ?? out.length)) break;
+    }
+    return out;
+  }
+
+  private preferMentionedVariant(items: OmsCatalogItem[], sizes: string[]): OmsCatalogItem[] {
+    if (items.length <= 1) return items;
+    const prefer = pickVariantTitle(
+      items.map((i) => i.variantTitle),
+      sizes,
+    ).prefer;
+    if (prefer) {
+      const hit = items.find(
+        (i) =>
+          i.variantTitle.toUpperCase() === prefer ||
+          i.variantTitle.toUpperCase().includes(prefer),
+      );
+      if (hit) return [hit];
+    }
+    const inStock = items.filter((i) => i.inStock);
+    return inStock.length ? [inStock[0]] : [items[0]];
   }
 
   private async getProduct(id: string): Promise<OmsProductDetail> {

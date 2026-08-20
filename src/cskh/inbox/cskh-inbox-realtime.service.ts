@@ -55,6 +55,7 @@ export type InboxConversationPayload = {
   labels?: InboxLabelPayload[];
   labelsLocked?: boolean;
   viewers?: InboxViewerPayload[];
+  pendingViewerCount?: number;
 };
 
 export type InboxViewerPayload = {

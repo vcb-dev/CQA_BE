@@ -2049,7 +2049,22 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       labelsLocked: needLabels ? (labelMap.get(i.id) ?? []).length > 0 : false,
     }));
 
-    const missingPictureIds = itemsWithLabels
+    const awaitingIds = itemsWithLabels.filter((i) => i.awaitingLabel).map((i) => i.id);
+    let viewerCountMap = new Map<string, number>();
+    if (awaitingIds.length) {
+      try {
+        viewerCountMap = await this.inboxLabels.countViewersMap(awaitingIds);
+      } catch (e) {
+        if (!this.isInboxSchemaMigrationError(e) && !isPrismaRetryableDbError(e)) throw e;
+      }
+    }
+
+    const itemsWithMeta = itemsWithLabels.map((i) => ({
+      ...i,
+      pendingViewerCount: i.awaitingLabel ? (viewerCountMap.get(i.id) ?? 0) : undefined,
+    }));
+
+    const missingPictureIds = itemsWithMeta
       .filter((i) => !i.customerPictureUrl && i.participantPsid)
       .slice(0, 3)
       .map((i) => i.id);
@@ -2064,7 +2079,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         });
     }
 
-    const result = { items: itemsWithLabels, nextCursor, hasMore };
+    const result = { items: itemsWithMeta, nextCursor, hasMore };
     if (!opts?.cursor) {
       this.conversationListCache.set(listCacheKey, { at: Date.now(), data: result });
     }

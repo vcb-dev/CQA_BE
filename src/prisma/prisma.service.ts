@@ -91,7 +91,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
     const connectionLimit = resolvePrismaConnectionLimit();
     const limit = `connection_limit=${connectionLimit}`;
-    const poolTimeout = 'pool_timeout=20';
+    const poolTimeout = 'pool_timeout=5';
     if (url) {
       if (!url.includes('connection_limit=')) {
         url += (url.includes('?') ? '&' : '?') + limit;
@@ -100,6 +100,8 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       }
       if (!url.includes('pool_timeout=')) {
         url += (url.includes('?') ? '&' : '?') + poolTimeout;
+      } else {
+        url = url.replace(/pool_timeout=\d+/, poolTimeout);
       }
     }
 

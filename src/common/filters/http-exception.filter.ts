@@ -47,9 +47,13 @@ export class HttpExceptionFilter implements ExceptionFilter {
         `${request.method} ${request.url} - ${status}`,
         exception instanceof Error ? exception.stack : String(exception),
       );
-    } else if (isPrismaBusyError(exception) || isPrismaClientFailure(exception)) {
+    } else if (
+      status === HttpStatus.SERVICE_UNAVAILABLE ||
+      isPrismaBusyError(exception) ||
+      isPrismaClientFailure(exception)
+    ) {
       this.logger.warn(
-        `${request.method} ${request.url} - ${status} prisma-busy ${String((exception as Error)?.message || exception).slice(0, 180)}`,
+        `${request.method} ${request.url} - ${status} ${String((exception as Error)?.message || exception).slice(0, 180)}`,
       );
     }
 

@@ -1,4 +1,5 @@
 import type { CskhInboxConversation, Prisma } from '@prisma/client';
+import { isPrismaBusyError } from '../../common/prisma-busy.util';
 import { PrismaService } from '../../prisma/prisma.service';
 
 export function isInboxSchemaMigrationError(e: unknown): boolean {
@@ -17,8 +18,7 @@ export function isInboxSchemaMigrationError(e: unknown): boolean {
 }
 
 export function isPrismaPoolTimeout(e: unknown): boolean {
-  const msg = String((e as Error)?.message ?? e ?? '');
-  return /connection pool/i.test(msg) || /Timed out fetching a new connection/i.test(msg);
+  return isPrismaBusyError(e);
 }
 
 export function isPrismaStatementTimeout(e: unknown): boolean {
@@ -26,9 +26,9 @@ export function isPrismaStatementTimeout(e: unknown): boolean {
   return /statement timeout/i.test(msg) || /\b57014\b/.test(msg);
 }
 
-/** Pool đầy hoặc query vượt statement_timeout — nên retry / trả 503. */
+/** Pool đầy hoặc query vượt statement_timeout — trả rỗng / 503, không 500. */
 export function isPrismaRetryableDbError(e: unknown): boolean {
-  return isPrismaPoolTimeout(e) || isPrismaStatementTimeout(e);
+  return isPrismaBusyError(e);
 }
 
 export const CONVERSATION_ACCESS_SELECT_LEGACY = {

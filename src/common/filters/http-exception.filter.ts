@@ -7,6 +7,8 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { isPrismaBusyError, isPrismaClientFailure } from '../prisma-busy.util';
+import { toUserFacingError } from '../user-facing-error.util';
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -35,17 +37,30 @@ export class HttpExceptionFilter implements ExceptionFilter {
           message = 'Dữ liệu đầu vào không hợp lệ';
         }
       }
+    } else if (isPrismaBusyError(exception) || isPrismaClientFailure(exception)) {
+      status = HttpStatus.SERVICE_UNAVAILABLE;
+      message = 'Hệ thống đang bận tải dữ liệu. Vui lòng thử lại sau vài giây.';
     }
 
-    this.logger.error(
-      `${request.method} ${request.url} - ${status}`,
-      exception instanceof Error ? exception.stack : String(exception),
-    );
+    if (status >= 500) {
+      this.logger.error(
+        `${request.method} ${request.url} - ${status}`,
+        exception instanceof Error ? exception.stack : String(exception),
+      );
+    } else if (isPrismaBusyError(exception) || isPrismaClientFailure(exception)) {
+      this.logger.warn(
+        `${request.method} ${request.url} - ${status} prisma-busy ${String((exception as Error)?.message || exception).slice(0, 180)}`,
+      );
+    }
+
+    const bodyMessage = status >= 500 || isPrismaBusyError(exception)
+      ? toUserFacingError(typeof message === 'string' ? message : String(message))
+      : message;
 
     response.status(status).json({
       success: false,
       statusCode: status,
-      message,
+      message: bodyMessage,
       errors,
       timestamp: new Date().toISOString(),
       path: request.url,

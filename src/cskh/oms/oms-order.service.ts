@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { OmsApiService } from './oms-api.service';
 import {
+  extractSearchQueries,
   extractSizes,
   extractVnPhone,
   pickVariantTitle,
@@ -167,13 +168,14 @@ export class OmsOrderService {
       .join('\n');
     const phone = extractVnPhone(transcript) ?? null;
     const mentions = extraMentions.map((s) => s.trim()).filter(Boolean);
-    const catalog = await this.listPublishedProducts();
-    const ranked = rankWarehouseProducts(catalog, transcript, mentions, 5);
+    const searchQs = extractSearchQueries(transcript, mentions);
+    const catalog = await this.listPublishedProducts(searchQs);
+    const ranked = rankWarehouseProducts(catalog, transcript, mentions, 3);
     if (!ranked.length) {
       return {
         items: [],
         phone,
-        queries: mentions,
+        queries: searchQs,
         note: 'Không khớp sản phẩm kho từ hội thoại — tìm tay bên dưới.',
       };
     }
@@ -279,19 +281,25 @@ export class OmsOrderService {
     return { id: pick.id, name: pick.name };
   }
 
-  private async listPublishedProducts(): Promise<OmsProductListItem[]> {
-    const out: OmsProductListItem[] = [];
-    for (let page = 1; page <= 4; page += 1) {
-      const res = await this.omsApi.get<OmsProductsResponse>('/products', {
-        page,
-        page_size: 50,
-        is_published: true,
-      });
-      const batch = res.data ?? [];
-      out.push(...batch);
-      if (batch.length < 50 || out.length >= (res.total ?? out.length)) break;
+  private async listPublishedProducts(searchQueries: string[] = []): Promise<OmsProductListItem[]> {
+    const byId = new Map<string, OmsProductListItem>();
+    const pull = async (q?: string) => {
+      for (let page = 1; page <= (q ? 2 : 4); page += 1) {
+        const res = await this.omsApi.get<OmsProductsResponse>('/products', {
+          q: q || undefined,
+          page,
+          page_size: 50,
+          is_published: true,
+        });
+        for (const p of res.data ?? []) byId.set(p.id, p);
+        if ((res.data?.length ?? 0) < 50) break;
+      }
+    };
+    await pull();
+    for (const q of searchQueries.slice(0, 4)) {
+      await pull(q);
     }
-    return out;
+    return [...byId.values()];
   }
 
   private preferMentionedVariant(items: OmsCatalogItem[], sizes: string[]): OmsCatalogItem[] {

@@ -515,6 +515,20 @@ export class CskhController {
     return this.omsOrders.searchCatalog(q, page ? Number(page) : 1);
   }
 
+  /** Quét hội thoại → khớp GET /products + tồn kho warehouse, tự chọn SP khi tạo đơn. */
+  @Get('oms/suggest')
+  @UseGuards(JwtAuthGuard)
+  suggestOmsOrder(
+    @Query('conversationId') conversationId?: string,
+    @Query('mentions') mentions?: string,
+  ) {
+    const extra = (mentions ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return this.omsOrders.suggestFromConversation(conversationId ?? '', extra);
+  }
+
   /** Tạo đơn trên warehouse-be (POST /api/orders) — không lưu đơn trên CRM. */
   @Post('oms/orders')
   @UseGuards(JwtAuthGuard)

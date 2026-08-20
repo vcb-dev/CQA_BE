@@ -18,6 +18,7 @@ import {
   isMessengerFromCustomer,
   resolveMessengerCustomerPsid,
   inboxListPreview,
+  groupInboxMediaRows,
 } from '../facebook/facebook-message.util';
 import {
   detectAdFromFbMessages,
@@ -595,7 +596,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private formatMessageRow(row: CskhInboxMessage | InboxMessageRow): InboxMessagePayload {
+  private formatMessageRow(
+    row: (CskhInboxMessage | InboxMessageRow) & {
+      attachmentUrls?: string[];
+      groupedMediaCount?: number;
+    },
+  ): InboxMessagePayload {
+    const urls = dedupeMediaUrls([...(row.attachmentUrls ?? []), row.attachmentUrl]);
     return {
       id: row.id,
       conversationId: row.conversationId,
@@ -608,6 +615,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       sourceLang: row.sourceLang ?? null,
       messageType: row.messageType,
       attachmentUrl: row.attachmentUrl,
+      attachmentUrls: urls.length > 1 ? urls : undefined,
+      groupedMediaCount: row.groupedMediaCount,
       sentAt: row.sentAt.toISOString(),
       status: row.status,
     };
@@ -770,7 +779,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         type: 'message',
         pageId,
         conversationId,
-        messages: messages.map((m) => this.formatMessageRow(m)),
+        messages: groupInboxMediaRows(messages).map((m) => this.formatMessageRow(m)),
         conversation: convPayload
           ? {
               ...convPayload,
@@ -1477,35 +1486,12 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     });
     const published = [updatedPrimary];
 
-    for (let i = 1; i < resolvedItems.length; i++) {
-      const item = resolvedItems[i];
-      const sibling = await this.prisma.cskhInboxMessage.findFirst({
-        where: {
-          conversationId,
-          senderType: existing.senderType,
-          attachmentUrl: { startsWith: item.url.split('?')[0] },
-          sentAt: {
-            gte: new Date(existing.sentAt.getTime() - 10_000),
-            lte: new Date(existing.sentAt.getTime() + 10_000),
-          },
-        },
-      });
-      if (sibling) continue;
-      const created = await this.prisma.cskhInboxMessage.create({
-        data: {
-          conversationId,
-          direction: existing.direction,
-          senderType: existing.senderType,
-          text: '',
-          messageType: item.messageType,
-          attachmentUrl: item.url,
-          sentAt: existing.sentAt,
-          status: 'sent',
-          tenantId: tenantId || existing.tenantId,
-        },
-      });
-      published.push(created);
-    }
+    const extras = await this.persistExtraMediaUrls({
+      primary: updatedPrimary,
+      items: resolvedItems,
+      tenantId,
+    });
+    published.push(...extras);
 
     const preview = inboxListPreview({
       text: updatedPrimary.text,
@@ -2867,7 +2853,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         viewers: [],
         labelsLocked: hasLabels,
       },
-      messages: filtered,
+      messages: groupInboxMediaRows(filtered),
     };
   }
 
@@ -2983,7 +2969,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           type: 'message',
           pageId,
           conversationId,
-          messages: liveRows.slice(-20).map((m) => this.formatMessageRow(m as CskhInboxMessage)),
+          messages: groupInboxMediaRows(liveRows.slice(-20)).map((m) =>
+            this.formatMessageRow(m as CskhInboxMessage),
+          ),
           conversation: freshConv ? this.formatConversationRow(freshConv) : undefined,
           tenantId,
         });
@@ -3522,7 +3510,85 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  /** Lazy resolve URL ảnh/video cho một tin (FE gọi khi vẫn thấy [Ảnh]). */
+  private mediaSentWindow(sentAt: Date, ms = 8_000) {
+    return {
+      gte: new Date(sentAt.getTime() - ms),
+      lte: new Date(sentAt.getTime() + ms),
+    };
+  }
+
+  /** Ghi các URL ảnh còn thiếu vào row placeholder (hoặc tạo row mới). */
+  private async persistExtraMediaUrls(input: {
+    primary: CskhInboxMessage;
+    items: Array<{ url: string; messageType: string }>;
+    tenantId?: string | null;
+  }): Promise<CskhInboxMessage[]> {
+    const { primary, items, tenantId } = input;
+    const published: CskhInboxMessage[] = [];
+    const sentAt = this.mediaSentWindow(primary.sentAt);
+    const placeholders = await this.prisma.cskhInboxMessage.findMany({
+      where: {
+        conversationId: primary.conversationId,
+        senderType: primary.senderType,
+        id: { not: primary.id },
+        sentAt,
+        OR: [{ attachmentUrl: null }, { attachmentUrl: '' }],
+      },
+      orderBy: { sentAt: 'asc' },
+    });
+    let phIdx = 0;
+    for (let i = 1; i < items.length; i++) {
+      const item = items[i];
+      const urlPath = item.url.split('?')[0];
+      const exists = await this.prisma.cskhInboxMessage.findFirst({
+        where: {
+          conversationId: primary.conversationId,
+          senderType: primary.senderType,
+          attachmentUrl: { startsWith: urlPath },
+          sentAt,
+        },
+      });
+      if (exists) {
+        published.push(exists);
+        continue;
+      }
+      const placeholder = placeholders[phIdx++];
+      if (placeholder) {
+        published.push(
+          await this.prisma.cskhInboxMessage.update({
+            where: { id: placeholder.id },
+            data: {
+              attachmentUrl: item.url,
+              messageType: item.messageType,
+              text:
+                placeholder.text === '[Ảnh]' || placeholder.text === '[attachment]'
+                  ? ''
+                  : placeholder.text,
+            },
+          }),
+        );
+        continue;
+      }
+      published.push(
+        await this.prisma.cskhInboxMessage.create({
+          data: {
+            conversationId: primary.conversationId,
+            direction: primary.direction,
+            senderType: primary.senderType,
+            text: '',
+            messageType: item.messageType,
+            attachmentUrl: item.url,
+            sentAt: primary.sentAt,
+            status: 'sent',
+            tenantId: tenantId || primary.tenantId,
+          },
+        }),
+      );
+    }
+    return published;
+  }
+
+  /** Lazy resolve URL ảnh/video cho một tin (FE gọi khi vẫn thấy [Ảnh] hoặc thiếu ảnh trong cụm). */
   async resolveInboxMessageMedia(messageId: string) {
     const row = await this.prisma.cskhInboxMessage.findUnique({
       where: { id: messageId },
@@ -3530,25 +3596,27 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     });
     if (!row) throw new NotFoundException('Tin nhắn không tồn tại');
 
-    if (row.attachmentUrl?.startsWith('http')) {
+    const siblingWindow = this.mediaSentWindow(row.sentAt);
+    const listSiblingUrls = async () => {
       const siblings = await this.prisma.cskhInboxMessage.findMany({
         where: {
           conversationId: row.conversationId,
           senderType: row.senderType,
           attachmentUrl: { startsWith: 'http' },
-          sentAt: {
-            gte: new Date(row.sentAt.getTime() - 2000),
-            lte: new Date(row.sentAt.getTime() + 2000),
-          },
+          sentAt: siblingWindow,
         },
         orderBy: { sentAt: 'asc' },
         select: { attachmentUrl: true },
       });
-      const attachmentUrls = dedupeMediaUrls(siblings.map((s) => s.attachmentUrl));
+      return dedupeMediaUrls(siblings.map((s) => s.attachmentUrl));
+    };
+
+    let attachmentUrls = await listSiblingUrls();
+    if (row.attachmentUrl?.startsWith('http') && attachmentUrls.length > 1) {
       return {
         id: row.id,
         attachmentUrl: row.attachmentUrl,
-        attachmentUrls: attachmentUrls.length > 1 ? attachmentUrls : undefined,
+        attachmentUrls,
         messageType: row.messageType,
         text: row.text,
       };
@@ -3558,6 +3626,15 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       where: { pageId: row.conversation.pageId },
     });
     if (!config?.pageAccessToken) {
+      if (row.attachmentUrl?.startsWith('http')) {
+        return {
+          id: row.id,
+          attachmentUrl: row.attachmentUrl,
+          attachmentUrls: attachmentUrls.length > 1 ? attachmentUrls : undefined,
+          messageType: row.messageType,
+          text: row.text,
+        };
+      }
       throw new BadRequestException('Page chưa có access token');
     }
 
@@ -3583,7 +3660,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     if (!fbMessageId) {
       return {
         id: row.id,
-        attachmentUrl: null,
+        attachmentUrl: row.attachmentUrl,
+        attachmentUrls: attachmentUrls.length > 1 ? attachmentUrls : undefined,
         messageType: row.messageType,
         text: row.text,
       };
@@ -3596,7 +3674,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     if (!resolvedAll.length) {
       return {
         id: row.id,
-        attachmentUrl: null,
+        attachmentUrl: row.attachmentUrl,
+        attachmentUrls: attachmentUrls.length > 1 ? attachmentUrls : undefined,
         messageType: row.messageType,
         text: row.text,
       };
@@ -3614,35 +3693,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       },
     });
 
-    for (let i = 1; i < resolvedAll.length; i++) {
-      const item = resolvedAll[i];
-      const exists = await this.prisma.cskhInboxMessage.findFirst({
-        where: {
-          conversationId: row.conversationId,
-          senderType: row.senderType,
-          attachmentUrl: item.url,
-          sentAt: {
-            gte: new Date(row.sentAt.getTime() - 2000),
-            lte: new Date(row.sentAt.getTime() + 2000),
-          },
-        },
-      });
-      if (exists) continue;
-      await this.prisma.cskhInboxMessage.create({
-        data: {
-          conversationId: row.conversationId,
-          direction: row.direction,
-          senderType: row.senderType,
-          text: '',
-          messageType: item.messageType,
-          attachmentUrl: item.url,
-          sentAt: row.sentAt,
-          status: 'sent',
-        },
-      });
-    }
+    await this.persistExtraMediaUrls({
+      primary: { ...row, attachmentUrl: primary.url, text },
+      items: resolvedAll,
+      tenantId: row.tenantId,
+    });
 
-    const attachmentUrls = dedupeMediaUrls(resolvedAll.map((r) => r.url));
+    attachmentUrls = dedupeMediaUrls(resolvedAll.map((r) => r.url));
     return {
       id: row.id,
       attachmentUrl: primary.url,
@@ -5102,7 +5159,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
                 type: 'message',
                 pageId: bumped.pageId,
                 conversationId: bumped.id,
-                messages: liveRows.map((m) => this.formatMessageRow(m)),
+                messages: groupInboxMediaRows(liveRows).map((m) => this.formatMessageRow(m)),
                 conversation: this.formatConversationRow(bumped),
                 tenantId: bumped.tenantId || undefined,
               });

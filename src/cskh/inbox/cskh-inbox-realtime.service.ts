@@ -28,6 +28,8 @@ export type InboxMessagePayload = {
   sourceLang?: string | null;
   messageType: string;
   attachmentUrl: string | null;
+  attachmentUrls?: string[];
+  groupedMediaCount?: number;
   sentAt: string;
   status: string;
 };

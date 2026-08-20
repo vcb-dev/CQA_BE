@@ -468,6 +468,86 @@ export function dedupeChatMessages(messages: NormalizedChatMessage[]): Normalize
   return result;
 }
 
+export function isMediaPlaceholderText(text?: string | null): boolean {
+  const t = (text ?? '').trim();
+  return !t || /^(?:\[Ảnh\]|\[Video\]|\[attachment\])$/i.test(t);
+}
+
+export function parseInboxPhotoPreviewCount(preview?: string | null): number {
+  const m = /^\[(\d+)\s+ảnh\]$/i.exec((preview ?? '').trim());
+  return m ? Number(m[1]) : 0;
+}
+
+const INBOX_MEDIA_GROUP_WINDOW_MS = 8_000;
+
+function inboxRowSentAtMs(sentAt: Date | string): number {
+  const n = sentAt instanceof Date ? sentAt.getTime() : new Date(sentAt).getTime();
+  return Number.isNaN(n) ? 0 : n;
+}
+
+function isInboxImageRow(row: {
+  messageType?: string | null;
+  attachmentUrl?: string | null;
+}): boolean {
+  const type = (row.messageType ?? '').toLowerCase();
+  if (type === 'video' || type === 'sticker' || type === 'audio') return false;
+  return type === 'image' || type === 'photo' || type === 'file' || Boolean(row.attachmentUrl);
+}
+
+/**
+ * Facebook gửi nhiều ảnh một lần → nhiều row inbox.
+ * Gộp ảnh kế tiếp (caption trống / [Ảnh]) vào bubble trước, kể cả khi tin đầu có caption.
+ */
+export function groupInboxMediaRows<T extends {
+  senderType: string;
+  messageType: string;
+  text?: string | null;
+  attachmentUrl?: string | null;
+  attachmentUrls?: string[];
+  sentAt: Date | string;
+  groupedMediaCount?: number;
+}>(rows: T[]): T[] {
+  const grouped: T[] = [];
+
+  for (const msg of rows) {
+    const prev = grouped[grouped.length - 1];
+    const prevUrls = dedupeMediaUrls([...(prev?.attachmentUrls ?? []), prev?.attachmentUrl]);
+    const msgUrls = dedupeMediaUrls([...(msg.attachmentUrls ?? []), msg.attachmentUrl]);
+    const canMerge =
+      Boolean(prev) &&
+      prev!.senderType === msg.senderType &&
+      isInboxImageRow(prev!) &&
+      isInboxImageRow(msg) &&
+      isMediaPlaceholderText(msg.text) &&
+      Math.abs(inboxRowSentAtMs(msg.sentAt) - inboxRowSentAtMs(prev!.sentAt)) <=
+        INBOX_MEDIA_GROUP_WINDOW_MS;
+
+    if (canMerge && prev) {
+      const merged = dedupeMediaUrls([...prevUrls, ...msgUrls]);
+      prev.groupedMediaCount =
+        (prev.groupedMediaCount ?? Math.max(1, prevUrls.length)) + Math.max(1, msgUrls.length);
+      if (merged.length) {
+        prev.attachmentUrl = prev.attachmentUrl || merged[0];
+        prev.attachmentUrls = merged.length > 1 ? merged : undefined;
+      }
+      continue;
+    }
+
+    grouped.push({
+      ...msg,
+      attachmentUrl: msg.attachmentUrl ?? msgUrls[0] ?? null,
+      attachmentUrls: msg.attachmentUrls?.length
+        ? msg.attachmentUrls
+        : msgUrls.length > 1
+          ? msgUrls
+          : undefined,
+      groupedMediaCount: isInboxImageRow(msg) ? Math.max(1, msgUrls.length) : undefined,
+    });
+  }
+
+  return grouped;
+}
+
 export function inboxListPreview(input: {
   text?: string | null;
   messageType?: string | null;

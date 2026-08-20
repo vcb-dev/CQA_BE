@@ -183,6 +183,16 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   private readonly conversationStatsTtlMs = Number(
     process.env.CSKH_CONVERSATION_STATS_TTL_MS || 120_000,
   );
+  private readonly conversationListCache = new Map<
+    string,
+    { at: number; data: { items: CskhInboxConversation[]; nextCursor: string | null; hasMore: boolean } }
+  >();
+  private readonly conversationListInflight = new Map<
+    string,
+    Promise<{ items: CskhInboxConversation[]; nextCursor: string | null; hasMore: boolean }>
+  >();
+  private readonly conversationListTtlMs = Number(process.env.CSKH_INBOX_LIST_CACHE_MS || 12_000);
+  private readonly inboxListDefaultDays = Number(process.env.CSKH_INBOX_LIST_DEFAULT_DAYS || 21);
   /** Giới hạn webhook xử lý inline trên API khi worker chết — tránh treo web. */
   private inlineWebhookInflight = 0;
   private readonly maxInlineWebhook = Number(process.env.CSKH_WEBHOOK_INLINE_MAX || 3);
@@ -1681,6 +1691,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     if (cached && Date.now() - cached.at < this.conversationStatsTtlMs) {
       return cached.data;
     }
+    if (isPrismaRecentlyBusy(15_000)) {
+      if (cached) {
+        this.logger.warn('[getConversationStats] pool bận — trả cache, không chờ 20s');
+        return cached.data;
+      }
+      return { total: 0, fromAd: 0, unread: 0, normal: 0 };
+    }
 
     // Cache hết hạn: trả số cũ ngay, đếm lại nền — đừng giữ Prisma pool bằng COUNT 1.5 triệu dòng.
     if (cached) {
@@ -1817,6 +1834,64 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     },
   ): Promise<{ items: CskhInboxConversation[]; nextCursor: string | null; hasMore: boolean }> {
     this.touchUserActivity(pageId);
+    const sinceDays =
+      opts?.sinceDays != null && opts.sinceDays > 0
+        ? Math.min(Math.floor(opts.sinceDays), 365)
+        : opts?.search?.trim()
+          ? undefined
+          : this.inboxListDefaultDays;
+    const listCacheKey = [
+      tenantId ?? '',
+      pageId ?? '',
+      opts?.platform ?? '',
+      opts?.fromAdOnly ? 'ad' : '',
+      opts?.unreadOnly ? 'ur' : '',
+      opts?.organicOnly ? 'og' : '',
+      opts?.search?.trim() ?? '',
+      opts?.labelId ?? '',
+      opts?.unlabeledOnly ? 'ul' : '',
+      String(sinceDays ?? ''),
+      opts?.cursor ?? '',
+    ].join('|');
+    if (!opts?.cursor) {
+      const cachedList = this.conversationListCache.get(listCacheKey);
+      if (cachedList && Date.now() - cachedList.at < this.conversationListTtlMs) {
+        return cachedList.data;
+      }
+      if (isPrismaRecentlyBusy(15_000)) {
+        this.logger.warn('[listConversations] pool bận — trả cache/rỗng, không chờ 20s');
+        return cachedList?.data ?? { items: [], nextCursor: null, hasMore: false };
+      }
+      const inflight = this.conversationListInflight.get(listCacheKey);
+      if (inflight) return inflight;
+    }
+
+    const load = this.loadConversationListPage(pageId, tenantId, { ...opts, sinceDays }, listCacheKey);
+    if (!opts?.cursor) {
+      this.conversationListInflight.set(listCacheKey, load);
+      void load.finally(() => this.conversationListInflight.delete(listCacheKey));
+    }
+    return load;
+  }
+
+  private async loadConversationListPage(
+    pageId: string | undefined,
+    tenantId: string | undefined,
+    opts: {
+      fromAdOnly?: boolean;
+      unreadOnly?: boolean;
+      organicOnly?: boolean;
+      limit?: number;
+      cursor?: string;
+      search?: string;
+      sinceDays?: number;
+      labelId?: string;
+      unlabeledOnly?: boolean;
+      includeLabels?: boolean;
+      platform?: 'messenger' | 'instagram';
+    } | undefined,
+    listCacheKey: string,
+  ): Promise<{ items: CskhInboxConversation[]; nextCursor: string | null; hasMore: boolean }> {
     let platformPageIds: string[] | undefined;
     if (!pageId && opts?.platform) {
       platformPageIds = await this.pageIdsForGraphPlatform(opts.platform, tenantId);
@@ -1903,12 +1978,18 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const fetchPage = async (flags: { includeAwaitingInUnread: boolean; includeLabelFilters: boolean }) => {
       const where = this.buildListConversationWhere(pageId, tenantId, listOpts, flags);
       const select = flags.includeAwaitingInUnread ? selectWithAwaiting : selectLegacy;
-      const rows = await this.prisma.cskhInboxConversation.findMany({
-        where,
-        orderBy: [{ lastMessageAt: 'desc' }, { id: 'desc' }],
-        take: pageSize + 1,
-        select,
-      });
+      const rows = await this.prisma.$transaction(
+        async (tx) => {
+          await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = '2500ms'`);
+          return tx.cskhInboxConversation.findMany({
+            where,
+            orderBy: [{ lastMessageAt: 'desc' }, { id: 'desc' }],
+            take: pageSize + 1,
+            select,
+          });
+        },
+        { maxWait: 1_500, timeout: 4_000 },
+      );
       if (!flags.includeAwaitingInUnread) {
         return rows.map((r) => ({ ...r, awaitingLabel: false }));
       }
@@ -1986,7 +2067,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       .filter((i) => !i.customerPictureUrl && i.participantPsid)
       .slice(0, 3)
       .map((i) => i.id);
-    if (missingPictureIds.length && !this.avatarEnrichRunning) {
+    if (missingPictureIds.length && !this.avatarEnrichRunning && !isPrismaRecentlyBusy(15_000)) {
       this.avatarEnrichRunning = true;
       void this.enrichCustomerPictures(missingPictureIds)
         .catch((e) => {
@@ -1997,7 +2078,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         });
     }
 
-    return { items: itemsWithLabels, nextCursor, hasMore };
+    const result = { items: itemsWithLabels, nextCursor, hasMore };
+    if (!opts?.cursor) {
+      this.conversationListCache.set(listCacheKey, { at: Date.now(), data: result });
+    }
+    return result;
   }
 
   private encodeInboxListCursor(lastMessageAt: Date, id: string): string {

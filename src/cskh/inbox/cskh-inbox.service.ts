@@ -764,14 +764,19 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     tenantId?: string,
     conversation?: CskhInboxConversation | InboxConversationAccess,
   ): void {
-    if (!messages.length) return;
+    const liveCutoff = Date.now() - 120_000;
+    const live = messages.filter((m) => {
+      const t = m.sentAt instanceof Date ? m.sentAt.getTime() : new Date(m.sentAt).getTime();
+      return Number.isFinite(t) && t >= liveCutoff;
+    });
+    if (!live.length) return;
     const startPublish = Date.now();
-    const last = messages[messages.length - 1];
-    this.logger.log(`[Realtime Publish Start] messagesCount=${messages.length} conversationId=${conversationId}`);
+    const last = live[live.length - 1];
+    this.logger.log(`[Realtime Publish Start] messagesCount=${live.length} conversationId=${conversationId}`);
     const publishTrace = inboxRtTraceStart('publish-realtime', {
       conversationId,
       pageId,
-      messageCount: messages.length,
+      messageCount: live.length,
       messagePreview: last.text?.slice(0, 80),
       sentAt: last.sentAt?.toISOString?.() ?? String(last.sentAt),
       hasConversationRow: Boolean(conversation),
@@ -792,7 +797,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         type: 'message',
         pageId,
         conversationId,
-        messages: groupInboxMediaRows(messages).map((m) => this.formatMessageRow(m)),
+        messages: groupInboxMediaRows(live).map((m) => this.formatMessageRow(m)),
         conversation: convPayload
           ? {
               ...convPayload,
@@ -1763,23 +1768,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     try {
       return await this.countConversationStatsTimed(tenantId, pageIds);
     } catch (e) {
-      if (!pageId && !platform) {
-        const total = await this.estimateInboxConversationRows();
-        return { total, fromAd: 0, unread: 0, normal: total };
-      }
+      this.logger.warn(
+        `[getConversationStats] ${String((e as Error).message || e).slice(0, 160)}`,
+      );
       throw e;
     }
-  }
-
-  private async estimateInboxConversationRows(): Promise<number> {
-    const rows = await this.prisma.$queryRaw<Array<{ n: bigint }>>`
-      SELECT GREATEST(c.reltuples, 0)::bigint AS n
-      FROM pg_class c
-      JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public' AND c.relname = 'cskh_inbox_conversations'
-      LIMIT 1
-    `;
-    return Number(rows[0]?.n ?? 0);
   }
 
   private async countConversationStatsTimed(
@@ -1787,47 +1780,63 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     pageIds?: string[],
   ): Promise<{ total: number; fromAd: number; unread: number; normal: number }> {
     const since = new Date(Date.now() - this.inboxListDefaultDays * 86_400_000);
-    const filters: Prisma.Sql[] = [
-      Prisma.sql`AND last_message_at >= ${since}`,
-    ];
-    if (tenantId) filters.push(Prisma.sql`AND tenant_id = ${tenantId}::uuid`);
+    const scope: Prisma.Sql[] = [Prisma.sql`AND last_message_at >= ${since}`];
+    if (tenantId) scope.push(Prisma.sql`AND tenant_id = ${tenantId}::uuid`);
     if (pageIds?.length === 1) {
-      filters.push(Prisma.sql`AND page_id = ${pageIds[0]}`);
+      scope.push(Prisma.sql`AND page_id = ${pageIds[0]}`);
     } else if (pageIds && pageIds.length > 1) {
-      filters.push(Prisma.sql`AND page_id IN (${Prisma.join(pageIds)})`);
+      scope.push(Prisma.sql`AND page_id IN (${Prisma.join(pageIds)})`);
     }
-    const whereSql = filters.length ? Prisma.join(filters, ' ') : Prisma.empty;
+    const scopeSql = Prisma.join(scope, ' ');
 
-    const run = async (unreadExpr: Prisma.Sql) =>
-      this.prisma.$transaction(
-        async (tx) => {
-          await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = '2000ms'`);
-          return tx.$queryRaw<Array<{ total: bigint; from_ad: bigint; unread: bigint }>>`
-            SELECT
-              COUNT(*)::bigint AS total,
-              COUNT(*) FILTER (WHERE from_ad)::bigint AS from_ad,
-              COUNT(*) FILTER (WHERE ${unreadExpr})::bigint AS unread
-            FROM cskh_inbox_conversations
-            WHERE 1=1 ${whereSql}
-          `;
-        },
-        { maxWait: 3_000, timeout: 4_000 },
-      );
+    const countWhere = async (extra: Prisma.Sql, timeoutMs: number): Promise<number | null> => {
+      try {
+        const rows = await this.prisma.$transaction(
+          async (tx) => {
+            await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = '${timeoutMs}ms'`);
+            return tx.$queryRaw<Array<{ n: bigint }>>`
+              SELECT COUNT(*)::bigint AS n
+              FROM cskh_inbox_conversations
+              WHERE 1=1 ${scopeSql} ${extra}
+            `;
+          },
+          { maxWait: 2_000, timeout: timeoutMs + 2_000 },
+        );
+        return Number(rows[0]?.n ?? 0);
+      } catch (e) {
+        if (this.isInboxSchemaMigrationError(e)) return null;
+        this.logger.warn(
+          `[getConversationStats] COUNT timeout/fail: ${String((e as Error).message || e).slice(0, 120)}`,
+        );
+        return null;
+      }
+    };
 
-    let rows: Array<{ total: bigint; from_ad: bigint; unread: bigint }>;
-    try {
-      rows = await run(Prisma.sql`unread_count > 0 OR awaiting_label`);
-    } catch (e) {
-      if (!this.isInboxSchemaMigrationError(e)) throw e;
-      this.logger.warn('[getConversationStats] awaiting_label chưa migrate — fallback unreadCount');
-      rows = await run(Prisma.sql`unread_count > 0`);
+    const [fromAd, unreadWithAwaiting, total] = await Promise.all([
+      countWhere(Prisma.sql`AND from_ad = true`, 1_500),
+      countWhere(Prisma.sql`AND (unread_count > 0 OR awaiting_label)`, 1_500),
+      countWhere(Prisma.empty, 2_000),
+    ]);
+
+    let unread = unreadWithAwaiting;
+    if (unread == null) {
+      unread = await countWhere(Prisma.sql`AND unread_count > 0`, 1_500);
     }
 
-    const row = rows[0];
-    const total = Number(row?.total ?? 0);
-    const fromAd = Number(row?.from_ad ?? 0);
-    const unread = Number(row?.unread ?? 0);
-    return { total, fromAd, unread, normal: Math.max(0, total - fromAd) };
+    const ads = fromAd ?? 0;
+    const unreadCount = unread ?? 0;
+    let all = total;
+    if (all == null) {
+      const organic = await countWhere(Prisma.sql`AND from_ad = false`, 2_000);
+      all = organic != null ? organic + ads : Math.max(ads + unreadCount, 0);
+    }
+
+    return {
+      total: all,
+      fromAd: ads,
+      unread: unreadCount,
+      normal: Math.max(0, all - ads),
+    };
   }
 
   async listConversations(

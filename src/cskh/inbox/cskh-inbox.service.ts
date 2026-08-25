@@ -56,6 +56,11 @@ import { findInboxConversationById,
 } from './cskh-inbox-conversation.util';
 import { getCskhRunMode, isCskhApiProcess, isCskhWorkerProcess } from '../cskh-run-mode';
 import { isPrismaRecentlyBusy } from '../../common/prisma-busy.util';
+import {
+  currentInboxMonthKey,
+  parseInboxMonthKey,
+  type InboxMonthRange,
+} from './cskh-inbox-month.util';
 
 type WebhookMessagingEvent = {
   sender?: { id?: string };
@@ -1622,6 +1627,20 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     return { labelAssignments: { none: {} } } as Prisma.CskhInboxConversationWhereInput;
   }
 
+  /** Tháng lịch VN, hoặc sinceDays nếu client cũ gửi. Mặc định = tháng hiện tại. */
+  private resolveInboxTimeWindow(opts?: {
+    month?: string;
+    sinceDays?: number;
+  }): { month?: InboxMonthRange; sinceDays?: number } {
+    const parsed = parseInboxMonthKey(opts?.month);
+    if (parsed) return { month: parsed };
+    if (opts?.sinceDays != null && opts.sinceDays > 0) {
+      return { sinceDays: Math.min(Math.floor(opts.sinceDays), 365) };
+    }
+    const current = parseInboxMonthKey(currentInboxMonthKey());
+    return current ? { month: current } : { sinceDays: this.inboxListDefaultDays };
+  }
+
   private buildListConversationWhere(
     pageId: string | undefined,
     tenantId: string | undefined,
@@ -1631,6 +1650,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       organicOnly?: boolean;
       search?: string;
       sinceDays?: number;
+      month?: InboxMonthRange;
+      monthFrom?: Date;
+      monthTo?: Date;
       labelId?: string;
       unlabeledOnly?: boolean;
       cursor?: { lastMessageAt: Date; id: string } | null;
@@ -1653,14 +1675,20 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     if (flags.includeLabelFilters && opts.unlabeledOnly) {
       andClauses.push(this.unlabeledWhere());
     }
-    const sinceDays =
-      opts.sinceDays != null && opts.sinceDays > 0
-        ? Math.min(Math.floor(opts.sinceDays), 365)
-        : undefined;
-    if (sinceDays) {
-      andClauses.push({
-        lastMessageAt: { gte: new Date(Date.now() - sinceDays * 86_400_000) },
-      });
+    const monthFrom = opts.month?.from ?? opts.monthFrom;
+    const monthTo = opts.month?.to ?? opts.monthTo;
+    if (monthFrom && monthTo) {
+      andClauses.push({ lastMessageAt: { gte: monthFrom, lt: monthTo } });
+    } else {
+      const sinceDays =
+        opts.sinceDays != null && opts.sinceDays > 0
+          ? Math.min(Math.floor(opts.sinceDays), 365)
+          : undefined;
+      if (sinceDays) {
+        andClauses.push({
+          lastMessageAt: { gte: new Date(Date.now() - sinceDays * 86_400_000) },
+        });
+      }
     }
     const search = opts.search?.trim();
     if (search) {
@@ -1701,8 +1729,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     pageId?: string,
     tenantId?: string,
     platform?: 'messenger' | 'instagram',
+    month?: string,
   ) {
-    const cacheKey = `${tenantId ?? '__all__'}:${pageId ?? '__all__'}:${platform ?? 'all'}`;
+    const window = this.resolveInboxTimeWindow({ month });
+    const cacheKey = `${tenantId ?? '__all__'}:${pageId ?? '__all__'}:${platform ?? 'all'}:${window.month?.key ?? `d${window.sinceDays ?? ''}`}`;
     const cached = this.conversationStatsCache.get(cacheKey);
     if (cached && Date.now() - cached.at < this.conversationStatsTtlMs) {
       return cached.data;
@@ -1718,12 +1748,12 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
     // Cache hết hạn: trả số cũ ngay, đếm lại nền — đừng giữ Prisma pool bằng COUNT 1.5 triệu dòng.
     if (cached) {
-      this.scheduleConversationStatsRefresh(cacheKey, pageId, tenantId, platform);
+      this.scheduleConversationStatsRefresh(cacheKey, pageId, tenantId, platform, month);
       return cached.data;
     }
 
     try {
-      const result = await this.computeConversationStats(pageId, tenantId, platform);
+      const result = await this.computeConversationStats(pageId, tenantId, platform, month);
       this.conversationStatsCache.set(cacheKey, { at: Date.now(), data: result });
       return result;
     } catch (e) {
@@ -1738,10 +1768,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     pageId?: string,
     tenantId?: string,
     platform?: 'messenger' | 'instagram',
+    month?: string,
   ) {
     if (this.conversationStatsRefreshing.has(cacheKey)) return;
     this.conversationStatsRefreshing.add(cacheKey);
-    void this.computeConversationStats(pageId, tenantId, platform)
+    void this.computeConversationStats(pageId, tenantId, platform, month)
       .then((result) => {
         this.conversationStatsCache.set(cacheKey, { at: Date.now(), data: result });
       })
@@ -1757,6 +1788,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     pageId?: string,
     tenantId?: string,
     platform?: 'messenger' | 'instagram',
+    month?: string,
   ) {
     let pageIds: string[] | undefined;
     if (pageId) {
@@ -1765,7 +1797,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       pageIds = await this.pageIdsForGraphPlatform(platform, tenantId);
       if (!pageIds.length) return { total: 0, fromAd: 0, unread: 0, normal: 0 };
     }
-    return this.countConversationStatsTimed(pageId, tenantId, pageIds);
+    return this.countConversationStatsTimed(pageId, tenantId, pageIds, month);
   }
 
   private async countListMatching(
@@ -1775,7 +1807,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       fromAdOnly?: boolean;
       unreadOnly?: boolean;
       organicOnly?: boolean;
-      sinceDays: number;
+      sinceDays?: number;
+      month?: InboxMonthRange;
       pageIds?: string[];
     },
     flags: { includeAwaitingInUnread: boolean; includeLabelFilters: boolean },
@@ -1802,9 +1835,14 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     pageId?: string,
     tenantId?: string,
     pageIds?: string[],
+    month?: string,
   ): Promise<{ total: number; fromAd: number; unread: number; normal: number }> {
-    const sinceDays = this.inboxListDefaultDays;
-    const base = { sinceDays, pageIds };
+    const window = this.resolveInboxTimeWindow({ month });
+    const base = {
+      sinceDays: window.sinceDays,
+      month: window.month,
+      pageIds,
+    };
     let flags = { includeAwaitingInUnread: true, includeLabelFilters: false as const };
 
     const count = (
@@ -1847,6 +1885,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       cursor?: string;
       search?: string;
       sinceDays?: number;
+      month?: string;
       labelId?: string;
       unlabeledOnly?: boolean;
       includeLabels?: boolean;
@@ -1854,12 +1893,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     },
   ): Promise<{ items: CskhInboxConversation[]; nextCursor: string | null; hasMore: boolean }> {
     this.touchUserActivity(pageId);
-    const sinceDays =
-      opts?.sinceDays != null && opts.sinceDays > 0
-        ? Math.min(Math.floor(opts.sinceDays), 365)
-        : opts?.search?.trim()
-          ? undefined
-          : this.inboxListDefaultDays;
+    const window = this.resolveInboxTimeWindow({
+      month: opts?.month,
+      sinceDays: opts?.sinceDays,
+    });
     const listCacheKey = [
       tenantId ?? '',
       pageId ?? '',
@@ -1870,7 +1907,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       opts?.search?.trim() ?? '',
       opts?.labelId ?? '',
       opts?.unlabeledOnly ? 'ul' : '',
-      String(sinceDays ?? ''),
+      window.month?.key ?? `d${window.sinceDays ?? ''}`,
       opts?.cursor ?? '',
     ].join('|');
     if (!opts?.cursor) {
@@ -1886,7 +1923,16 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       if (inflight) return inflight;
     }
 
-    const load = this.loadConversationListPage(pageId, tenantId, { ...opts, sinceDays }, listCacheKey);
+    const load = this.loadConversationListPage(
+      pageId,
+      tenantId,
+      {
+        ...opts,
+        sinceDays: window.sinceDays,
+        month: window.month?.key,
+      },
+      listCacheKey,
+    );
     if (!opts?.cursor) {
       this.conversationListInflight.set(listCacheKey, load);
       void load.finally(() => this.conversationListInflight.delete(listCacheKey));
@@ -1905,6 +1951,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       cursor?: string;
       search?: string;
       sinceDays?: number;
+      month?: string;
       labelId?: string;
       unlabeledOnly?: boolean;
       includeLabels?: boolean;
@@ -1932,12 +1979,14 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     );
     const needLabels =
       opts?.includeLabels === true || hasLabelFilter;
+    const monthRange = parseInboxMonthKey(opts?.month);
     const listOpts = {
       fromAdOnly: opts?.fromAdOnly,
       unreadOnly: opts?.unreadOnly,
       organicOnly: opts?.organicOnly,
       search: opts?.search,
       sinceDays: opts?.sinceDays,
+      month: monthRange ?? undefined,
       labelId: opts?.labelId,
       unlabeledOnly: opts?.unlabeledOnly,
       cursor,

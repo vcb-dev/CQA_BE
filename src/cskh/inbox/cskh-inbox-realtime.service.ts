@@ -38,6 +38,7 @@ export type InboxConversationPayload = {
   id: string;
   pageId: string;
   pageName: string | null;
+  platform?: 'messenger' | 'instagram';
   fbConversationId?: string | null;
   participantPsid: string;
   customerName: string | null;

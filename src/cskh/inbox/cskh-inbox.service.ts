@@ -622,11 +622,17 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  private conversationPlatformFromCache(pageId: string): 'messenger' | 'instagram' {
+    const cached = this.configCache.get(pageId);
+    return cskhInboxGraphPlatform(cached?.config?.metadata);
+  }
+
   private formatConversationRow(conv: CskhInboxConversation | InboxConversationAccess): InboxConversationPayload {
     return {
       id: conv.id,
       pageId: conv.pageId,
       pageName: conv.pageName,
+      platform: this.conversationPlatformFromCache(conv.pageId),
       fbConversationId: conv.fbConversationId,
       participantPsid: conv.participantPsid,
       customerName: conv.customerName,
@@ -653,8 +659,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     if (/outside the allowed window|24 hour/i.test(msg)) {
       return 'Facebook chỉ cho trả lời trong 24 giờ sau tin nhắn của khách. Đợi khách nhắn lại rồi gửi.';
     }
+    if (/instagram_manage_messages/i.test(msg)) {
+      return 'Chưa đủ quyền Instagram Direct. Kết nối lại Facebook với quyền instagram_manage_messages.';
+    }
     if (/permission|not authorized|#200|pages_messaging/i.test(msg)) {
-      return 'Page chưa đủ quyền nhắn tin Messenger. Kiểm tra lại quyền pages_messaging.';
+      return 'Page/IG chưa đủ quyền nhắn tin. Kiểm tra pages_messaging hoặc instagram_manage_messages.';
     }
     if (/invalid user|does not exist|#100/i.test(msg)) {
       return 'PSID khách không hợp lệ hoặc hội thoại mất liên kết Facebook.';
@@ -673,13 +682,14 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     if (conv.fbConversationId || !conv.participantPsid?.trim()) return conv;
     const config = await this.prisma.facebookCskhConfig.findUnique({
       where: { pageId: conv.pageId },
-      select: { pageAccessToken: true },
+      select: { pageAccessToken: true, metadata: true },
     });
     if (!config?.pageAccessToken) return conv;
     const fbId = await this.graph.fetchConversationIdByPsid(
       conv.pageId,
       config.pageAccessToken,
       conv.participantPsid,
+      cskhInboxGraphPlatform(config.metadata),
     );
     if (!fbId) return conv;
     await this.prisma.cskhInboxConversation.update({
@@ -1172,6 +1182,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
     const config = await this.getCachedPageConfig(pageId);
     inboxRtTraceMark(trace, 'page-config-loaded', { pageName: config?.pageName ?? null });
+    if (!config?.pageAccessToken) {
+      this.logger.warn(
+        `[Webhook] Chưa có token kênh pageId=${pageId} — inbox vẫn lưu tin nhưng không lấy avatar/gửi được. Kết nối lại Facebook (IG Professional phải gắn Fanpage).`,
+      );
+    }
     const pageName = config?.pageName ?? null;
 
     const prelimCustomer = resolveMessengerCustomerPsid(senderPsid, recipientPsid, pageId, {
@@ -1208,7 +1223,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         pageId,
         pageName,
         participantPsid: customerPsid,
-        customerName: customerName || 'Khách hàng Messenger',
+        customerName:
+          customerName ||
+          (cskhInboxGraphPlatform(config?.metadata) === 'instagram'
+            ? 'Khách Instagram'
+            : 'Khách hàng Messenger'),
         customerPictureUrl,
         lastMessage: listPreview || msg.text || '[Ảnh]',
         lastMessageAt: new Date(event.timestamp ?? Date.now()),
@@ -2059,8 +2078,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
+    const pageIds = [...new Set(itemsWithLabels.map((i) => i.pageId))];
+    await Promise.all(pageIds.map((id) => this.getCachedPageConfig(id)));
     const itemsWithMeta = itemsWithLabels.map((i) => ({
       ...i,
+      platform: this.conversationPlatformFromCache(i.pageId),
       pendingViewerCount: i.awaitingLabel ? (viewerCountMap.get(i.id) ?? 0) : undefined,
     }));
 

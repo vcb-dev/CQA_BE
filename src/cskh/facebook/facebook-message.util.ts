@@ -73,7 +73,9 @@ export function isNoiseMessageText(text: string): boolean {
 }
 
 export function isFbMediaUrl(url: string): boolean {
-  return /^https:\/\/([a-z0-9-]+\.)*(fbcdn\.net|fbsbx\.com)\//i.test(url.trim());
+  return /^https:\/\/([a-z0-9-]+\.)*(fbcdn\.net|fbsbx\.com|cdninstagram\.com|instagram\.com)\//i.test(
+    url.trim(),
+  );
 }
 
 export function isVideoMediaUrl(url: string): boolean {
@@ -575,9 +577,9 @@ export const FB_MESSAGE_ATTACHMENT_FIELDS = `attachments{${FB_ATTACHMENT_FIELDS}
 export const FB_MESSAGE_FIELDS = `id,message,from,created_time,sticker,${FB_MESSAGE_ATTACHMENT_FIELDS}`;
 
 const FB_MEDIA_PROXY_HOST =
-  /(?:^|\.)((?:fbcdn\.net|fbsbx\.com|facebook\.com|fb\.com))$/i;
+  /(?:^|\.)((?:fbcdn\.net|fbsbx\.com|facebook\.com|fb\.com|cdninstagram\.com|instagram\.com))$/i;
 
-/** Host Facebook CDN hợp lệ cho proxy media. */
+/** Host Facebook/Instagram CDN hợp lệ cho proxy media + avatar. */
 export function isAllowedFacebookMediaUrl(raw: string): boolean {
   const url = (raw || '').trim();
   if (!url) return false;

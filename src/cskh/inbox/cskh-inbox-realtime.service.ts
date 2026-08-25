@@ -247,6 +247,22 @@ export class CskhInboxRealtimeService implements OnModuleInit, OnModuleDestroy {
 
   publish(payload: InboxRealtimePayload) {
     const publishStartedAt = Date.now();
+    const liveCutoff = Date.now() - 120_000;
+    if (payload.type === 'message' && payload.messages?.length) {
+      const liveMessages = payload.messages.filter((m) => {
+        const t = new Date(m.sentAt).getTime();
+        return Number.isFinite(t) && t >= liveCutoff;
+      });
+      if (!liveMessages.length) {
+        inboxRtLog('publish skip stale messages', {
+          type: payload.type,
+          conversationId: payload.conversationId,
+          dropped: payload.messages.length,
+        });
+        return;
+      }
+      payload = { ...payload, messages: liveMessages };
+    }
     // Luôn push SSE trên process hiện tại — không phụ thuộc 100% Redis subscriber echo.
     this.emit(payload, 'local');
     if (this.redisEnabled && this.publisher && !isRedisCircuitOpen()) {

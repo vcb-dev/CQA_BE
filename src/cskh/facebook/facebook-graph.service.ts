@@ -736,6 +736,7 @@ export class FacebookGraphService {
     pageId: string,
     token: string,
     participantPsid: string,
+    platform: CskhInboxGraphPlatform = 'messenger',
   ): Promise<string | null> {
     const psid = participantPsid.trim();
     if (!psid) return null;
@@ -743,7 +744,7 @@ export class FacebookGraphService {
       const data = await this.graphRequest<{ data?: Array<{ id?: string }> }>(
         `/${pageId}/conversations`,
         token,
-        { user_id: psid, fields: 'id', limit: 1 },
+        { user_id: psid, fields: 'id', limit: 1, platform },
       );
       return data.data?.[0]?.id ?? null;
     } catch (e) {

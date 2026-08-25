@@ -421,6 +421,21 @@ export class CskhInboxLabelsService {
     return map;
   }
 
+  /** Số NV đã mở hội thoại — dùng trên list cho tin đã xem chưa gán nhãn. */
+  async countViewersMap(conversationIds: string[]): Promise<Map<string, number>> {
+    const map = new Map<string, number>();
+    if (!conversationIds.length) return map;
+    const rows = await this.prisma.cskhInboxConversationView.groupBy({
+      by: ['conversationId'],
+      where: { conversationId: { in: conversationIds } },
+      _count: { _all: true },
+    });
+    for (const row of rows) {
+      map.set(row.conversationId, row._count._all);
+    }
+    return map;
+  }
+
   /**
    * Ghi nhận xem nền khi mở hội thoại — không fetch viewers/labels lại, không block response.
    */

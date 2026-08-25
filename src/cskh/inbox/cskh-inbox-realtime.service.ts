@@ -28,6 +28,8 @@ export type InboxMessagePayload = {
   sourceLang?: string | null;
   messageType: string;
   attachmentUrl: string | null;
+  attachmentUrls?: string[];
+  groupedMediaCount?: number;
   sentAt: string;
   status: string;
 };
@@ -36,6 +38,7 @@ export type InboxConversationPayload = {
   id: string;
   pageId: string;
   pageName: string | null;
+  platform?: 'messenger' | 'instagram';
   fbConversationId?: string | null;
   participantPsid: string;
   customerName: string | null;
@@ -53,6 +56,7 @@ export type InboxConversationPayload = {
   labels?: InboxLabelPayload[];
   labelsLocked?: boolean;
   viewers?: InboxViewerPayload[];
+  pendingViewerCount?: number;
 };
 
 export type InboxViewerPayload = {

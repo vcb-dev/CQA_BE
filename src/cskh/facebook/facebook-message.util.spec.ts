@@ -2,6 +2,7 @@ import {
   normalizeFbMessage,
   resolveMessengerCustomerPsid,
   isMessengerFromCustomer,
+  isAllowedFacebookMediaUrl,
 } from './facebook-message.util';
 
 describe('resolveMessengerCustomerPsid', () => {
@@ -74,5 +75,25 @@ describe('normalizeFbMessage sender', () => {
     );
     expect(staff?.sender).toBe('Staff');
     expect(customer?.sender).toBe('Customer');
+  });
+});
+
+describe('isAllowedFacebookMediaUrl', () => {
+  it('allows Facebook CDN hosts', () => {
+    expect(isAllowedFacebookMediaUrl('https://scontent.xx.fbcdn.net/v/t1/pic.jpg')).toBe(true);
+    expect(isAllowedFacebookMediaUrl('https://platform-lookaside.fbsbx.com/x')).toBe(true);
+  });
+
+  it('allows Instagram CDN hosts used for customer avatars', () => {
+    expect(
+      isAllowedFacebookMediaUrl('https://scontent.cdninstagram.com/v/t51.2885-19/pic.jpg'),
+    ).toBe(true);
+    expect(
+      isAllowedFacebookMediaUrl('https://instagram.fhan2-1.fna.fbcdn.net/v/t51.2885-19/pic.jpg'),
+    ).toBe(true);
+  });
+
+  it('rejects unrelated hosts', () => {
+    expect(isAllowedFacebookMediaUrl('https://evil.example/pic.jpg')).toBe(false);
   });
 });

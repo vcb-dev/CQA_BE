@@ -480,7 +480,7 @@ export function parseInboxPhotoPreviewCount(preview?: string | null): number {
   return m ? Number(m[1]) : 0;
 }
 
-const INBOX_MEDIA_GROUP_WINDOW_MS = 8_000;
+const INBOX_MEDIA_GROUP_WINDOW_MS = 15_000;
 
 function inboxRowSentAtMs(sentAt: Date | string): number {
   const n = sentAt instanceof Date ? sentAt.getTime() : new Date(sentAt).getTime();

@@ -137,11 +137,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   /** Tắt mặc định — tránh quét inbox nền khi mở danh sách (chỉ bật khi CSKH_INBOX_ROTATING_SYNC_ENABLED=true). */
   private readonly rotatingSyncEnabled =
     process.env.CSKH_INBOX_ROTATING_SYNC_ENABLED === 'true';
-  /** Worker poll Graph để bù tin mới khi webhook Meta chưa về. Tắt: CSKH_INBOX_CATCHUP_ENABLED=false */
+  /** Poll Graph bù tin mới khi webhook Meta chưa về. Tắt: CSKH_INBOX_CATCHUP_ENABLED=false */
   private readonly catchUpEnabled = process.env.CSKH_INBOX_CATCHUP_ENABLED !== 'false';
   private readonly catchUpIntervalMs = Math.max(
-    2_000,
-    Number(process.env.CSKH_INBOX_CATCHUP_INTERVAL_MS || 3_000),
+    1_000,
+    Number(process.env.CSKH_INBOX_CATCHUP_INTERVAL_MS || 1_000),
   );
   private readonly catchUpHotPages = Math.min(
     4,
@@ -538,9 +538,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit(): void {
     if (!this.catchUpEnabled) return;
-    if (!isCskhWorkerProcess()) return;
     this.logger.log(
-      `[catch-up] Worker poll Graph realtime mỗi ${this.catchUpIntervalMs}ms (head ${this.catchUpConvLimit} hội thoại)`,
+      `[catch-up] Poll Graph realtime mỗi ${this.catchUpIntervalMs}ms (head ${this.catchUpConvLimit} hội thoại, kênh đang xem)`,
     );
     this.catchUpTimer = setInterval(() => {
       void this.runLiveGraphCatchUp().catch((e) => {
@@ -1263,7 +1262,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         where: { fbMessageId: msg.mid },
       });
       const attCount = msg.attachments?.length ?? 0;
-      if (existing && attCount <= 1) {
+      const extraHttpUrls = (msg.attachments ?? [])
+        .map((a) => a.payload?.url)
+        .filter((u): u is string => Boolean(u?.startsWith('http')));
+      if (existing && attCount <= 1 && extraHttpUrls.every((u) => u === existing!.attachmentUrl)) {
         const senderType = isFromPage ? 'staff' : 'customer';
         const direction = isFromPage ? 'outbound' : 'inbound';
         if (existing.senderType !== senderType || existing.direction !== direction) {
@@ -2275,8 +2277,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Poll Graph nhẹ ~3s: 1 request / page, chỉ đầu list hội thoại mới nhất.
-   * Webhook vẫn là đường tức thì; đây bù khi Meta chưa đẩy event.
+   * Bù Graph khi webhook Meta trễ/mất — chỉ page đang xem + vài kênh hot.
+   * Nguồn realtime chuẩn vẫn là webhook → DB → SSE.
    */
   async runLiveGraphCatchUp(tenantId?: string): Promise<void> {
     if (isPrismaRecentlyBusy(20_000)) return;
@@ -2284,7 +2286,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     if (this.graphCoordinator.inboxSyncActive) return;
     if (Date.now() < this.catchUpBackoffUntil) return;
     if (await this.isAuditJobRunning(tenantId)) return;
-    if (!(await this.redisQueue.tryLiveCatchUpLock(2))) return;
+    if (!(await this.redisQueue.tryLiveCatchUpLock(1))) return;
 
     const pages = await this.findLiveCatchUpPages(tenantId);
     if (!pages.length) return;
@@ -3633,7 +3635,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     });
     if (!row) throw new NotFoundException('Tin nhắn không tồn tại');
 
-    const siblingWindow = this.mediaSentWindow(row.sentAt);
+    const siblingWindow = this.mediaSentWindow(row.sentAt, 15_000);
     const listSiblingUrls = async () => {
       const siblings = await this.prisma.cskhInboxMessage.findMany({
         where: {
@@ -3704,10 +3706,31 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
-    const resolvedAll = await this.graph.resolveAllMessageMediaUrls(
-      fbMessageId,
-      config.pageAccessToken,
-    );
+    const albumRows = await this.prisma.cskhInboxMessage.findMany({
+      where: {
+        conversationId: row.conversationId,
+        senderType: row.senderType,
+        sentAt: this.mediaSentWindow(row.sentAt, 15_000),
+      },
+      orderBy: { sentAt: 'asc' },
+      select: { id: true, fbMessageId: true, attachmentUrl: true, text: true, messageType: true },
+    });
+    const mids = [
+      ...new Set(
+        [fbMessageId, ...albumRows.map((r) => r.fbMessageId)].filter(
+          (id): id is string => Boolean(id),
+        ),
+      ),
+    ];
+    const resolvedAll: Array<{ url: string; messageType: string }> = [];
+    for (const mid of mids.slice(0, 12)) {
+      const part = await this.graph.resolveAllMessageMediaUrls(mid, config.pageAccessToken);
+      for (const item of part) {
+        if (!resolvedAll.some((x) => x.url.split('?')[0] === item.url.split('?')[0])) {
+          resolvedAll.push(item);
+        }
+      }
+    }
     if (!resolvedAll.length) {
       return {
         id: row.id,

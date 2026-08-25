@@ -1712,7 +1712,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn('[getConversationStats] pool bận — trả cache, không chờ 20s');
         return cached.data;
       }
-      return { total: 0, fromAd: 0, unread: 0, normal: 0 };
+      this.logger.warn('[getConversationStats] pool bận, chưa có cache — không bịa số 0');
+      throw new ServiceUnavailableException('Hệ thống đang bận. Thử lại sau vài giây.');
     }
 
     // Cache hết hạn: trả số cũ ngay, đếm lại nền — đừng giữ Prisma pool bằng COUNT 1.5 triệu dòng.
@@ -1728,7 +1729,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     } catch (e) {
       const msg = (e as Error).message || '';
       this.logger.warn(`[getConversationStats] ${msg.slice(0, 160)} — không cache số 0`);
-      return { total: 0, fromAd: 0, unread: 0, normal: 0 };
+      throw e;
     }
   }
 
@@ -1759,84 +1760,80 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   ) {
     let pageIds: string[] | undefined;
     if (pageId) {
-      pageIds = [pageId];
+      pageIds = undefined;
     } else if (platform) {
       pageIds = await this.pageIdsForGraphPlatform(platform, tenantId);
       if (!pageIds.length) return { total: 0, fromAd: 0, unread: 0, normal: 0 };
     }
+    return this.countConversationStatsTimed(pageId, tenantId, pageIds);
+  }
 
+  private async countListMatching(
+    pageId: string | undefined,
+    tenantId: string | undefined,
+    opts: {
+      fromAdOnly?: boolean;
+      unreadOnly?: boolean;
+      organicOnly?: boolean;
+      sinceDays: number;
+      pageIds?: string[];
+    },
+    flags: { includeAwaitingInUnread: boolean; includeLabelFilters: boolean },
+  ): Promise<number | null> {
+    const where = this.buildListConversationWhere(pageId, tenantId, opts, flags);
     try {
-      return await this.countConversationStatsTimed(tenantId, pageIds);
-    } catch (e) {
-      this.logger.warn(
-        `[getConversationStats] ${String((e as Error).message || e).slice(0, 160)}`,
+      return await this.prisma.$transaction(
+        async (tx) => {
+          await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = '2000ms'`);
+          return tx.cskhInboxConversation.count({ where });
+        },
+        { maxWait: 2_000, timeout: 4_000 },
       );
-      throw e;
+    } catch (e) {
+      if (this.isInboxSchemaMigrationError(e)) return null;
+      this.logger.warn(
+        `[getConversationStats] COUNT timeout/fail: ${String((e as Error).message || e).slice(0, 120)}`,
+      );
+      return null;
     }
   }
 
   private async countConversationStatsTimed(
+    pageId?: string,
     tenantId?: string,
     pageIds?: string[],
   ): Promise<{ total: number; fromAd: number; unread: number; normal: number }> {
-    const since = new Date(Date.now() - this.inboxListDefaultDays * 86_400_000);
-    const scope: Prisma.Sql[] = [Prisma.sql`AND last_message_at >= ${since}`];
-    if (tenantId) scope.push(Prisma.sql`AND tenant_id = ${tenantId}::uuid`);
-    if (pageIds?.length === 1) {
-      scope.push(Prisma.sql`AND page_id = ${pageIds[0]}`);
-    } else if (pageIds && pageIds.length > 1) {
-      scope.push(Prisma.sql`AND page_id IN (${Prisma.join(pageIds)})`);
-    }
-    const scopeSql = Prisma.join(scope, ' ');
+    const sinceDays = this.inboxListDefaultDays;
+    const base = { sinceDays, pageIds };
+    let flags = { includeAwaitingInUnread: true, includeLabelFilters: false as const };
 
-    const countWhere = async (extra: Prisma.Sql, timeoutMs: number): Promise<number | null> => {
-      try {
-        const rows = await this.prisma.$transaction(
-          async (tx) => {
-            await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = '${timeoutMs}ms'`);
-            return tx.$queryRaw<Array<{ n: bigint }>>`
-              SELECT COUNT(*)::bigint AS n
-              FROM cskh_inbox_conversations
-              WHERE 1=1 ${scopeSql} ${extra}
-            `;
-          },
-          { maxWait: 2_000, timeout: timeoutMs + 2_000 },
-        );
-        return Number(rows[0]?.n ?? 0);
-      } catch (e) {
-        if (this.isInboxSchemaMigrationError(e)) return null;
-        this.logger.warn(
-          `[getConversationStats] COUNT timeout/fail: ${String((e as Error).message || e).slice(0, 120)}`,
-        );
-        return null;
-      }
-    };
+    const count = (
+      extra: { fromAdOnly?: boolean; unreadOnly?: boolean; organicOnly?: boolean },
+    ) => this.countListMatching(pageId, tenantId, { ...base, ...extra }, flags);
 
-    const [fromAd, unreadWithAwaiting, total] = await Promise.all([
-      countWhere(Prisma.sql`AND from_ad = true`, 1_500),
-      countWhere(Prisma.sql`AND (unread_count > 0 OR awaiting_label)`, 1_500),
-      countWhere(Prisma.empty, 2_000),
+    let [total, fromAd, unread, normal] = await Promise.all([
+      count({}),
+      count({ fromAdOnly: true }),
+      count({ unreadOnly: true }),
+      count({ organicOnly: true }),
     ]);
 
-    let unread = unreadWithAwaiting;
     if (unread == null) {
-      unread = await countWhere(Prisma.sql`AND unread_count > 0`, 1_500);
+      flags = { includeAwaitingInUnread: false, includeLabelFilters: false };
+      unread = await count({ unreadOnly: true });
     }
 
-    const ads = fromAd ?? 0;
-    const unreadCount = unread ?? 0;
-    let all = total;
-    if (all == null) {
-      const organic = await countWhere(Prisma.sql`AND from_ad = false`, 2_000);
-      all = organic != null ? organic + ads : Math.max(ads + unreadCount, 0);
+    if (total == null && fromAd != null && normal != null) {
+      total = fromAd + normal;
+    }
+    if (normal == null && total != null && fromAd != null) {
+      normal = Math.max(0, total - fromAd);
+    }
+    if (total == null || fromAd == null || unread == null || normal == null) {
+      throw new ServiceUnavailableException('Không đếm được thống kê hội thoại. Thử lại sau.');
     }
 
-    return {
-      total: all,
-      fromAd: ads,
-      unread: unreadCount,
-      normal: Math.max(0, all - ads),
-    };
+    return { total, fromAd, unread, normal };
   }
 
   async listConversations(
@@ -2763,7 +2760,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           fetchLimit,
           tenantId,
         );
-        if (messages.length === 0 || previewMismatch) {
+        if (messages.length === 0) {
           await reconcileTask;
           messages = await this.loadConversationMessages(conversationId, sinceDate, fetchLimit, beforeDate);
         } else {
@@ -2778,8 +2775,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       const lastGraph = this.lastGraphRefresh.get(conversationId) ?? 0;
       const graphCooled = Date.now() - lastGraph >= this.graphRefreshCooldownMs;
       const needOlderFromGraph = hasBefore && messages.length < Math.min(fetchLimit, 8);
+      // Có tin trong DB thì trả ngay — đừng chờ Graph (mở chat bị trống/treo).
       const mustAwaitGraph =
-        (!hasSince && !hasBefore && (messages.length === 0 || previewMismatch)) || needOlderFromGraph;
+        (!hasSince && !hasBefore && messages.length === 0) || needOlderFromGraph;
       const shouldGraphRefresh = mustAwaitGraph || (forceRefresh && graphCooled);
       const fbConversationId = conv.fbConversationId;
 

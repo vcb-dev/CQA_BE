@@ -28,6 +28,9 @@ export function lastMessagePreviewMismatch(
   const preview = convLastMessage?.trim();
   if (!messages.length) return Boolean(preview);
   if (!preview) return true;
+  if (/^\[\d+\s+ảnh\]$/i.test(preview) || preview === '[Ảnh]' || preview === '[Video]') {
+    return false;
+  }
   const lastText = messages[messages.length - 1]?.text?.trim() ?? '';
   if (!lastText && preview) return false;
   return lastText !== preview;

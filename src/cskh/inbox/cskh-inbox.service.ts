@@ -54,7 +54,7 @@ import { findInboxConversationById,
   isPrismaRetryableDbError,
   type InboxConversationAccess,
 } from './cskh-inbox-conversation.util';
-import { getCskhRunMode, isCskhWorkerProcess } from '../cskh-run-mode';
+import { getCskhRunMode, isCskhApiProcess, isCskhWorkerProcess } from '../cskh-run-mode';
 import { isPrismaRecentlyBusy } from '../../common/prisma-busy.util';
 
 type WebhookMessagingEvent = {
@@ -140,8 +140,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   /** Poll Graph bù tin mới khi webhook Meta chưa về. Tắt: CSKH_INBOX_CATCHUP_ENABLED=false */
   private readonly catchUpEnabled = process.env.CSKH_INBOX_CATCHUP_ENABLED !== 'false';
   private readonly catchUpIntervalMs = Math.max(
-    1_000,
-    Number(process.env.CSKH_INBOX_CATCHUP_INTERVAL_MS || 1_000),
+    2_000,
+    Number(process.env.CSKH_INBOX_CATCHUP_INTERVAL_MS || 2_000),
   );
   private readonly catchUpHotPages = Math.min(
     4,
@@ -538,6 +538,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit(): void {
     if (!this.catchUpEnabled) return;
+    if (!isCskhApiProcess()) {
+      this.logger.log('[catch-up] Bỏ qua trên worker — webhook + API lo realtime');
+      return;
+    }
     this.logger.log(
       `[catch-up] Poll Graph realtime mỗi ${this.catchUpIntervalMs}ms (head ${this.catchUpConvLimit} hội thoại, kênh đang xem)`,
     );
@@ -1718,7 +1722,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       return result;
     } catch (e) {
       const msg = (e as Error).message || '';
-      this.logger.warn(`[getConversationStats] ${msg.slice(0, 160)} — trả 0, không 500 pool`);
+      this.logger.warn(`[getConversationStats] ${msg.slice(0, 160)} — không cache số 0`);
       return { total: 0, fromAd: 0, unread: 0, normal: 0 };
     }
   }
@@ -1782,7 +1786,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     tenantId?: string,
     pageIds?: string[],
   ): Promise<{ total: number; fromAd: number; unread: number; normal: number }> {
-    const filters: Prisma.Sql[] = [];
+    const since = new Date(Date.now() - this.inboxListDefaultDays * 86_400_000);
+    const filters: Prisma.Sql[] = [
+      Prisma.sql`AND last_message_at >= ${since}`,
+    ];
     if (tenantId) filters.push(Prisma.sql`AND tenant_id = ${tenantId}::uuid`);
     if (pageIds?.length === 1) {
       filters.push(Prisma.sql`AND page_id = ${pageIds[0]}`);
@@ -2236,8 +2243,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   /** Kích hoạt sync nhẹ từ Graph sau khi trả danh sách — không block request. */
   private async maybeTriggerListSync(pageId?: string, tenantId?: string): Promise<void> {
     if (isPrismaRecentlyBusy(20_000)) return;
-    // Page đang xem: luôn quét Graph nhẹ (webhook app mới / Dev mode hay hỏng thì list vẫn lên tin mới).
+    // Catch-up đã poll page đang xem — đừng Graph-sync thêm mỗi lần mở list (tranh pool + SSE tin cũ).
     if (pageId) {
+      if (this.catchUpEnabled && isCskhApiProcess()) return;
       const syncKey = `${pageId}:${tenantId ?? ''}`;
       const lastSync = this.lastListSync.get(syncKey) ?? 0;
       if (Date.now() - lastSync < this.listSyncCooldownMs) return;
@@ -2286,7 +2294,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     if (this.graphCoordinator.inboxSyncActive) return;
     if (Date.now() < this.catchUpBackoffUntil) return;
     if (await this.isAuditJobRunning(tenantId)) return;
-    if (!(await this.redisQueue.tryLiveCatchUpLock(1))) return;
+    if (
+      !(await this.redisQueue.tryLiveCatchUpLock(
+        Math.max(2, Math.ceil(this.catchUpIntervalMs / 1000)),
+      ))
+    ) {
+      return;
+    }
 
     const pages = await this.findLiveCatchUpPages(tenantId);
     if (!pages.length) return;
@@ -5101,7 +5115,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         if (monitorMode && oldConv?.lastMessageAt && fbConv.updated_time) {
           const graphAt = new Date(fbConv.updated_time).getTime();
           const dbAt = oldConv.lastMessageAt.getTime();
-          if (graphAt > 0 && Math.abs(graphAt - dbAt) < 1500) return 0;
+          // Graph không mới hơn DB → bỏ, tránh SSE hàng loạt tin cũ mỗi lần catch-up.
+          if (graphAt > 0 && graphAt <= dbAt + 2_000) return 0;
         }
 
         const customerPsid = String(customer.id);
@@ -5147,7 +5162,12 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
             customerPictureUrl: customerPictureUrl ?? undefined,
             unreadCount,
             lastMessage: lastMessagePreview ?? undefined,
-            lastMessageAt: fbConv.updated_time ? new Date(fbConv.updated_time) : undefined,
+            lastMessageAt:
+              fbConv.updated_time &&
+              (!oldConv?.lastMessageAt ||
+                new Date(fbConv.updated_time).getTime() > oldConv.lastMessageAt.getTime() + 1_000)
+                ? new Date(fbConv.updated_time)
+                : undefined,
             tenantId: page.tenantId ?? undefined,
           },
         });
@@ -5165,25 +5185,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           });
         }
 
-        let isNewConv = false;
-        let lastMsgChanged = false;
-        if (!backfillMode) {
-          const unreadCountChanged = oldConv && oldConv.unreadCount !== conv.unreadCount;
-          isNewConv = !oldConv;
-          lastMsgChanged = Boolean(
-            oldConv &&
-              oldConv.lastMessageAt?.getTime() !== conv.lastMessageAt?.getTime(),
-          );
-          if (unreadCountChanged || isNewConv || lastMsgChanged) {
-            this.realtime.publish({
-              type: 'conversation',
-              conversationId: conv.id,
-              pageId: conv.pageId,
-              conversation: this.formatConversationRow(conv),
-              tenantId: conv.tenantId || undefined,
-            });
-          }
-        }
+        const isNewConv = !oldConv;
 
         if (lightweight) {
           const added = await this.fastPersistMessages(
@@ -5193,28 +5195,25 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
             page.tenantId,
             customerPsid,
           );
-          if (!backfillMode && added > 0) {
-            const latest = await this.prisma.cskhInboxMessage.findFirst({
-              where: { conversationId: conv.id },
-              orderBy: { sentAt: 'desc' },
-            });
-            const liveCutoff = new Date(Date.now() - 180_000);
-            const liveRows = await this.prisma.cskhInboxMessage.findMany({
-              where: { conversationId: conv.id, sentAt: { gte: liveCutoff } },
-              orderBy: { sentAt: 'asc' },
-              take: 20,
-            });
-            const bumped =
-              latest && latest.sentAt.getTime() >= liveCutoff.getTime()
-                ? await this.prisma.cskhInboxConversation.update({
-                    where: { id: conv.id },
-                    data: {
-                      lastMessageAt: latest.sentAt,
-                      lastMessage: latest.text || conv.lastMessage,
-                    },
+          if (!backfillMode && (added > 0 || isNewConv)) {
+            const liveCutoff = new Date(Date.now() - 90_000);
+            const liveRows =
+              added > 0
+                ? await this.prisma.cskhInboxMessage.findMany({
+                    where: { conversationId: conv.id, sentAt: { gte: liveCutoff } },
+                    orderBy: { sentAt: 'asc' },
+                    take: 20,
                   })
-                : conv;
+                : [];
             if (liveRows.length) {
+              const latest = liveRows[liveRows.length - 1];
+              const bumped = await this.prisma.cskhInboxConversation.update({
+                where: { id: conv.id },
+                data: {
+                  lastMessageAt: latest.sentAt,
+                  lastMessage: latest.text || conv.lastMessage,
+                },
+              });
               this.realtime.publish({
                 type: 'message',
                 pageId: bumped.pageId,
@@ -5223,13 +5222,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
                 conversation: this.formatConversationRow(bumped),
                 tenantId: bumped.tenantId || undefined,
               });
-            } else if (latest && latest.sentAt.getTime() >= liveCutoff.getTime()) {
+            } else if (isNewConv) {
               this.realtime.publish({
                 type: 'conversation',
-                conversationId: bumped.id,
-                pageId: bumped.pageId,
-                conversation: this.formatConversationRow(bumped),
-                tenantId: bumped.tenantId || undefined,
+                conversationId: conv.id,
+                pageId: conv.pageId,
+                conversation: this.formatConversationRow(conv),
+                tenantId: conv.tenantId || undefined,
               });
             }
           }

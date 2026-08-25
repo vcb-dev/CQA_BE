@@ -47,6 +47,7 @@ import { OmsProductOperationsService } from './oms/oms-product-operations.servic
 import { OmsOrderService } from './oms/oms-order.service';
 import { CustomerAnalyticsService } from './customer-analytics.service';
 import { isSapoApiReady } from './sapo/sapo-api.util';
+import { parseInboxMonthKey } from './inbox/cskh-inbox-month.util';
 import { ConfigService } from '@nestjs/config';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
@@ -881,13 +882,16 @@ export class CskhController {
     @CurrentUser() user: User,
     @Query('pageId') pageId?: string,
     @Query('platform') platform?: string,
+    @Query('month') month?: string,
   ) {
     const graphPlatform: 'instagram' | 'messenger' | undefined =
       platform === 'instagram' ? 'instagram' : platform === 'messenger' ? 'messenger' : undefined;
+    const monthKey = this.parseInboxMonthQuery(month);
     return this.inbox.getConversationStats(
       pageId?.trim(),
       user.tenantId || undefined,
       graphPlatform,
+      monthKey,
     );
   }
 
@@ -908,6 +912,7 @@ export class CskhController {
     @Query('includeLabels') includeLabels?: string,
     @Query('legacy') legacy?: string,
     @Query('platform') platform?: string,
+    @Query('month') month?: string,
   ) {
     const parsedLimit = limit ? Number(limit) : undefined;
     const parsedSinceDays = sinceDays ? Number(sinceDays) : undefined;
@@ -922,6 +927,7 @@ export class CskhController {
       search: search?.trim() || undefined,
       sinceDays:
         Number.isFinite(parsedSinceDays) && parsedSinceDays! > 0 ? parsedSinceDays : undefined,
+      month: this.parseInboxMonthQuery(month),
       labelId: labelId?.trim() || undefined,
       unlabeledOnly: unlabeledOnly === '1' || unlabeledOnly === 'true',
       includeLabels: includeLabels === '1' || includeLabels === 'true',
@@ -1243,5 +1249,15 @@ export class CskhController {
   @UseGuards(JwtAuthGuard)
   getDashboardHeavyStats(@CurrentUser() user: User) {
     return this.cskh.getDashboardHeavyStats(user.tenantId || undefined);
+  }
+
+  private parseInboxMonthQuery(raw?: string): string | undefined {
+    const trimmed = raw?.trim();
+    if (!trimmed) return undefined;
+    const parsed = parseInboxMonthKey(trimmed);
+    if (!parsed) {
+      throw new BadRequestException('month phải là YYYY-MM (ví dụ 2026-08)');
+    }
+    return parsed.key;
   }
 }

@@ -12,7 +12,7 @@ import {
   UnauthorizedException,
   HttpException,
 } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
@@ -67,6 +67,7 @@ export class AuthController {
     };
   }
 
+  @ApiOperation({ summary: 'Đăng ký tài khoản mới bằng email + mật khẩu' })
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
@@ -87,6 +88,7 @@ export class AuthController {
   }
 
   /** Email + mật khẩu → HttpOnly cookies (không trả token trong JSON) */
+  @ApiOperation({ summary: 'Đăng nhập bằng tài khoản + mật khẩu' })
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post('login')
   @HttpCode(HttpStatus.OK)
@@ -106,6 +108,10 @@ export class AuthController {
     };
   }
 
+  @ApiOperation({
+    summary: 'Làm mới access token',
+    description: 'Dùng refresh token từ cookie để cấp lại access/refresh token mới.',
+  })
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   async refreshToken(
@@ -129,6 +135,7 @@ export class AuthController {
     };
   }
 
+  @ApiOperation({ summary: 'Lấy thông tin người dùng đang đăng nhập' })
   @Get('me')
   @ApiBearerAuth('JWT-auth')
   @UseGuards(JwtAuthGuard)
@@ -140,6 +147,7 @@ export class AuthController {
     };
   }
 
+  @ApiOperation({ summary: 'Đăng xuất — xoá cookie accessToken/refreshToken' })
   @Post('logout')
   @HttpCode(HttpStatus.OK)
   async logout(@Res({ passthrough: true }) res: Response) {
@@ -150,6 +158,11 @@ export class AuthController {
     };
   }
 
+  @ApiOperation({
+    summary: 'Bắt đầu đăng nhập Google OAuth (redirect browser)',
+    description:
+      'Không dùng qua Swagger "Try it out" — mở trực tiếp trên trình duyệt để redirect sang Google.',
+  })
   @Get('google')
   async googleAuth(@Res() res: Response) {
     const clientId = this.configService.get<string>('GOOGLE_CLIENT_ID');
@@ -172,6 +185,11 @@ export class AuthController {
     return res.redirect(googleUrl);
   }
 
+  @ApiOperation({
+    summary: 'Callback nhận code từ Google OAuth (redirect browser)',
+    description:
+      'Google gọi endpoint này sau khi người dùng đồng ý đăng nhập; kết quả redirect về FRONTEND_URL.',
+  })
   @Get('google/callback')
   async googleAuthCallback(
     @Query('code') code: string,

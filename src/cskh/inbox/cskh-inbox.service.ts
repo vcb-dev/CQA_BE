@@ -26,7 +26,12 @@ import {
   type FbWebhookReferral,
   parseWebhookReferral,
 } from '../facebook/facebook-referral.util';
-import { getFacebookWebhookVerifyToken, cskhInboxGraphPlatform } from '../facebook/facebook-oauth.util';
+import {
+  getFacebookWebhookVerifyToken,
+  cskhInboxGraphPlatform,
+  cskhChannelPlatform,
+  isMetaGraphChannel,
+} from '../facebook/facebook-oauth.util';
 import {
   CskhInboxRealtimeService,
   type CustomerIntentPayload,
@@ -532,6 +537,76 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     return config;
   }
 
+  /**
+   * IG Direct thường gửi entry.id = Fanpage, sender/recipient = IGSID / IG Professional ID.
+   * Hội thoại Instagram lưu theo pageId = IG ID — map về đúng kênh trước khi ingest.
+   */
+  private async resolveInboxWebhookPageId(
+    entryId: string,
+    event: WebhookMessagingEvent,
+  ): Promise<string> {
+    const sender = String(event.sender?.id || '');
+    const recipient = String(event.recipient?.id || '');
+    for (const id of [sender, recipient]) {
+      if (!id || id === entryId) continue;
+      const cfg = await this.getCachedPageConfig(id);
+      if (cfg && cskhInboxGraphPlatform(cfg.metadata) === 'instagram') {
+        this.ensureInstagramWebhook(cfg);
+        return cfg.pageId;
+      }
+    }
+    const entryCfg = await this.getCachedPageConfig(entryId);
+    if (entryCfg && cskhInboxGraphPlatform(entryCfg.metadata) === 'instagram') {
+      this.ensureInstagramWebhook(entryCfg);
+      return entryId;
+    }
+    if (sender !== entryId && recipient !== entryId) {
+      const linked = await this.findInstagramConfigByFacebookPageId(entryId);
+      if (linked) {
+        this.ensureInstagramWebhook(linked);
+        return linked.pageId;
+      }
+    }
+    return entryId;
+  }
+
+  private readonly igWebhookEnsured = new Set<string>();
+
+  private ensureInstagramWebhook(page: {
+    pageId: string;
+    pageAccessToken: string | null;
+    metadata: unknown;
+  }) {
+    if (cskhInboxGraphPlatform(page.metadata) !== 'instagram') return;
+    if (!page.pageAccessToken || this.igWebhookEnsured.has(page.pageId)) return;
+    this.igWebhookEnsured.add(page.pageId);
+    void this.cskh.subscribeInstagramToWebhook(page.pageId, page.pageAccessToken).catch((e) => {
+      this.logger.warn(`[Webhook] IG subscribe ${page.pageId}: ${(e as Error).message}`);
+    });
+  }
+
+  private async findInstagramConfigByFacebookPageId(
+    facebookPageId: string,
+  ): Promise<FacebookCskhConfig | null> {
+    const cacheKey = `igfb:${facebookPageId}`;
+    const cached = this.configCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < this.configCacheTtlMs) {
+      return cached.config;
+    }
+    try {
+      const config = await this.prisma.facebookCskhConfig.findFirst({
+        where: {
+          metadata: { path: ['facebookPageId'], equals: facebookPageId },
+        },
+      });
+      this.configCache.set(cacheKey, { config, at: Date.now() });
+      if (config) this.configCache.set(config.pageId, { config, at: Date.now() });
+      return config;
+    } catch {
+      return null;
+    }
+  }
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly graph: FacebookGraphService,
@@ -635,9 +710,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private conversationPlatformFromCache(pageId: string): 'messenger' | 'instagram' {
+  private conversationPlatformFromCache(pageId: string): 'messenger' | 'instagram' | 'tiktok' {
     const cached = this.configCache.get(pageId);
-    return cskhInboxGraphPlatform(cached?.config?.metadata);
+    return cskhChannelPlatform(cached?.config?.metadata);
   }
 
   private formatConversationRow(conv: CskhInboxConversation | InboxConversationAccess): InboxConversationPayload {
@@ -1049,6 +1124,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       entry?: Array<{
         id?: string;
         messaging?: WebhookMessagingEvent[];
+        standby?: WebhookMessagingEvent[];
       }>;
     };
     if ((body.object !== 'page' && body.object !== 'instagram') || !Array.isArray(body.entry)) {
@@ -1058,17 +1134,18 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     let eventCount = 0;
     let inlineCount = 0;
     for (const entry of body.entry) {
-      const pageId = String(entry.id || '');
-      if (!pageId) continue;
-      for (const event of entry.messaging ?? []) {
+      const entryId = String(entry.id || '');
+      if (!entryId) continue;
+      const events = [...(entry.messaging ?? []), ...(entry.standby ?? [])];
+      for (const event of events) {
         eventCount++;
-        // Luôn lưu DB inline — Redis queue chỉ là tùy chọn, không được chặn luồng chính.
+        const pageId = await this.resolveInboxWebhookPageId(entryId, event);
         this.scheduleWebhookIngestInline(pageId, event);
         inlineCount++;
       }
     }
     this.logger.log(
-      `[Webhook] ${eventCount} events (inline=${inlineCount}, redis=${this.redisQueue.isRedisQueueEnabled() ? 'on' : 'off'}), ${Date.now() - startWebhook}ms`,
+      `[Webhook] object=${body.object} ${eventCount} events (inline=${inlineCount}, redis=${this.redisQueue.isRedisQueueEnabled() ? 'on' : 'off'}), ${Date.now() - startWebhook}ms`,
     );
     inboxRtTraceDone(trace, { eventCount, inlineCount, ackMs: Date.now() - startWebhook });
     return { ok: true };
@@ -1718,7 +1795,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async pageIdsForGraphPlatform(
-    platform: 'messenger' | 'instagram',
+    platform: 'messenger' | 'instagram' | 'tiktok',
     tenantId?: string,
   ): Promise<string[]> {
     const rows = await this.prisma.facebookCskhConfig.findMany({
@@ -1726,14 +1803,14 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       select: { pageId: true, metadata: true },
     });
     return rows
-      .filter((r) => cskhInboxGraphPlatform(r.metadata) === platform)
+      .filter((r) => cskhChannelPlatform(r.metadata) === platform)
       .map((r) => r.pageId);
   }
 
   async getConversationStats(
     pageId?: string,
     tenantId?: string,
-    platform?: 'messenger' | 'instagram',
+    platform?: 'messenger' | 'instagram' | 'tiktok',
     month?: string,
   ) {
     const window = this.resolveInboxTimeWindow({ month });
@@ -1787,7 +1864,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   private async computeConversationStats(
     pageId?: string,
     tenantId?: string,
-    platform?: 'messenger' | 'instagram',
+    platform?: 'messenger' | 'instagram' | 'tiktok',
     month?: string,
   ) {
     let pageIds: string[] | undefined;
@@ -1957,7 +2034,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       labelId?: string;
       unlabeledOnly?: boolean;
       includeLabels?: boolean;
-      platform?: 'messenger' | 'instagram';
+      platform?: 'messenger' | 'instagram' | 'tiktok';
     },
   ): Promise<{ items: CskhInboxConversation[]; nextCursor: string | null; hasMore: boolean }> {
     this.touchUserActivity(pageId);
@@ -2023,7 +2100,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       labelId?: string;
       unlabeledOnly?: boolean;
       includeLabels?: boolean;
-      platform?: 'messenger' | 'instagram';
+      platform?: 'messenger' | 'instagram' | 'tiktok';
     } | undefined,
     listCacheKey: string,
   ): Promise<{ items: CskhInboxConversation[]; nextCursor: string | null; hasMore: boolean }> {
@@ -2455,13 +2532,15 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const viewedId =
       this.liveViewedPageId || (await this.redisQueue.getViewedInboxPage()) || null;
 
-    const allPages = await this.prisma.facebookCskhConfig.findMany({
-      where: {
-        pageAccessToken: { not: '' },
-        ...(tenantId ? { tenantId } : {}),
-      },
-      orderBy: { pageName: 'asc' },
-    });
+    const allPages = (
+      await this.prisma.facebookCskhConfig.findMany({
+        where: {
+          pageAccessToken: { not: '' },
+          ...(tenantId ? { tenantId } : {}),
+        },
+        orderBy: { pageName: 'asc' },
+      })
+    ).filter((p) => isMetaGraphChannel(p.metadata));
     if (!allPages.length) return [];
 
     const recent = await this.prisma.cskhInboxConversation.findMany({
@@ -2482,6 +2561,24 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     for (const id of hotIds) {
       const page = byId.get(id);
       if (page) selected.push(page);
+    }
+    for (const page of allPages) {
+      if (cskhInboxGraphPlatform(page.metadata) !== 'instagram') continue;
+      if (selected.some((p) => p.pageId === page.pageId)) continue;
+      const fbPageId = String(
+        (page.metadata as { facebookPageId?: unknown } | null)?.facebookPageId || '',
+      );
+      if (viewedId && (page.pageId === viewedId || fbPageId === viewedId)) {
+        selected.push(page);
+        this.ensureInstagramWebhook(page);
+      }
+    }
+    if (!selected.some((p) => cskhInboxGraphPlatform(p.metadata) === 'instagram')) {
+      const firstIg = allPages.find((p) => cskhInboxGraphPlatform(p.metadata) === 'instagram');
+      if (firstIg) {
+        selected.push(firstIg);
+        this.ensureInstagramWebhook(firstIg);
+      }
     }
 
     if (!selected.length) {

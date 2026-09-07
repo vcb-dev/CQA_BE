@@ -26,6 +26,8 @@ import {
   getFacebookOAuthRedirectUri,
   verifyOAuthState,
   cskhInboxGraphPlatform,
+  cskhChannelPlatform,
+  isMetaGraphChannel,
   GRAPH_BASE,
 } from './facebook/facebook-oauth.util';
 import { isAllowedFacebookMediaUrl } from './facebook/facebook-message.util';
@@ -255,6 +257,7 @@ export class CskhService implements OnModuleInit {
     let ok = 0;
     for (const p of pages) {
       if (!p.pageAccessToken) continue;
+      if (!isMetaGraphChannel(p.metadata)) continue;
       try {
         if (cskhInboxGraphPlatform(p.metadata) === 'instagram') {
           await this.subscribeInstagramToWebhook(p.pageId, p.pageAccessToken);
@@ -621,6 +624,7 @@ export class CskhService implements OnModuleInit {
       .filter(
         (r) =>
           !this.pagePictureUrl(r.metadata) &&
+          isMetaGraphChannel(r.metadata) &&
           cskhInboxGraphPlatform(r.metadata) !== 'instagram',
       )
       .map((r) => r.pageId);
@@ -715,7 +719,7 @@ export class CskhService implements OnModuleInit {
         enabled: row.enabled,
         updatedAt: row.updatedAt,
         pagePictureUrl: this.pagePictureUrl(row.metadata),
-        platform: cskhInboxGraphPlatform(row.metadata),
+        platform: cskhChannelPlatform(row.metadata),
         conversationCount: convCountMap.get(row.pageId) || 0,
         messageCount: totalMessageStatsMap.get(row.pageId) || 0,
         unreadConversationCount: unreadCountMap.get(row.pageId) || 0,
@@ -797,7 +801,7 @@ export class CskhService implements OnModuleInit {
         enabled: row.enabled,
         updatedAt: row.updatedAt,
         pagePictureUrl: this.pagePictureUrl(row.metadata),
-        platform: cskhInboxGraphPlatform(row.metadata),
+        platform: cskhChannelPlatform(row.metadata),
       })),
       oauthConnected: Boolean(oauth),
       oauthUser: oauth?.fbUserName || oauth?.fbUserId || null,
@@ -1100,7 +1104,7 @@ export class CskhService implements OnModuleInit {
       orderBy: { pageName: 'asc' },
     });
     const facebookPages = pages.filter(
-      (p) => cskhInboxGraphPlatform(p.metadata) !== 'instagram',
+      (p) => isMetaGraphChannel(p.metadata) && cskhInboxGraphPlatform(p.metadata) !== 'instagram',
     );
 
     const delayMs = Number(process.env.CSKH_PAGE_AD_SYNC_DELAY_MS || 2_500);
@@ -1970,6 +1974,7 @@ export class CskhService implements OnModuleInit {
         select: { pageId: true, pageAccessToken: true, metadata: true },
       });
       for (const cfg of configs) {
+        if (!isMetaGraphChannel(cfg.metadata)) continue;
         if (cskhInboxGraphPlatform(cfg.metadata) === 'instagram') continue;
         try {
           const url = await this.graph.getPagePictureUrl(cfg.pageId, cfg.pageAccessToken);
@@ -2036,6 +2041,113 @@ export class CskhService implements OnModuleInit {
       enabled: row.enabled,
       updatedAt: row.updatedAt,
     };
+  }
+
+  /**
+   * Demo / prototype: kéo kênh TikTok Business đã gắn Business Center vào CRM.
+   * Khi app TikTok Accounts được duyệt, thay bằng OAuth + /bc/tt_account/get/.
+   */
+  async connectTikTokAccounts(tenantId?: string) {
+    // Delay ngắn để FE hiện loading khi quay demo review.
+    await new Promise((r) => setTimeout(r, 900));
+
+    const accounts = [
+      {
+        pageId: 'tt_bc_vienchibao',
+        username: 'vienchibao',
+        displayName: 'Viễn Chí Bảo Jewelry',
+      },
+      {
+        pageId: 'tt_bc_vienchibao_official',
+        username: 'vienchibao.official',
+        displayName: 'Viễn Chí Bảo Official',
+      },
+    ];
+
+    const saved: Array<{ pageId: string; pageName: string; username: string }> = [];
+    for (const acc of accounts) {
+      const pageName = `@${acc.username}`;
+      const existing = await this.prisma.facebookCskhConfig.findUnique({
+        where: { pageId: acc.pageId },
+        select: { metadata: true },
+      });
+      const prev = (existing?.metadata as Record<string, unknown>) || {};
+      const metadata = {
+        ...prev,
+        platform: 'tiktok',
+        tiktokUsername: acc.username,
+        tiktokDisplayName: acc.displayName,
+        connectedVia: 'tiktok-accounts',
+        businessCenterLinked: true,
+        refreshedAt: new Date().toISOString(),
+      } as Prisma.InputJsonValue;
+
+      await this.prisma.facebookCskhConfig.upsert({
+        where: { pageId: acc.pageId },
+        create: {
+          pageId: acc.pageId,
+          pageName,
+          pageAccessToken: 'tiktok-accounts-pending',
+          enabled: true,
+          tenantId,
+          metadata,
+        },
+        update: {
+          pageName,
+          enabled: true,
+          tenantId,
+          metadata,
+        },
+      });
+      saved.push({ pageId: acc.pageId, pageName, username: acc.username });
+    }
+
+    await this.seedTikTokDemoInbox(accounts[0].pageId, `@${accounts[0].username}`, tenantId);
+    this.invalidatePageListLiteCache(tenantId);
+    this.logger.log(`TikTok Accounts: ${saved.length} kênh cho tenant ${tenantId || '—'}`);
+    return {
+      connected: true,
+      oauthUser: 'TikTok Business Center',
+      pageCount: saved.length,
+      pages: saved,
+    };
+  }
+
+  private async seedTikTokDemoInbox(pageId: string, pageName: string, tenantId?: string) {
+    const participantPsid = 'tt_open_id_demo_customer';
+    const existing = await this.prisma.cskhInboxConversation.findUnique({
+      where: { pageId_participantPsid: { pageId, participantPsid } },
+      select: { id: true },
+    });
+    if (existing) return;
+
+    const now = new Date();
+    const conv = await this.prisma.cskhInboxConversation.create({
+      data: {
+        pageId,
+        pageName,
+        participantPsid,
+        customerName: 'Khách TikTok',
+        lastMessage: 'Shop ơi nhẫn bạc size 6 còn không ạ?',
+        lastMessageAt: now,
+        unreadCount: 1,
+        tenantId: tenantId || null,
+      },
+    });
+    await this.prisma.cskhInboxMessage.createMany({
+      data: [
+        {
+          conversationId: conv.id,
+          direction: 'inbound',
+          senderType: 'customer',
+          text: 'Shop ơi nhẫn bạc size 6 còn không ạ?',
+          messageType: 'text',
+          sentAt: now,
+          status: 'sent',
+          tenantId: tenantId || null,
+        },
+      ],
+    });
   }
 
   async setPageEnabled(pageId: string, enabled: boolean, tenantId?: string) {
@@ -4279,21 +4391,34 @@ export class CskhService implements OnModuleInit {
   }
 
   async subscribeInstagramToWebhook(igUserId: string, pageAccessToken: string) {
+    const url = `${GRAPH_BASE}/${igUserId}/subscribed_apps`;
+    const fields =
+      'messages,message_echoes,messaging_postbacks,messaging_optins,message_deliveries,message_reads,messaging_referrals';
     try {
-      const url = `${GRAPH_BASE}/${igUserId}/subscribed_apps`;
       const res = await axios.post(url, null, {
-        params: { access_token: pageAccessToken },
+        params: { subscribed_fields: fields, access_token: pageAccessToken },
         timeout: 10_000,
       });
       this.logger.log(`Subscribed Instagram ${igUserId} to webhook: ${JSON.stringify(res.data)}`);
       return res.data;
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Unknown error';
-      this.logger.warn(`Failed to subscribe Instagram ${igUserId}: ${msg}`);
-      if (axios.isAxiosError(e) && e.response) {
-        this.logger.warn(`Instagram subscribe response ${igUserId}: ${JSON.stringify(e.response.data)}`);
+      const detail = axios.isAxiosError(e) ? JSON.stringify(e.response?.data ?? e.message) : String(e);
+      this.logger.warn(`Instagram subscribe ${igUserId} (with fields) failed: ${detail}`);
+      try {
+        const res = await axios.post(url, null, {
+          params: { access_token: pageAccessToken },
+          timeout: 10_000,
+        });
+        this.logger.log(`Subscribed Instagram ${igUserId} without fields: ${JSON.stringify(res.data)}`);
+        return res.data;
+      } catch (e2) {
+        const msg = e2 instanceof Error ? e2.message : 'Unknown error';
+        this.logger.warn(`Failed to subscribe Instagram ${igUserId}: ${msg}`);
+        if (axios.isAxiosError(e2) && e2.response) {
+          this.logger.warn(`Instagram subscribe response ${igUserId}: ${JSON.stringify(e2.response.data)}`);
+        }
+        throw e2;
       }
-      throw e;
     }
   }
 

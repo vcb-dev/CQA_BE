@@ -19,16 +19,24 @@ export const FB_OAUTH_SCOPES = [
 ].join(',');
 
 export type CskhInboxGraphPlatform = 'messenger' | 'instagram';
+export type CskhChannelPlatform = 'messenger' | 'instagram' | 'tiktok';
+
+export function cskhChannelPlatform(metadata: unknown): CskhChannelPlatform {
+  const raw =
+    metadata && typeof metadata === 'object'
+      ? (metadata as { platform?: unknown }).platform
+      : undefined;
+  if (raw === 'instagram') return 'instagram';
+  if (raw === 'tiktok') return 'tiktok';
+  return 'messenger';
+}
+
+export function isMetaGraphChannel(metadata: unknown): boolean {
+  return cskhChannelPlatform(metadata) !== 'tiktok';
+}
 
 export function cskhInboxGraphPlatform(metadata: unknown): CskhInboxGraphPlatform {
-  if (
-    metadata &&
-    typeof metadata === 'object' &&
-    (metadata as { platform?: unknown }).platform === 'instagram'
-  ) {
-    return 'instagram';
-  }
-  return 'messenger';
+  return cskhChannelPlatform(metadata) === 'instagram' ? 'instagram' : 'messenger';
 }
 
 export function getFacebookAppId(): string {

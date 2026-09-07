@@ -183,6 +183,13 @@ export class CskhController {
     });
   }
 
+  /** Kết nối kênh TikTok Business (Accounts) — prototype cho review / demo. */
+  @Post('tiktok/connect')
+  @UseGuards(JwtAuthGuard)
+  connectTikTokAccounts(@CurrentUser() user: User) {
+    return this.cskh.connectTikTokAccounts(user.tenantId || undefined);
+  }
+
   /** Kiểm tra nhanh BE đã deploy bản có thống kê tin theo tháng chưa. */
   @Get('features')
   @ApiOperation({ summary: 'Kiểm tra nhanh các tính năng BE đã deploy (feature flags)' })
@@ -962,8 +969,7 @@ export class CskhController {
     @Query('platform') platform?: string,
     @Query('month') month?: string,
   ) {
-    const graphPlatform: 'instagram' | 'messenger' | undefined =
-      platform === 'instagram' ? 'instagram' : platform === 'messenger' ? 'messenger' : undefined;
+    const graphPlatform = this.parseInboxPlatformQuery(platform);
     const monthKey = this.parseInboxMonthQuery(month);
     return this.inbox.getConversationStats(
       pageId?.trim(),
@@ -995,8 +1001,7 @@ export class CskhController {
   ) {
     const parsedLimit = limit ? Number(limit) : undefined;
     const parsedSinceDays = sinceDays ? Number(sinceDays) : undefined;
-    const graphPlatform: 'instagram' | 'messenger' | undefined =
-      platform === 'instagram' ? 'instagram' : platform === 'messenger' ? 'messenger' : undefined;
+    const graphPlatform = this.parseInboxPlatformQuery(platform);
     const opts = {
       fromAdOnly: fromAdOnly === '1' || fromAdOnly === 'true',
       unreadOnly: unreadOnly === '1' || unreadOnly === 'true',
@@ -1010,7 +1015,7 @@ export class CskhController {
       labelId: labelId?.trim() || undefined,
       unlabeledOnly: unlabeledOnly === '1' || unlabeledOnly === 'true',
       includeLabels: includeLabels === '1' || includeLabels === 'true',
-      platform: graphPlatform as 'instagram' | 'messenger' | undefined,
+      platform: graphPlatform,
     };
     if (legacy === '1' || legacy === 'true') {
       return this.inbox.listConversationsLegacy(pageId?.trim(), user.tenantId || undefined, opts);
@@ -1376,6 +1381,13 @@ export class CskhController {
   @UseGuards(JwtAuthGuard)
   getDashboardHeavyStats(@CurrentUser() user: User) {
     return this.cskh.getDashboardHeavyStats(user.tenantId || undefined);
+  }
+
+  private parseInboxPlatformQuery(
+    raw?: string,
+  ): 'instagram' | 'messenger' | 'tiktok' | undefined {
+    if (raw === 'instagram' || raw === 'messenger' || raw === 'tiktok') return raw;
+    return undefined;
   }
 
   private parseInboxMonthQuery(raw?: string): string | undefined {

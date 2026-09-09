@@ -1648,7 +1648,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const pageName = config?.pageName ?? null;
     const referralAt = new Date(event.timestamp ?? Date.now());
 
-    await this.prisma.cskhInboxConversation.upsert({
+    // Luôn ghi đè ad mới nhất khi Meta gửi referral (không giữ QC lần đầu).
+    const conv = await this.prisma.cskhInboxConversation.upsert({
       where: { pageId_participantPsid: { pageId, participantPsid: customerPsid } },
       create: {
         pageId,
@@ -1660,17 +1661,71 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         referralSource: parsed.referralSource,
         referralAt,
         tenantId: config?.tenantId || null,
+        lastMessage: parsed.adTitle
+          ? `QC: ${parsed.adTitle}`
+          : 'Đã trả lời một quảng cáo',
+        lastMessageAt: referralAt,
       },
       update: {
         pageName: pageName ?? undefined,
         fromAd: true,
-        adId: parsed.adId ?? undefined,
-        adTitle: parsed.adTitle ?? undefined,
+        ...(parsed.adId ? { adId: parsed.adId } : {}),
+        ...(parsed.adTitle ? { adTitle: parsed.adTitle } : {}),
         referralSource: parsed.referralSource ?? undefined,
         referralAt,
         tenantId: config?.tenantId || undefined,
+        lastMessage: parsed.adTitle
+          ? `QC: ${parsed.adTitle}`
+          : parsed.adId
+            ? `QC: ${parsed.adId}`
+            : undefined,
+        lastMessageAt: referralAt,
       },
     });
+
+    // Mỗi lần bấm ad → 1 tin trong thread (ảnh + tên + ID), không chỉ ghi 1 lần đầu.
+    if (parsed.adId) {
+      const fbMessageId = `adref:${parsed.adId}:${referralAt.getTime()}`;
+      const existing = await this.prisma.cskhInboxMessage.findUnique({
+        where: { fbMessageId },
+      });
+      if (!existing) {
+        const created = await this.prisma.cskhInboxMessage.create({
+          data: {
+            conversationId: conv.id,
+            fbMessageId,
+            direction: 'inbound',
+            senderType: 'customer',
+            text: parsed.adTitle?.trim() || 'Đã trả lời một quảng cáo',
+            translatedText: `ID ${parsed.adId}`,
+            messageType: 'ad_referral',
+            attachmentUrl: parsed.adImageUrl,
+            sentAt: referralAt,
+            status: 'sent',
+            tenantId: config?.tenantId || null,
+          },
+        });
+        this.publishMessageRealtime(
+          pageId,
+          conv.id,
+          [created],
+          false,
+          conv.tenantId || undefined,
+          conv,
+        );
+        this.logger.log(
+          `[Ad referral] page=${pageId} conv=${conv.id} adId=${parsed.adId} title=${parsed.adTitle ?? ''}`,
+        );
+      }
+    } else {
+      this.realtime.publish({
+        type: 'conversation',
+        conversationId: conv.id,
+        pageId,
+        conversation: this.formatConversationRow(conv),
+        tenantId: conv.tenantId || undefined,
+      });
+    }
   }
 
   /** Heuristic: tin hệ thống Graph báo khách vào từ quảng cáo (không có ad_id). */

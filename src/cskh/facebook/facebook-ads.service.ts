@@ -12,6 +12,8 @@ export type AdInsightsPayload = {
   adName: string | null;
   adsetName: string | null;
   campaignName: string | null;
+  /** Ảnh creative / thumbnail từ Marketing API hoặc webhook ads_context. */
+  adImageUrl?: string | null;
   currency: string | null;
   spend: number | null;
   impressions: number | null;
@@ -97,6 +99,10 @@ type AccountEstimateResult = {
 export class FacebookAdsService {
   private readonly logger = new Logger(FacebookAdsService.name);
   private readonly cache = new Map<string, { at: number; data: Omit<AdInsightsPayload, 'estimatedForThisConversation' | 'localConversationCount' | 'unavailableReason'> }>();
+  private readonly creativeCache = new Map<
+    string,
+    { at: number; data: { adName: string | null; adImageUrl: string | null } }
+  >();
   private readonly cacheTtlMs = Number(process.env.CSKH_AD_INSIGHTS_CACHE_MS || 3_600_000);
   private readonly pageAccountFilterCache = new Map<string, { at: number; accounts: AdAccountRow[] }>();
   private readonly pageAccountFilterCacheTtlMs = 3_600_000;
@@ -431,7 +437,7 @@ export class FacebookAdsService {
   ): Promise<Omit<AdInsightsPayload, 'estimatedForThisConversation' | 'localConversationCount' | 'unavailableReason'>> {
     const since = opts?.since ? this.formatDate(opts.since) : null;
     const until = opts?.until ? this.formatDate(opts.until) : null;
-    const cacheKey = `${adId}:v2:${since ?? 'default'}:${until ?? 'default'}`;
+    const cacheKey = `${adId}:v3:${since ?? 'default'}:${until ?? 'default'}`;
     if (!opts?.bypassCache) {
       const cached = this.cache.get(cacheKey);
       if (cached && Date.now() - cached.at < this.cacheTtlMs) {
@@ -452,17 +458,21 @@ export class FacebookAdsService {
     }
 
     try {
-      const res = await axios.get(`${GRAPH_BASE}/${adId}/insights`, {
-        params,
-        timeout: 30_000,
-      });
-      const row = Array.isArray(res.data?.data) ? res.data.data[0] : null;
+      const [insightsRes, creative] = await Promise.all([
+        axios.get(`${GRAPH_BASE}/${adId}/insights`, {
+          params,
+          timeout: 30_000,
+        }),
+        this.fetchAdCreativePreview(adId, userAccessToken),
+      ]);
+      const row = Array.isArray(insightsRes.data?.data) ? insightsRes.data.data[0] : null;
       if (!row) {
         return {
           adId,
-          adName: null,
+          adName: creative.adName,
           adsetName: null,
           campaignName: null,
+          adImageUrl: creative.adImageUrl,
           currency: null,
           spend: null,
           impressions: null,
@@ -480,9 +490,10 @@ export class FacebookAdsService {
 
       const payload = {
         adId,
-        adName: (row.ad_name as string | undefined) ?? null,
+        adName: (row.ad_name as string | undefined) ?? creative.adName ?? null,
         adsetName: (row.adset_name as string | undefined) ?? null,
         campaignName: (row.campaign_name as string | undefined) ?? null,
+        adImageUrl: creative.adImageUrl,
         currency: (row.account_currency as string | undefined) ?? null,
         spend: Number.isFinite(spend) ? spend : null,
         impressions: row.impressions != null ? Number(row.impressions) : null,
@@ -497,7 +508,63 @@ export class FacebookAdsService {
     } catch (e) {
       const msg = this.graphErrorMessage(e);
       this.logger.warn(`fetchAdInsights ad=${adId}: ${msg}`);
-      throw new Error(msg);
+      throw e;
+    }
+  }
+
+  /** Ảnh + tên creative của ad (thumbnail / image_url). Cần ads_read. */
+  async fetchAdCreativePreview(
+    adId: string,
+    userAccessToken: string,
+  ): Promise<{ adName: string | null; adImageUrl: string | null }> {
+    const id = adId?.trim();
+    if (!id) return { adName: null, adImageUrl: null };
+    const cacheKey = `creative:${id}`;
+    const cached = this.creativeCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < this.cacheTtlMs) {
+      return cached.data;
+    }
+    try {
+      const res = await axios.get(`${GRAPH_BASE}/${id}`, {
+        params: {
+          fields:
+            'name,creative{title,body,image_url,thumbnail_url,object_story_spec}',
+          access_token: userAccessToken,
+        },
+        timeout: 15_000,
+      });
+      const creative = (res.data?.creative ?? {}) as {
+        title?: string;
+        image_url?: string;
+        thumbnail_url?: string;
+        object_story_spec?: {
+          link_data?: { picture?: string; name?: string; message?: string };
+          video_data?: { image_url?: string };
+          photo_data?: { url?: string };
+        };
+      };
+      const link = creative.object_story_spec?.link_data;
+      const adImageUrl =
+        [
+          creative.image_url,
+          creative.thumbnail_url,
+          link?.picture,
+          creative.object_story_spec?.video_data?.image_url,
+          creative.object_story_spec?.photo_data?.url,
+        ]
+          .map((u) => (typeof u === 'string' ? u.trim() : ''))
+          .find((u) => u.startsWith('http')) || null;
+      const adName =
+        (typeof res.data?.name === 'string' && res.data.name.trim()) ||
+        (typeof creative.title === 'string' && creative.title.trim()) ||
+        (typeof link?.name === 'string' && link.name.trim()) ||
+        null;
+      const data = { adName, adImageUrl };
+      this.creativeCache.set(cacheKey, { at: Date.now(), data });
+      return data;
+    } catch (e) {
+      this.logger.debug(`fetchAdCreativePreview ${id}: ${this.graphErrorMessage(e)}`);
+      return { adName: null, adImageUrl: null };
     }
   }
 

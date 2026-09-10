@@ -1,8 +1,8 @@
-import { CqaRbacRole } from './rbac-role.util';
+import { UserRole } from '@prisma/client';
 
 /** Định nghĩa tĩnh 1 vai trò — dùng cho cột "Vai trò" + "Quyền chính" của FE. */
 export interface RbacRoleDef {
-  code: CqaRbacRole;
+  code: UserRole;
   label: string;
   /** Cột "Quyền chính" — 1 dòng, nguyên văn mockup. */
   description: string;
@@ -12,7 +12,7 @@ export interface RbacRoleDef {
 
 export const RBAC_CATALOG: RbacRoleDef[] = [
   {
-    code: 'admin',
+    code: UserRole.admin,
     label: 'Admin',
     description: 'Toàn bộ hệ thống, chỉnh sửa tiêu chí & API',
     permissions: [
@@ -23,7 +23,7 @@ export const RBAC_CATALOG: RbacRoleDef[] = [
     ],
   },
   {
-    code: 'manager',
+    code: UserRole.manager,
     label: 'Manager',
     description: 'Xem báo cáo, phê duyệt audit nháp',
     permissions: [
@@ -33,8 +33,8 @@ export const RBAC_CATALOG: RbacRoleDef[] = [
     ],
   },
   {
-    code: 'auditor',
-    label: 'Auditor',
+    code: UserRole.staff,
+    label: 'Staff',
     description: 'Chấm điểm thủ công, đánh giá phụ',
     permissions: [
       'Chấm điểm hội thoại thủ công',
@@ -43,8 +43,8 @@ export const RBAC_CATALOG: RbacRoleDef[] = [
     ],
   },
   {
-    code: 'agent',
-    label: 'Agent',
+    code: UserRole.user,
+    label: 'User',
     description: 'Chỉ xem điểm cá nhân và chat khách hàng',
     permissions: [
       'Xem điểm & nhận xét cá nhân',
@@ -54,6 +54,9 @@ export const RBAC_CATALOG: RbacRoleDef[] = [
   },
 ];
 
+/** Danh sách mã vai trò — dùng cho DTO, suy ra từ RBAC_CATALOG để không lệch. */
+export const RBAC_ROLE_CODES: UserRole[] = RBAC_CATALOG.map((r) => r.code);
+
 export const RBAC_CATALOG_BY_CODE = Object.fromEntries(
   RBAC_CATALOG.map((r) => [r.code, r]),
-) as Record<CqaRbacRole, RbacRoleDef>;
+) as Record<UserRole, RbacRoleDef>;

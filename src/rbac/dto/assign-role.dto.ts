@@ -1,9 +1,10 @@
 import { IsIn } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
-import { CQA_RBAC_ROLES, type CqaRbacRole } from '../rbac-role.util';
+import { UserRole } from '@prisma/client';
+import { RBAC_ROLE_CODES } from '../rbac.catalog';
 
 export class AssignRoleDto {
-  @ApiProperty({ enum: CQA_RBAC_ROLES, example: 'manager' })
-  @IsIn(CQA_RBAC_ROLES, { message: 'Vai trò không hợp lệ' })
-  role: CqaRbacRole;
+  @ApiProperty({ enum: RBAC_ROLE_CODES, example: 'manager' })
+  @IsIn(RBAC_ROLE_CODES, { message: 'Vai trò không hợp lệ' })
+  role: UserRole;
 }

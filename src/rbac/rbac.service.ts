@@ -3,14 +3,11 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { primaryRoleFromPrisma, prismaRolesFromInput } from '../users/user-role.util';
 import { RbacActivityService } from './rbac-activity.service';
 import { RBAC_CATALOG, RBAC_CATALOG_BY_CODE } from './rbac.catalog';
-import {
-  CqaRbacRole,
-  prismaRolesFromRbacRole,
-  rbacRoleFromPrisma,
-} from './rbac-role.util';
 
 @Injectable()
 export class RbacService {
@@ -22,9 +19,9 @@ export class RbacService {
   /** Catalog 4 vai trò + số user đang giữ mỗi vai trò. */
   async listRoles() {
     const rows = await this.prisma.user.findMany({ select: { roles: true } });
-    const counts = new Map<CqaRbacRole, number>();
+    const counts = new Map<UserRole, number>();
     for (const r of rows) {
-      const code = rbacRoleFromPrisma(r.roles);
+      const code = primaryRoleFromPrisma(r.roles);
       counts.set(code, (counts.get(code) ?? 0) + 1);
     }
     return RBAC_CATALOG.map((def) => ({
@@ -47,7 +44,7 @@ export class RbacService {
     });
     const activeMap = await this.activity.getActiveMap(rows.map((u) => u.id));
     return rows.map((u) => {
-      const role = rbacRoleFromPrisma(u.roles);
+      const role = primaryRoleFromPrisma(u.roles);
       const def = RBAC_CATALOG_BY_CODE[role];
       return {
         id: Number(u.id),
@@ -64,7 +61,7 @@ export class RbacService {
   }
 
   /** Đổi vai trò của 1 user. Ghi thẳng cột users.roles. */
-  async assignRole(userId: string, role: CqaRbacRole) {
+  async assignRole(userId: string, role: UserRole) {
     if (!/^\d+$/.test(userId)) {
       throw new BadRequestException('id người dùng không hợp lệ');
     }
@@ -78,7 +75,7 @@ export class RbacService {
     }
     await this.prisma.user.update({
       where: { id },
-      data: { roles: { set: prismaRolesFromRbacRole(role) } },
+      data: { roles: { set: prismaRolesFromInput(role) } },
     });
     return { id: Number(userId), role };
   }

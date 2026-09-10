@@ -1,9 +1,10 @@
 import { Body, Controller, Get, Param, Put, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { UserRole } from '@prisma/client';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
-import { UserRole } from '../users/entities/user.entity';
+
 import { RbacService } from './rbac.service';
 import { AssignRoleDto } from './dto/assign-role.dto';
 
@@ -11,7 +12,7 @@ import { AssignRoleDto } from './dto/assign-role.dto';
 @ApiBearerAuth('JWT-auth')
 @Controller('rbac')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN)
+@Roles(UserRole.admin)
 export class RbacController {
   constructor(private readonly rbac: RbacService) {}
 

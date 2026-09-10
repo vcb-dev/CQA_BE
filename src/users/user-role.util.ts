@@ -1,28 +1,36 @@
-import { User, UserRole as PrismaUserRole } from '@prisma/client';
-import { UserRole as CqaUserRole } from './entities/user.entity';
+import { User, UserRole } from '@prisma/client';
 
-/** Map Prisma roles → role string CQA API/JWT (tương thích FE cũ). */
-export function cqaRoleFromPrisma(roles: PrismaUserRole[]): CqaUserRole {
-  if (roles.includes('admin')) return CqaUserRole.ADMIN;
-  if (roles.includes('store_manager')) return CqaUserRole.MANAGER;
-  if (roles.includes('sales')) return CqaUserRole.STAFF;
-  return CqaUserRole.USER;
+const ROLE_PRIORITY: UserRole[] = ['admin', 'manager', 'staff', 'user'];
+
+/** Role chính từ mảng Prisma (ưu tiên admin → manager → staff → user). */
+export function primaryRoleFromPrisma(roles: UserRole[]): UserRole {
+  for (const role of ROLE_PRIORITY) {
+    if (roles.includes(role)) return role;
+  }
+  return UserRole.user;
 }
 
-/** Map role CQA → mảng Prisma UserRole khi tạo/cập nhật user. */
-export function prismaRolesFromCqaRole(role: string): PrismaUserRole[] {
+/** Chuẩn hóa input role → mảng UserRole Prisma khi tạo/cập nhật user. */
+export function prismaRolesFromInput(role: string): UserRole[] {
   switch (role) {
-    case CqaUserRole.ADMIN:
+    case UserRole.admin:
     case 'admin':
-      return ['admin'];
-    case CqaUserRole.MANAGER:
+      return [UserRole.admin];
+    case UserRole.manager:
     case 'manager':
-      return ['store_manager'];
-    case CqaUserRole.STAFF:
+    case 'store_manager':
+      return [UserRole.manager];
+    case UserRole.staff:
     case 'staff':
-      return ['sales'];
+    case 'sales':
+    case 'warehouse_staff':
+    case 'purchasing':
+      return [UserRole.staff];
+    case UserRole.user:
+    case 'user':
+      return [UserRole.user];
     default:
-      return ['sales'];
+      return [UserRole.user];
   }
 }
 
@@ -36,7 +44,7 @@ export function toUserIdNumber(id: bigint | number | null | undefined): number |
   return Number(id);
 }
 
-/** Trả về user cho API — giữ field `fullName`, `phoneNumber`, `role` cho FE cũ. */
+/** Trả về user cho API — giữ field `fullName`, `phoneNumber`, `role` cho FE. */
 export function toPublicUser(user: User) {
   const { passwordHash: _passwordHash, name, phone, roles, ...rest } = user;
   return {
@@ -44,6 +52,6 @@ export function toPublicUser(user: User) {
     id: Number(user.id),
     fullName: name,
     phoneNumber: phone,
-    role: cqaRoleFromPrisma(roles),
+    role: primaryRoleFromPrisma(roles),
   };
 }

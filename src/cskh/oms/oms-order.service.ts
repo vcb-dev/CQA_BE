@@ -1,6 +1,8 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { OmsApiService } from './oms-api.service';
+import { MetaConversionsService } from '../facebook/meta-conversions.service';
+import { cskhInboxGraphPlatform } from '../facebook/facebook-oauth.util';
 import {
   extractSearchQueries,
   extractSizes,
@@ -45,6 +47,10 @@ export type CreateOmsOrderInput = {
   conversationId?: string;
   platform?: string;
   locationId?: string;
+  /** Ad gắn đơn — chỉ dùng khi hội thoại fromAd; báo Meta CAPI Purchase. */
+  adId?: string | null;
+  adTitle?: string | null;
+  reportMetaPurchase?: boolean;
   lineItems: Array<{ variantId: string; quantity: number; locationId?: string }>;
 };
 
@@ -53,6 +59,12 @@ export type CreateOmsOrderResult = {
   orderName: string | null;
   totalPrice: string | null;
   source: 'oms';
+  metaPurchase?: {
+    attempted: boolean;
+    ok: boolean;
+    skipped?: boolean;
+    reason?: string | null;
+  };
 };
 
 export type OmsSuggestResult = {
@@ -106,9 +118,12 @@ function asOrder(payload: unknown): OmsOrder {
 
 @Injectable()
 export class OmsOrderService {
+  private readonly logger = new Logger(OmsOrderService.name);
+
   constructor(
     private readonly omsApi: OmsApiService,
     private readonly prisma: PrismaService,
+    private readonly metaCapi: MetaConversionsService,
   ) {}
 
   async searchCatalog(q?: string, page = 1): Promise<{
@@ -231,9 +246,39 @@ export class OmsOrderService {
       address: input.address?.trim(),
     });
 
+    const conv = input.conversationId?.trim()
+      ? await this.prisma.cskhInboxConversation.findUnique({
+          where: { id: input.conversationId.trim() },
+          select: {
+            id: true,
+            pageId: true,
+            participantPsid: true,
+            fromAd: true,
+            adId: true,
+            adTitle: true,
+          },
+        })
+      : null;
+
+    // Chỉ gắn / báo Meta khi hội thoại từ quảng cáo.
+    const selectedAdId =
+      conv?.fromAd
+        ? (input.adId?.trim() || conv.adId || null)
+        : null;
+    const selectedAdTitle =
+      conv?.fromAd
+        ? (input.adTitle?.trim() || conv.adTitle || null)
+        : null;
+    const wantMeta =
+      Boolean(input.reportMetaPurchase !== false) &&
+      Boolean(conv?.fromAd) &&
+      Boolean(selectedAdId);
+
     const noteParts = [
       input.note?.trim(),
       input.conversationId ? `CRM inbox ${input.conversationId}` : null,
+      selectedAdId ? `Meta ad ${selectedAdId}` : null,
+      selectedAdTitle ? `QC: ${selectedAdTitle}` : null,
     ].filter(Boolean);
 
     const body = {
@@ -265,12 +310,70 @@ export class OmsOrderService {
       throw new BadRequestException('Warehouse đã nhận request nhưng không trả id đơn');
     }
     const total = created.total_price;
-    return {
+    const totalNum =
+      total == null || total === ''
+        ? null
+        : Number(String(total).replace(/[^\d.-]/g, ''));
+
+    const result: CreateOmsOrderResult = {
       orderId,
       orderName: (created.name || created.order_number || null) as string | null,
       totalPrice: total == null ? null : String(total),
       source: 'oms',
     };
+
+    if (wantMeta && conv) {
+      const pageCfg = await this.prisma.facebookCskhConfig.findUnique({
+        where: { pageId: conv.pageId },
+        select: { pageAccessToken: true, metadata: true },
+      });
+      const token = pageCfg?.pageAccessToken?.trim();
+      if (!token) {
+        result.metaPurchase = {
+          attempted: true,
+          ok: false,
+          skipped: true,
+          reason: 'missing_page_token',
+        };
+      } else {
+        const channel =
+          cskhInboxGraphPlatform(pageCfg?.metadata) === 'instagram'
+            ? 'instagram'
+            : 'messenger';
+        const report = await this.metaCapi.reportPurchase({
+          pageId: conv.pageId,
+          pageAccessToken: token,
+          psid: conv.participantPsid,
+          messagingChannel: channel,
+          orderId,
+          orderName: result.orderName,
+          value: totalNum != null && Number.isFinite(totalNum) ? totalNum : null,
+          currency: 'VND',
+          adId: selectedAdId,
+          phone,
+        });
+        result.metaPurchase = {
+          attempted: true,
+          ok: report.ok,
+          skipped: report.skipped,
+          reason: report.reason ?? null,
+        };
+        if (!report.ok) {
+          this.logger.warn(
+            `OMS order ${orderId} created but Meta Purchase not counted: ${report.reason}`,
+          );
+        }
+      }
+    } else {
+      result.metaPurchase = {
+        attempted: false,
+        ok: false,
+        skipped: true,
+        reason: conv?.fromAd ? 'missing_ad_id' : 'not_from_ad',
+      };
+    }
+
+    return result;
   }
 
   private async defaultLocation(): Promise<Pick<OmsLocation, 'id' | 'name'>> {

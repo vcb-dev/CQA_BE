@@ -550,6 +550,9 @@ export class CskhController {
       conversationId?: string;
       platform?: string;
       locationId?: string;
+      adId?: string;
+      adTitle?: string;
+      reportMetaPurchase?: boolean;
       lineItems?: Array<{ variantId?: string; quantity?: number; locationId?: string }>;
     },
   ) {
@@ -561,6 +564,9 @@ export class CskhController {
       conversationId: body.conversationId,
       platform: body.platform,
       locationId: body.locationId,
+      adId: body.adId,
+      adTitle: body.adTitle,
+      reportMetaPurchase: body.reportMetaPurchase,
       lineItems: (body.lineItems ?? []).map((item) => ({
         variantId: String(item.variantId ?? ''),
         quantity: Number(item.quantity ?? 1),

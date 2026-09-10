@@ -19,9 +19,35 @@ const GUARDS_METADATA_KEY = '__guards__';
 const MODULE_PROVIDERS_KEY = 'providers';
 
 const users = [
-  { id: 1n, name: 'Bùi Duy Cường', email: 'cuong@vienchibao.com', roles: ['admin'], avatarUrl: null },
-  { id: 2n, name: 'Lê Thảo Vy', email: 'vylt@vienchibao.com', roles: ['staff'], avatarUrl: null },
-  { id: 3n, name: 'Trần Minh Quân', email: 'quantm@vienchibao.com', roles: [], avatarUrl: null },
+  {
+    id: 1n,
+    name: 'Bùi Duy Cường',
+    email: 'cuong@vienchibao.com',
+    roles: ['admin'],
+    avatarUrl: null,
+  },
+  {
+    id: 2n,
+    name: 'Lê Thảo Vy',
+    email: 'vylt@vienchibao.com',
+    roles: ['staff'],
+    avatarUrl: null,
+  },
+  {
+    id: 3n,
+    name: 'Trần Minh Quân',
+    email: 'quantm@vienchibao.com',
+    roles: [],
+    avatarUrl: null,
+  },
+  // Nhiều role cùng lúc — kiểm tra primaryRoleFromPrisma ưu tiên admin cao nhất.
+  {
+    id: 4n,
+    name: 'Phạm Anh Tuấn',
+    email: 'tuanpa@vienchibao.com',
+    roles: ['staff', 'admin'],
+    avatarUrl: null,
+  },
 ];
 
 const makePrisma = () => ({
@@ -39,18 +65,28 @@ describe('RbacService', () => {
   it('listRoles trả 4 vai trò + userCount', async () => {
     const svc = new RbacService(makePrisma() as never, makeActivity() as never);
     const roles = await svc.listRoles();
-    expect(roles.map((r) => r.code)).toEqual(['admin', 'manager', 'staff', 'user']);
-    expect(Object.fromEntries(roles.map((r) => [r.code, r.userCount]))).toEqual({
-      admin: 1,
-      manager: 0,
-      staff: 1,
-      user: 1,
-    });
+    expect(roles.map((r) => r.code)).toEqual([
+      'admin',
+      'manager',
+      'staff',
+      'user',
+    ]);
+    expect(Object.fromEntries(roles.map((r) => [r.code, r.userCount]))).toEqual(
+      {
+        admin: 2,
+        manager: 0,
+        staff: 1,
+        user: 1,
+      },
+    );
   });
 
   it('listUsers gộp role + lastActiveAt', async () => {
     const map = new Map([['1', '2026-09-10T03:00:00.000Z']]);
-    const svc = new RbacService(makePrisma() as never, makeActivity(map) as never);
+    const svc = new RbacService(
+      makePrisma() as never,
+      makeActivity(map) as never,
+    );
     const rows = await svc.listUsers();
     expect(rows[0]).toMatchObject({
       id: 1,
@@ -62,6 +98,8 @@ describe('RbacService', () => {
     });
     expect(rows[1]).toMatchObject({ id: 2, role: 'staff', lastActiveAt: null });
     expect(rows[2]).toMatchObject({ id: 3, role: 'user' });
+    // roles: ['staff', 'admin'] → ưu tiên admin (multi-role tie-break).
+    expect(rows[3]).toMatchObject({ id: 4, role: 'admin', roleLabel: 'Admin' });
   });
 
   it('assignRole map role → update users.roles bằng { set }', async () => {
@@ -75,20 +113,31 @@ describe('RbacService', () => {
     expect(out).toEqual({ id: 2, role: 'manager' });
   });
 
+  it('assignRole map role staff → update users.roles bằng { set: [\'staff\'] }', async () => {
+    const prisma = makePrisma();
+    const svc = new RbacService(prisma as never, makeActivity() as never);
+    const out = await svc.assignRole('2', UserRole.staff);
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 2n },
+      data: { roles: { set: ['staff'] } },
+    });
+    expect(out).toEqual({ id: 2, role: 'staff' });
+  });
+
   it('assignRole: id không phải số → BadRequestException', async () => {
     const svc = new RbacService(makePrisma() as never, makeActivity() as never);
-    await expect(svc.assignRole('abc', UserRole.manager)).rejects.toBeInstanceOf(
-      BadRequestException,
-    );
+    await expect(
+      svc.assignRole('abc', UserRole.manager),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('assignRole: user không tồn tại → NotFoundException', async () => {
     const prisma = makePrisma();
     prisma.user.findUnique.mockResolvedValue(null);
     const svc = new RbacService(prisma as never, makeActivity() as never);
-    await expect(svc.assignRole('999', UserRole.manager)).rejects.toBeInstanceOf(
-      NotFoundException,
-    );
+    await expect(
+      svc.assignRole('999', UserRole.manager),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 });
 
@@ -110,7 +159,10 @@ describe('RbacController (wiring)', () => {
       .compile();
 
     const ctrl = mod.get(RbacController);
-    expect(await ctrl.roles()).toEqual({ success: true, data: [{ code: 'admin' }] });
+    expect(await ctrl.roles()).toEqual({
+      success: true,
+      data: [{ code: 'admin' }],
+    });
     expect(await ctrl.users()).toEqual({ success: true, data: [{ id: 1 }] });
     expect(await ctrl.assignRole('1', { role: 'manager' } as never)).toEqual({
       success: true,
@@ -120,20 +172,29 @@ describe('RbacController (wiring)', () => {
   });
 
   it('áp dụng JwtAuthGuard + RolesGuard ở cấp class (@UseGuards)', () => {
-    const guards = Reflect.getMetadata(GUARDS_METADATA_KEY, RbacController) as unknown[] | undefined;
+    const guards = Reflect.getMetadata(GUARDS_METADATA_KEY, RbacController) as
+      | unknown[]
+      | undefined;
     expect(guards).toContain(JwtAuthGuard);
     expect(guards).toContain(RolesGuard);
   });
 
   it('yêu cầu vai trò admin (@Roles(UserRole.admin))', () => {
-    const roles = Reflect.getMetadata(ROLES_KEY, RbacController) as UserRole[] | undefined;
+    const roles = Reflect.getMetadata(ROLES_KEY, RbacController) as
+      | UserRole[]
+      | undefined;
     expect(roles).toEqual([UserRole.admin]);
   });
 
   it('RbacModule đăng ký RbacActivityInterceptor làm APP_INTERCEPTOR toàn cục', () => {
-    const providers = Reflect.getMetadata(MODULE_PROVIDERS_KEY, RbacModule) as unknown[] | undefined;
+    const providers = Reflect.getMetadata(MODULE_PROVIDERS_KEY, RbacModule) as
+      | unknown[]
+      | undefined;
     expect(providers).toContain(RbacService);
     expect(providers).toContain(RbacActivityService);
-    expect(providers).toContainEqual({ provide: APP_INTERCEPTOR, useClass: RbacActivityInterceptor });
+    expect(providers).toContainEqual({
+      provide: APP_INTERCEPTOR,
+      useClass: RbacActivityInterceptor,
+    });
   });
 });

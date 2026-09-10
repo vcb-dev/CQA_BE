@@ -10,6 +10,14 @@ describe('RbacActivityService', () => {
     return { svc, redis };
   };
 
+  /** Redis chưa sẵn sàng (chưa connect được / mất kết nối) — status khác 'ready'. */
+  const makeSvcRedisDown = () => {
+    const svc = new RbacActivityService({ get: () => undefined } as never);
+    const redis = { status: 'end', set: jest.fn(), mget: jest.fn() };
+    (svc as unknown as { redis: unknown }).redis = redis;
+    return { svc, redis };
+  };
+
   it('markActive: chỉ ghi Redis 1 lần trong cửa sổ throttle', async () => {
     const { svc, redis } = makeSvc();
     await svc.markActive(1);
@@ -36,6 +44,19 @@ describe('RbacActivityService', () => {
   it('getActiveMap: list rỗng → Map rỗng, không gọi Redis', async () => {
     const { svc, redis } = makeSvc();
     const map = await svc.getActiveMap([]);
+    expect(map.size).toBe(0);
+    expect(redis.mget).not.toHaveBeenCalled();
+  });
+
+  it('markActive: Redis chưa sẵn sàng → không gọi set, không ném lỗi', async () => {
+    const { svc, redis } = makeSvcRedisDown();
+    await expect(svc.markActive(1)).resolves.toBeUndefined();
+    expect(redis.set).not.toHaveBeenCalled();
+  });
+
+  it('getActiveMap: Redis chưa sẵn sàng → Map rỗng, không gọi mget', async () => {
+    const { svc, redis } = makeSvcRedisDown();
+    const map = await svc.getActiveMap([1, 2]);
     expect(map.size).toBe(0);
     expect(redis.mget).not.toHaveBeenCalled();
   });

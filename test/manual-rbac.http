@@ -6,7 +6,7 @@
 #           4. PUT /rbac/users/2/role → thay đổi vai trò user 2
 #           5. PUT /rbac/users/2/role (invalid) → lỗi validation
 
-@base = http://localhost:3000
+@base = http://localhost:3000/api/v1
 @cookie = <dán session cookie admin sau khi login, vd: sessionCookie=eyJ...>
 @csrfToken = <copy từ GET /auth/csrf data.csrfToken>
 

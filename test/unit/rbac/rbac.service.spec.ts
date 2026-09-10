@@ -1,9 +1,22 @@
+import 'reflect-metadata';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import { RbacService } from '../../../src/rbac/rbac.service';
 import { RbacController } from '../../../src/rbac/rbac.controller';
+import { RbacModule } from '../../../src/rbac/rbac.module';
+import { RbacActivityService } from '../../../src/rbac/rbac-activity.service';
+import { RbacActivityInterceptor } from '../../../src/rbac/rbac-activity.interceptor';
 import { RolesGuard } from '../../../src/common/guards/roles.guard';
 import { JwtAuthGuard } from '../../../src/common/guards/jwt-auth.guard';
+import { ROLES_KEY } from '../../../src/common/decorators/roles.decorator';
+import { UserRole } from '../../../src/users/entities/user.entity';
+
+// Key metadata lấy đúng từ @nestjs/common@11 (node_modules/@nestjs/common/constants.js):
+// GUARDS_METADATA = '__guards__', MODULE_METADATA.PROVIDERS = 'providers'.
+// @UseGuards/@Module ghi thẳng các key này lên class bằng Reflect.defineMetadata → đọc tĩnh, không cần boot app.
+const GUARDS_METADATA_KEY = '__guards__';
+const MODULE_PROVIDERS_KEY = 'providers';
 
 const users = [
   { id: 1n, name: 'Bùi Duy Cường', email: 'cuong@vienchibao.com', roles: ['admin'], avatarUrl: null },
@@ -94,10 +107,29 @@ describe('RbacController (wiring)', () => {
 
     const ctrl = mod.get(RbacController);
     expect(await ctrl.roles()).toEqual({ success: true, data: [{ code: 'admin' }] });
+    expect(await ctrl.users()).toEqual({ success: true, data: [{ id: 1 }] });
     expect(await ctrl.assignRole('1', { role: 'manager' } as never)).toEqual({
       success: true,
       message: 'Cập nhật vai trò thành công',
       data: { id: 1, role: 'manager' },
     });
+  });
+
+  it('áp dụng JwtAuthGuard + RolesGuard ở cấp class (@UseGuards)', () => {
+    const guards = Reflect.getMetadata(GUARDS_METADATA_KEY, RbacController) as unknown[] | undefined;
+    expect(guards).toContain(JwtAuthGuard);
+    expect(guards).toContain(RolesGuard);
+  });
+
+  it('yêu cầu vai trò admin (@Roles(UserRole.ADMIN))', () => {
+    const roles = Reflect.getMetadata(ROLES_KEY, RbacController) as UserRole[] | undefined;
+    expect(roles).toEqual([UserRole.ADMIN]);
+  });
+
+  it('RbacModule đăng ký RbacActivityInterceptor làm APP_INTERCEPTOR toàn cục', () => {
+    const providers = Reflect.getMetadata(MODULE_PROVIDERS_KEY, RbacModule) as unknown[] | undefined;
+    expect(providers).toContain(RbacService);
+    expect(providers).toContain(RbacActivityService);
+    expect(providers).toContainEqual({ provide: APP_INTERCEPTOR, useClass: RbacActivityInterceptor });
   });
 });

@@ -1,0 +1,124 @@
+# Manual test — RBAC endpoints
+# Dùng VS Code REST Client hoặc copy curl. Thay {{cookie}} với session cookie admin từ login.
+# Workflow: 1. GET /auth/csrf → copy csrfToken vào {{csrfToken}}
+#           2. GET /rbac/roles → liệt kê vai trò
+#           3. GET /rbac/users → liệt kê người dùng
+#           4. PUT /rbac/users/2/role → thay đổi vai trò user 2
+#           5. PUT /rbac/users/2/role (invalid) → lỗi validation
+
+@base = http://localhost:3000
+@cookie = <dán session cookie admin sau khi login, vd: sessionCookie=eyJ...>
+@csrfToken = <copy từ GET /auth/csrf data.csrfToken>
+
+### 0. Lấy CSRF token
+GET {{base}}/auth/csrf
+Cookie: {{cookie}}
+
+# Expected response:
+# 200 OK
+# {
+#   "success": true,
+#   "data": {
+#     "csrfToken": "abc123def456..."
+#   }
+# }
+
+### 1. List vai trò (4 roles: admin, manager, auditor, agent)
+GET {{base}}/rbac/roles
+Cookie: {{cookie}}
+
+# Expected response:
+# 200 OK
+# {
+#   "success": true,
+#   "data": [
+#     { "id": "admin", "name": "Admin", "description": "...", "userCount": N },
+#     { "id": "manager", "name": "Manager", "description": "...", "userCount": N },
+#     { "id": "auditor", "name": "Auditor", "description": "...", "userCount": N },
+#     { "id": "agent", "name": "Agent", "description": "...", "userCount": N }
+#   ]
+# }
+
+### 2. List người dùng (role, roleLabel, permissionSummary, lastActiveAt, etc.)
+GET {{base}}/rbac/users
+Cookie: {{cookie}}
+
+# Expected response:
+# 200 OK
+# {
+#   "success": true,
+#   "data": [
+#     {
+#       "id": 1,
+#       "fullName": "...",
+#       "email": "...",
+#       "avatarUrl": "...",
+#       "role": "admin",
+#       "roleLabel": "Admin",
+#       "permissionSummary": "...",
+#       "permissions": [...],
+#       "lastActiveAt": "2026-09-10T10:30:00.000Z"
+#     },
+#     ...
+#   ]
+# }
+
+### 3. Đổi vai trò user id=2 thành manager
+PUT {{base}}/rbac/users/2/role
+Cookie: {{cookie}}
+Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
+
+{ "role": "manager" }
+
+# Expected response:
+# 200 OK
+# {
+#   "success": true,
+#   "data": {
+#     "id": 2,
+#     "role": "manager"
+#   }
+# }
+# Sau đó GET /rbac/users lại → user id=2 sẽ có role="manager"
+
+### 4. Đổi vai trò với giá trị không hợp lệ → 400
+PUT {{base}}/rbac/users/2/role
+Cookie: {{cookie}}
+Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
+
+{ "role": "superadmin" }
+
+# Expected response:
+# 400 Bad Request
+# {
+#   "success": false,
+#   "message": "Vai trò không hợp lệ"
+# }
+
+### 5. Gọi /rbac/roles bằng tài khoản không phải admin → 403
+GET {{base}}/rbac/roles
+Cookie: <dán session cookie của user không phải admin>
+
+# Expected response:
+# 403 Forbidden
+# {
+#   "success": false,
+#   "message": "Không có quyền truy cập"
+# }
+
+### 6. Endpoint cũ vẫn hoạt động (e.g., GET /auth/me)
+GET {{base}}/auth/me
+Cookie: {{cookie}}
+
+# Expected response:
+# 200 OK (trả về user info như bình thường, interceptor global không làm hỏng)
+# {
+#   "success": true,
+#   "data": {
+#     "id": 1,
+#     "email": "...",
+#     ...
+#   }
+# }

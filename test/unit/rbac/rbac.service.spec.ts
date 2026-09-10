@@ -1,5 +1,9 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
 import { RbacService } from '../../../src/rbac/rbac.service';
+import { RbacController } from '../../../src/rbac/rbac.controller';
+import { RolesGuard } from '../../../src/common/guards/roles.guard';
+import { JwtAuthGuard } from '../../../src/common/guards/jwt-auth.guard';
 
 const users = [
   { id: 1n, name: 'Bùi Duy Cường', email: 'cuong@vienchibao.com', roles: ['admin'], avatarUrl: null },
@@ -68,5 +72,32 @@ describe('RbacService', () => {
     prisma.user.findUnique.mockResolvedValue(null);
     const svc = new RbacService(prisma as never, makeActivity() as never);
     await expect(svc.assignRole('999', 'manager')).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('RbacController (wiring)', () => {
+  it('route trả về đúng envelope { success, data }', async () => {
+    const rbac = {
+      listRoles: jest.fn().mockResolvedValue([{ code: 'admin' }]),
+      listUsers: jest.fn().mockResolvedValue([{ id: 1 }]),
+      assignRole: jest.fn().mockResolvedValue({ id: 1, role: 'manager' }),
+    };
+    const mod = await Test.createTestingModule({
+      controllers: [RbacController],
+      providers: [{ provide: RbacService, useValue: rbac }],
+    })
+      .overrideGuard(JwtAuthGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(RolesGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
+
+    const ctrl = mod.get(RbacController);
+    expect(await ctrl.roles()).toEqual({ success: true, data: [{ code: 'admin' }] });
+    expect(await ctrl.assignRole('1', { role: 'manager' } as never)).toEqual({
+      success: true,
+      message: 'Cập nhật vai trò thành công',
+      data: { id: 1, role: 'manager' },
+    });
   });
 });

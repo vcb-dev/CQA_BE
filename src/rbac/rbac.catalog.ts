@@ -1,0 +1,59 @@
+import { CqaRbacRole } from './rbac-role.util';
+
+/** Định nghĩa tĩnh 1 vai trò — dùng cho cột "Vai trò" + "Quyền chính" của FE. */
+export interface RbacRoleDef {
+  code: CqaRbacRole;
+  label: string;
+  /** Cột "Quyền chính" — 1 dòng, nguyên văn mockup. */
+  description: string;
+  /** Danh sách khả năng, hiển thị chi tiết khi cần. */
+  permissions: string[];
+}
+
+export const RBAC_CATALOG: RbacRoleDef[] = [
+  {
+    code: 'admin',
+    label: 'Admin',
+    description: 'Toàn bộ hệ thống, chỉnh sửa tiêu chí & API',
+    permissions: [
+      'Toàn quyền quản trị hệ thống',
+      'Chỉnh sửa tiêu chí & cấu hình AI chấm điểm',
+      'Quản lý kết nối API & kênh',
+      'Phân quyền người dùng',
+    ],
+  },
+  {
+    code: 'manager',
+    label: 'Manager',
+    description: 'Xem báo cáo, phê duyệt audit nháp',
+    permissions: [
+      'Xem toàn bộ báo cáo & dashboard',
+      'Phê duyệt audit nháp',
+      'Quản lý & đánh giá nhân viên',
+    ],
+  },
+  {
+    code: 'auditor',
+    label: 'Auditor',
+    description: 'Chấm điểm thủ công, đánh giá phụ',
+    permissions: [
+      'Chấm điểm hội thoại thủ công',
+      'Đánh giá phụ (second review)',
+      'Xem hội thoại được giao',
+    ],
+  },
+  {
+    code: 'agent',
+    label: 'Agent',
+    description: 'Chỉ xem điểm cá nhân và chat khách hàng',
+    permissions: [
+      'Xem điểm & nhận xét cá nhân',
+      'Chat với khách hàng',
+      'Xem hội thoại của mình',
+    ],
+  },
+];
+
+export const RBAC_CATALOG_BY_CODE = Object.fromEntries(
+  RBAC_CATALOG.map((r) => [r.code, r]),
+) as Record<CqaRbacRole, RbacRoleDef>;

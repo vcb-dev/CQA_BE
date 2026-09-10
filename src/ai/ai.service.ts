@@ -10,7 +10,7 @@ import https from 'https';
 import { PrismaService } from '../prisma/prisma.service';
 import { User, ChatAudit } from '@prisma/client';
 import { buildAnalysisPayloadFromAi } from '../cskh/audit/audit-analytics.util';
-import { cqaRoleFromPrisma } from '../users/user-role.util';
+import { primaryRoleFromPrisma } from '../users/user-role.util';
 import { AssistantChatDto } from './dto/assistant-chat.dto';
 
 function normalizeAuditListField(value: unknown): string | null {
@@ -569,7 +569,7 @@ export class AiService {
             user_id: String(user.id),
             email: user.email,
             full_name: user.name || undefined,
-            app_role: cqaRoleFromPrisma(user.roles ?? []),
+            app_role: primaryRoleFromPrisma(user.roles ?? []),
           },
           conversation_context: ctx
             ? {

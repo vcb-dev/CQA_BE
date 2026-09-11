@@ -1,5 +1,4 @@
-// Prisma schema tổng — Warehouse + CQA CRM (shared database)
-// Chi tiết kho: specs/006-quan-ly-kho/data-model.md
+// Prisma schema — CQA CRM (warehouse module đã tách repo/DB riêng)
 
 generator client {
   provider = "prisma-client-js"
@@ -20,75 +19,16 @@ enum UserRole {
   user
 }
 
-enum PermissionScope {
-  system
-  warehouse
-}
-
 enum AccountStatus {
   invited
   active
   inactive
 }
 
-enum InventoryBucket {
-  on_hand
-  committed
-  packing
-  unavailable
-  incoming
-}
-
-enum MovementType {
-  receipt
-  transfer_out
-  transfer_in
-  return_out
-  return_in
-  adjust
-  order_reserve
-  order_release
-  order_ship
-  packing_start
-  packing_cancel
-  incoming_po
-  incoming_receipt
-  incoming_cancel
-  incoming_transfer
-  transfer_reserve
-  transfer_release
-}
-
-enum PoStatus {
-  don_nhap
-  cho_nhap
-  da_nhap
-  huy
-}
-
-enum GoodsReceiptStatus {
-  chua_nhap
-  da_nhap
-  huy
-}
-
 enum PaymentStatus {
   chua_thanh_toan
   mot_phan
   da_thanh_toan
-}
-
-enum StockTransferStatus {
-  nhap
-  cho_chuyen
-  dang_chuyen
-  da_nhan
-  huy
-}
-
-enum RefundStatus {
-  chua_hoan_tien
-  da_hoan_tien
 }
 
 enum CategoryConditionType {
@@ -104,11 +44,6 @@ enum OrderStatus {
   returned
 }
 
-enum DraftOrderStatus {
-  draft
-  confirmed
-}
-
 enum OrderSource {
   facebook
   tiktok
@@ -121,13 +56,6 @@ enum OrderSource {
   sapo
   other
 }
-
-enum VoucherType {
-  receipt
-  payment
-}
-
-// --- Auth & config ---
 
 // --- CQA multi-tenant ---
 
@@ -174,191 +102,30 @@ model User {
 
   tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 
-  warehouses             UserWarehouse[]
-  warehouseRoles         UserWarehouseRole[]
-  permissionOverrides    UserPermissionOverride[]
-  invitations            UserInvitation[]
-  inventoryMoves         InventoryMovement[]      @relation("MovementCreatedBy")
-  activityLogs           ActivityLog[]
-  assignedSuppliers      Supplier[]               @relation("SupplierAssignedTo")
-  purchaseOrders         PurchaseOrder[]          @relation("PoCreatedBy")
-  goodsReceipts          GoodsReceipt[]           @relation("ReiCreatedBy")
-  goodsReceiptsAssigned  GoodsReceipt[]           @relation("ReiAssignedTo")
-  stockTransfersCreated  StockTransfer[]          @relation("StnCreatedBy")
-  stockTransfersReceived StockTransfer[]          @relation("StnReceivedBy")
-  purchaseReturns        PurchaseReturn[]         @relation("PvnCreatedBy")
-  ordersCreated          Order[]                  @relation("OrderCreatedBy")
-  ordersAssigned         Order[]                  @relation("OrderAssignedTo")
-  orderReturns           OrderReturn[]            @relation("OrderReturnCreatedBy")
-  draftOrders            DraftOrder[]             @relation("DraftOrderCreatedBy")
-  vouchersCreated        Voucher[]                @relation("VoucherCreatedBy")
-  supplierLedgerEntries  SupplierLedgerEntry[]    @relation("SupplierLedgerCreatedBy")
-  customerLedgerEntries  CustomerLedgerEntry[]    @relation("CustomerLedgerCreatedBy")
-  conversationsAssigned  Conversation[]           @relation("ConversationAssignedTo")
-  conversationMessages   ConversationMessage[]    @relation("ConversationMessageAuthor")
-  chatAudits             ChatAudit[]
-  inboxLabels            CskhInboxLabel[]
-  inboxConvViews         CskhInboxConversationView[]
+  ordersCreated  Order[]                     @relation("OrderCreatedBy")
+  ordersAssigned Order[]                     @relation("OrderAssignedTo")
+  chatAudits     ChatAudit[]
+  inboxLabels    CskhInboxLabel[]
+  inboxConvViews CskhInboxConversationView[]
 
   @@map("users")
 }
 
-model UserWarehouse {
-  userId      BigInt @map("user_id")
-  warehouseId BigInt @map("warehouse_id")
-
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
-
-  @@id([userId, warehouseId])
-  @@map("user_warehouses")
-}
-
-// --- RBAC động (009) ---
-
-model Role {
-  id          BigInt   @id @default(autoincrement())
-  name        String
-  code        String   @unique
-  description String?  @db.Text
-  isSystem    Boolean  @default(false) @map("is_system")
-  isActive    Boolean  @default(true) @map("is_active")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-
-  permissions    RolePermission[]
-  warehouseRoles UserWarehouseRole[]
-
-  @@map("roles")
-}
-
-model Permission {
-  id    BigInt          @id @default(autoincrement())
-  key   String          @unique
-  group String
-  label String
-  scope PermissionScope
-
-  roles     RolePermission[]
-  overrides UserPermissionOverride[]
-
-  @@map("permissions")
-}
-
-model RolePermission {
-  roleId       BigInt @map("role_id")
-  permissionId BigInt @map("permission_id")
-
-  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
-
-  @@id([roleId, permissionId])
-  @@map("role_permissions")
-}
-
-model UserWarehouseRole {
-  id          BigInt   @id @default(autoincrement())
-  userId      BigInt   @map("user_id")
-  warehouseId BigInt   @map("warehouse_id")
-  roleId      BigInt   @map("role_id")
-  createdAt   DateTime @default(now()) @map("created_at")
-
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
-  role      Role      @relation(fields: [roleId], references: [id], onDelete: Restrict)
-
-  @@unique([userId, warehouseId])
-  @@map("user_warehouse_roles")
-}
-
-// Lệch quyền riêng cho một user tại một kho, chồng lên quyền mặc định của
-// role gán tại (user, kho) — không đổi role hay ảnh hưởng user khác.
-// granted=true: thêm quyền role không có. granted=false: bỏ quyền role có sẵn.
-model UserPermissionOverride {
-  id           BigInt   @id @default(autoincrement())
-  userId       BigInt   @map("user_id")
-  warehouseId  BigInt   @map("warehouse_id")
-  permissionId BigInt   @map("permission_id")
-  granted      Boolean
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
-
-  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  warehouse  Warehouse  @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
-  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, warehouseId, permissionId])
-  @@map("user_permission_overrides")
-}
-
-model UserInvitation {
-  id         BigInt    @id @default(autoincrement())
-  userId     BigInt    @map("user_id")
-  tokenHash  String    @map("token_hash")
-  expiresAt  DateTime  @map("expires_at")
-  acceptedAt DateTime? @map("accepted_at")
-  createdAt  DateTime  @default(now()) @map("created_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@map("user_invitations")
-}
-
-model Branch {
-  id       BigInt  @id @default(autoincrement())
-  code     String  @unique
-  name     String
-  isActive Boolean @default(true) @map("is_active")
-
-  warehouses Warehouse[]
-
-  purchaseOrders PurchaseOrder[]
-  priceLists     PriceList[]
-  orders         Order[]
-  draftOrders    DraftOrder[]
-  vouchers       Voucher[]
-
-  @@map("branches")
-}
-
+/// Kho CRM — bảng thật trên DB là `locations` (warehouse đã tách, không còn `warehouses`).
 model Warehouse {
-  id       BigInt  @id @default(autoincrement())
-  code     String  @unique
-  name     String
-  branchId BigInt  @map("branch_id")
-  isActive Boolean @default(true) @map("is_active")
-
-  branch              Branch                   @relation(fields: [branchId], references: [id])
-  users               UserWarehouse[]
-  userRoles           UserWarehouseRole[]
-  permissionOverrides UserPermissionOverride[]
-  inventoryLevels     InventoryLevel[]
-  movements           InventoryMovement[]
-  purchaseOrders      PurchaseOrder[]
-  goodsReceipts       GoodsReceipt[]
-  transfersFrom       StockTransfer[]          @relation("TransferFrom")
-  transfersTo         StockTransfer[]          @relation("TransferTo")
-  purchaseReturns     PurchaseReturn[]
-  orderItems          OrderItem[]
-  draftOrderItems     DraftOrderItem[]
-  orderReturnItems    OrderReturnItem[]
-
-  @@map("warehouses")
-}
-
-// --- Module Sản phẩm (005) ---
-
-model CustomerGroup {
-  id        BigInt   @id @default(autoincrement())
-  code      String   @unique
+  id        BigInt  @id @default(autoincrement())
+  code      String?
   name      String
-  createdAt DateTime @default(now()) @map("created_at")
+  status    String  @default("active")
+  isDefault Boolean @default(false) @map("default_location")
 
-  priceLists PriceList[]
+  inventoryLevels InventoryLevel[]
+  orders          Order[]
 
-  @@map("customer_groups")
+  @@map("locations")
 }
+
+// --- Catalog (Sapo / inbox orders) ---
 
 model Product {
   id               BigInt    @id @default(autoincrement())
@@ -392,9 +159,7 @@ model Product {
 
   variants      ProductVariant[]
   images        ProductImage[]
-  options       ProductOption[]
   salesChannels ProductSalesChannel[]
-  categories    ProductCategory[]
 
   @@index([brand, productType])
   @@index([category, material])
@@ -414,19 +179,6 @@ model ProductImage {
   @@map("product_images")
 }
 
-model ProductOption {
-  id        BigInt @id @default(autoincrement())
-  productId BigInt @map("product_id")
-  name      String
-  position  Int    @default(0)
-
-  product Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
-  values  VariantOptionValue[]
-
-  @@unique([productId, name])
-  @@map("product_options")
-}
-
 model ProductVariant {
   id             BigInt   @id @default(autoincrement())
   productId      BigInt   @map("product_id")
@@ -443,36 +195,13 @@ model ProductVariant {
   imageUrl       String?  @map("image_url")
   enabled        Boolean  @default(true)
 
-  product          Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
-  optionValues     VariantOptionValue[]
-  inventoryLevels  InventoryLevel[]
-  movements        InventoryMovement[]
-  lots             Lot[]
-  poItems          PurchaseOrderItem[]
-  reiItems         GoodsReceiptItem[]
-  stnItems         StockTransferItem[]
-  pvnItems         PurchaseReturnItem[]
-  priceListItems   PriceListItem[]
-  orderItems       OrderItem[]
-  draftOrderItems  DraftOrderItem[]
-  orderReturnItems OrderReturnItem[]
-  sapoInboxItems   SapoInboxOrderItem[]
+  product         Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
+  inventoryLevels InventoryLevel[]
+  orderItems      OrderItem[]
+  sapoInboxItems  SapoInboxOrderItem[]
 
   @@index([productId])
   @@map("product_variants")
-}
-
-model VariantOptionValue {
-  variantId BigInt @map("variant_id")
-  optionId  BigInt @map("option_id")
-  value     String
-
-  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
-  option  ProductOption  @relation(fields: [optionId], references: [id], onDelete: Cascade)
-
-  @@id([variantId, optionId])
-  @@index([optionId])
-  @@map("variant_option_values")
 }
 
 model Category {
@@ -489,23 +218,10 @@ model Category {
   createdAt      DateTime              @default(now()) @map("created_at")
   updatedAt      DateTime              @updatedAt @map("updated_at")
 
-  parent   Category?         @relation("CategoryTree", fields: [parentId], references: [id])
-  children Category[]        @relation("CategoryTree")
-  products ProductCategory[]
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryTree")
 
   @@map("categories")
-}
-
-model ProductCategory {
-  productId  BigInt @map("product_id")
-  categoryId BigInt @map("category_id")
-
-  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-
-  @@id([productId, categoryId])
-  @@index([categoryId])
-  @@map("product_categories")
 }
 
 model ProductSalesChannel {
@@ -518,46 +234,12 @@ model ProductSalesChannel {
   @@map("product_sales_channels")
 }
 
-model PriceList {
-  id              BigInt   @id @default(autoincrement())
-  code            String   @unique
-  name            String
-  branchId        BigInt?  @map("branch_id")
-  customerGroupId BigInt?  @map("customer_group_id")
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
-
-  branch        Branch?         @relation(fields: [branchId], references: [id])
-  customerGroup CustomerGroup?  @relation(fields: [customerGroupId], references: [id])
-  items         PriceListItem[]
-
-  @@map("price_lists")
-}
-
-model PriceListItem {
-  id             BigInt   @id @default(autoincrement())
-  priceListId    BigInt   @map("price_list_id")
-  variantId      BigInt   @map("variant_id")
-  fixedPrice     Decimal  @map("fixed_price") @db.Decimal(18, 2)
-  compareAtPrice Decimal? @map("compare_at_price") @db.Decimal(18, 2)
-  enabled        Boolean  @default(true) 
-
-  priceList PriceList      @relation(fields: [priceListId], references: [id], onDelete: Cascade)
-  variant   ProductVariant @relation(fields: [variantId], references: [id])
-
-  @@unique([priceListId, variantId])
-  @@index([variantId])
-  @@map("price_list_items")
-}
-
-// --- Inventory core ---
-
 model InventoryLevel {
   variantId   BigInt   @map("variant_id")
-  warehouseId BigInt   @map("warehouse_id")
+  warehouseId BigInt   @map("location_id")
   onHand      Int      @default(0) @map("on_hand")
   committed   Int      @default(0)
-  packing     Int      @default(0)
+  packing     Int      @default(0) @map("packed")
   unavailable Int      @default(0)
   incoming    Int      @default(0)
   available   Int      @default(0)
@@ -568,318 +250,12 @@ model InventoryLevel {
   variant   ProductVariant @relation(fields: [variantId], references: [id])
   warehouse Warehouse      @relation(fields: [warehouseId], references: [id])
 
-  // PK (variant_id, warehouse_id) — index T046
   @@id([variantId, warehouseId])
   @@index([warehouseId])
   @@map("inventory_levels")
 }
 
-model InventoryMovement {
-  id            BigInt          @id @default(autoincrement())
-  variantId     BigInt          @map("variant_id")
-  warehouseId   BigInt          @map("warehouse_id")
-  lotId         BigInt?         @map("lot_id")
-  bucket        InventoryBucket
-  change        Int
-  type          MovementType
-  referenceType String?         @map("reference_type")
-  referenceId   BigInt?         @map("reference_id")
-  createdById   BigInt?         @map("created_by")
-  createdAt     DateTime        @default(now()) @map("created_at")
-
-  variant   ProductVariant @relation(fields: [variantId], references: [id])
-  warehouse Warehouse      @relation(fields: [warehouseId], references: [id])
-  lot       Lot?           @relation(fields: [lotId], references: [id])
-  createdBy User?          @relation("MovementCreatedBy", fields: [createdById], references: [id])
-
-  @@index([variantId, warehouseId, bucket, createdAt]) // T046
-  @@map("inventory_movements")
-}
-
-model Lot {
-  id             BigInt    @id @default(autoincrement())
-  code           String
-  variantId      BigInt    @map("variant_id")
-  manufacturedAt DateTime? @map("manufactured_at") @db.Date
-  expiredAt      DateTime? @map("expired_at") @db.Date
-
-  variant   ProductVariant       @relation(fields: [variantId], references: [id])
-  movements InventoryMovement[]
-  reiItems  GoodsReceiptItem[]
-  stnItems  StockTransferItem[]
-  pvnItems  PurchaseReturnItem[]
-
-  @@unique([variantId, code])
-  @@map("lots")
-}
-
-model ActivityLog {
-  id         BigInt   @id @default(autoincrement())
-  userId     BigInt?  @map("user_id")
-  action     String
-  entityType String   @map("entity_type")
-  entityId   BigInt?  @map("entity_id")
-  metadata   Json?
-  createdAt  DateTime @default(now()) @map("created_at")
-
-  user User? @relation(fields: [userId], references: [id])
-
-  @@index([entityType, entityId])
-  @@map("activity_logs")
-}
-
-// --- Nhà cung cấp (US5) ---
-
-model Supplier {
-  id           BigInt   @id @default(autoincrement())
-  code         String   @unique
-  name         String
-  email        String?
-  phone        String?
-  website      String?
-  fax          String?
-  taxCode      String?  @map("tax_code")
-  country      String?
-  province     String?
-  district     String?
-  ward         String?
-  address      String?
-  assignedToId BigInt?  @map("assigned_to")
-  tags         String[]
-  isActive     Boolean  @default(true) @map("is_active")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
-
-  assignedTo User? @relation("SupplierAssignedTo", fields: [assignedToId], references: [id])
-
-  purchaseOrders  PurchaseOrder[]
-  goodsReceipts   GoodsReceipt[]
-  purchaseReturns PurchaseReturn[]
-  ledgerEntries   SupplierLedgerEntry[]
-
-  @@map("suppliers")
-}
-
-enum SupplierLedgerReferenceType {
-  goods_receipt
-  payment
-  purchase_return
-  refund
-  adjustment
-}
-
-// Sổ công nợ NCC — amount: âm = tăng nợ phải trả NCC, dương = giảm nợ phải trả NCC
-model SupplierLedgerEntry {
-  id               BigInt                      @id @default(autoincrement())
-  supplierId       BigInt                      @map("supplier_id")
-  referenceType    SupplierLedgerReferenceType @map("reference_type")
-  referenceCode    String?                     @map("reference_code")
-  transactionLabel String                      @map("transaction_label")
-  reason           String?
-  amount           Decimal                     @db.Decimal(18, 2)
-  createdById      BigInt                      @map("created_by")
-  createdAt        DateTime                    @default(now()) @map("created_at")
-
-  supplier  Supplier @relation(fields: [supplierId], references: [id])
-  createdBy User     @relation("SupplierLedgerCreatedBy", fields: [createdById], references: [id])
-
-  @@index([supplierId, createdAt])
-  @@map("supplier_ledger_entries")
-}
-
-// --- Đặt hàng nhập & Nhập hàng (US2) ---
-
-model PurchaseOrder {
-  id            BigInt   @id @default(autoincrement())
-  code          String   @unique
-  supplierId    BigInt   @map("supplier_id")
-  branchId      BigInt   @map("branch_id")
-  warehouseId   BigInt   @map("warehouse_id")
-  status        PoStatus @default(don_nhap)
-  totalQuantity Int      @default(0) @map("total_quantity")
-  totalAmount   Decimal  @default(0) @map("total_amount") @db.Decimal(18, 2)
-  depositAmount Decimal  @default(0) @map("deposit_amount") @db.Decimal(18, 2)
-  createdById   BigInt   @map("created_by")
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
-
-  supplier          Supplier            @relation(fields: [supplierId], references: [id])
-  branch            Branch              @relation(fields: [branchId], references: [id])
-  warehouse         Warehouse           @relation(fields: [warehouseId], references: [id])
-  createdBy         User                @relation("PoCreatedBy", fields: [createdById], references: [id])
-  items             PurchaseOrderItem[]
-  goodsReceipts     GoodsReceipt[]
-  goodsReceiptItems GoodsReceiptItem[]
-
-  @@index([supplierId, createdAt])
-  @@index([status, createdAt])
-  @@index([createdAt])
-  @@map("purchase_orders")
-}
-
-model PurchaseOrderItem {
-  id               BigInt  @id @default(autoincrement())
-  purchaseOrderId  BigInt  @map("purchase_order_id")
-  variantId        BigInt  @map("variant_id")
-  quantity         Int
-  unitPrice        Decimal @map("unit_price") @db.Decimal(18, 2)
-  receivedQuantity Int     @default(0) @map("received_quantity")
-
-  purchaseOrder PurchaseOrder  @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
-  variant       ProductVariant @relation(fields: [variantId], references: [id])
-
-  @@unique([purchaseOrderId, variantId])
-  @@index([variantId])
-  @@map("purchase_order_items")
-}
-
-model GoodsReceipt {
-  id                BigInt             @id @default(autoincrement())
-  code              String             @unique
-  supplierId        BigInt             @map("supplier_id")
-  warehouseId       BigInt             @map("warehouse_id")
-  purchaseOrderId   BigInt?            @map("purchase_order_id")
-  status            GoodsReceiptStatus @default(chua_nhap)
-  paymentStatus     PaymentStatus      @default(chua_thanh_toan) @map("payment_status")
-  amountDue         Decimal            @default(0) @map("amount_due") @db.Decimal(18, 2)
-  paidAmount        Decimal            @default(0) @map("paid_amount") @db.Decimal(18, 2)
-  discountAmount    Decimal            @default(0) @map("discount_amount") @db.Decimal(18, 2)
-  extraCost         Decimal            @default(0) @map("extra_cost") @db.Decimal(18, 2)
-  depositApplied    Decimal            @default(0) @map("deposit_applied") @db.Decimal(18, 2)
-  assignedToId      BigInt?            @map("assigned_to")
-  expectedReceiptAt DateTime?          @map("expected_receipt_at")
-  invoiceAt         DateTime?          @map("invoice_at")
-  invoiceSymbol     String?            @map("invoice_symbol")
-  orderCode         String?            @map("order_code")
-  referenceCode     String?            @map("reference_code")
-  createdById       BigInt             @map("created_by")
-  createdAt         DateTime           @default(now()) @map("created_at")
-  receivedAt        DateTime?          @map("received_at")
-
-  supplier        Supplier           @relation(fields: [supplierId], references: [id])
-  warehouse       Warehouse          @relation(fields: [warehouseId], references: [id])
-  purchaseOrder   PurchaseOrder?     @relation(fields: [purchaseOrderId], references: [id])
-  createdBy       User               @relation("ReiCreatedBy", fields: [createdById], references: [id])
-  assignedTo      User?              @relation("ReiAssignedTo", fields: [assignedToId], references: [id])
-  items           GoodsReceiptItem[]
-  purchaseReturns PurchaseReturn[]
-
-  @@index([supplierId, createdAt])
-  @@index([status, createdAt])
-  @@index([createdAt])
-  @@index([purchaseOrderId])
-  @@map("goods_receipts")
-}
-
-model GoodsReceiptItem {
-  id              BigInt  @id @default(autoincrement())
-  goodsReceiptId  BigInt  @map("goods_receipt_id")
-  variantId       BigInt  @map("variant_id")
-  purchaseOrderId BigInt? @map("purchase_order_id")
-  lotId           BigInt? @map("lot_id")
-  quantity        Int
-  unitPrice       Decimal @map("unit_price") @db.Decimal(18, 2)
-
-  goodsReceipt  GoodsReceipt   @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
-  variant       ProductVariant @relation(fields: [variantId], references: [id])
-  purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
-  lot           Lot?           @relation(fields: [lotId], references: [id])
-
-  @@index([goodsReceiptId])
-  @@index([variantId])
-  @@map("goods_receipt_items")
-}
-
-// --- Chuyển kho (US3) ---
-
-model StockTransfer {
-  id              BigInt              @id @default(autoincrement())
-  code            String              @unique
-  fromWarehouseId BigInt              @map("from_warehouse_id")
-  toWarehouseId   BigInt              @map("to_warehouse_id")
-  status          StockTransferStatus @default(nhap)
-  note            String?
-  totalQuantity   Int                 @default(0) @map("total_quantity")
-  createdById     BigInt              @map("created_by")
-  createdAt       DateTime            @default(now()) @map("created_at")
-  shippedAt       DateTime?           @map("shipped_at")
-  receivedAt      DateTime?           @map("received_at")
-  receivedById    BigInt?             @map("received_by")
-
-  fromWarehouse Warehouse           @relation("TransferFrom", fields: [fromWarehouseId], references: [id])
-  toWarehouse   Warehouse           @relation("TransferTo", fields: [toWarehouseId], references: [id])
-  createdBy     User                @relation("StnCreatedBy", fields: [createdById], references: [id])
-  receivedBy    User?               @relation("StnReceivedBy", fields: [receivedById], references: [id])
-  items         StockTransferItem[]
-
-  @@index([fromWarehouseId])
-  @@index([toWarehouseId])
-  @@index([createdAt])
-  @@map("stock_transfers")
-}
-
-model StockTransferItem {
-  id              BigInt  @id @default(autoincrement())
-  stockTransferId BigInt  @map("stock_transfer_id")
-  variantId       BigInt  @map("variant_id")
-  lotId           BigInt? @map("lot_id")
-  quantity        Int
-
-  stockTransfer StockTransfer  @relation(fields: [stockTransferId], references: [id], onDelete: Cascade)
-  variant       ProductVariant @relation(fields: [variantId], references: [id])
-  lot           Lot?           @relation(fields: [lotId], references: [id])
-
-  @@index([stockTransferId])
-  @@index([variantId])
-  @@map("stock_transfer_items")
-}
-
-// --- Trả hàng nhập (US4) ---
-
-model PurchaseReturn {
-  id             BigInt       @id @default(autoincrement())
-  code           String       @unique
-  supplierId     BigInt       @map("supplier_id")
-  warehouseId    BigInt       @map("warehouse_id")
-  // Đơn nhập hàng gốc — có giá trị khi tạo phiếu trả "theo đơn", null khi trả tự do
-  goodsReceiptId BigInt?      @map("goods_receipt_id")
-  totalQuantity  Int          @default(0) @map("total_quantity")
-  totalAmount    Decimal      @default(0) @map("total_amount") @db.Decimal(18, 2)
-  refundStatus   RefundStatus @default(chua_hoan_tien) @map("refund_status")
-  refundedAt     DateTime?    @map("refunded_at")
-  createdById    BigInt       @map("created_by")
-  createdAt      DateTime     @default(now()) @map("created_at")
-
-  supplier     Supplier             @relation(fields: [supplierId], references: [id])
-  warehouse    Warehouse            @relation(fields: [warehouseId], references: [id])
-  goodsReceipt GoodsReceipt?        @relation(fields: [goodsReceiptId], references: [id])
-  createdBy    User                 @relation("PvnCreatedBy", fields: [createdById], references: [id])
-  items        PurchaseReturnItem[]
-
-  @@index([supplierId, createdAt])
-  @@index([goodsReceiptId])
-  @@index([createdAt])
-  @@map("purchase_returns")
-}
-
-model PurchaseReturnItem {
-  id               BigInt  @id @default(autoincrement())
-  purchaseReturnId BigInt  @map("purchase_return_id")
-  variantId        BigInt  @map("variant_id")
-  lotId            BigInt? @map("lot_id")
-  quantity         Int
-  unitPrice        Decimal @map("unit_price") @db.Decimal(18, 2)
-
-  purchaseReturn PurchaseReturn @relation(fields: [purchaseReturnId], references: [id], onDelete: Cascade)
-  variant        ProductVariant @relation(fields: [variantId], references: [id])
-  lot            Lot?           @relation(fields: [lotId], references: [id])
-
-  @@index([purchaseReturnId])
-  @@index([variantId])
-  @@map("purchase_return_items")
-}
-
-// --- Module Đơn hàng (002) ---
+// --- Đơn hàng CRM (Sapo sync) ---
 
 model Customer {
   id        BigInt   @id @default(autoincrement())
@@ -893,41 +269,11 @@ model Customer {
   note      String?  @db.Text
   createdAt DateTime @default(now()) @map("created_at")
 
-  orders        Order[]
-  draftOrders   DraftOrder[]
-  conversations Conversation[]
-  ledgerEntries CustomerLedgerEntry[]
+  orders Order[]
 
   @@index([phone])
   @@index([email])
   @@map("customers")
-}
-
-enum CustomerLedgerReferenceType {
-  order
-  payment
-  order_return
-  refund
-  adjustment
-}
-
-// Sổ công nợ KH — amount: dương = tăng nợ phải thu (khách nợ thêm), âm = giảm nợ phải thu
-model CustomerLedgerEntry {
-  id               BigInt                      @id @default(autoincrement())
-  customerId       BigInt                      @map("customer_id")
-  referenceType    CustomerLedgerReferenceType @map("reference_type")
-  referenceCode    String?                     @map("reference_code")
-  transactionLabel String                      @map("transaction_label")
-  reason           String?
-  amount           Decimal                     @db.Decimal(18, 2)
-  createdById      BigInt                      @map("created_by")
-  createdAt        DateTime                    @default(now()) @map("created_at")
-
-  customer  Customer @relation(fields: [customerId], references: [id])
-  createdBy User     @relation("CustomerLedgerCreatedBy", fields: [createdById], references: [id])
-
-  @@index([customerId, createdAt])
-  @@map("customer_ledger_entries")
 }
 
 model Order {
@@ -935,7 +281,7 @@ model Order {
   sapoId             BigInt?       @unique @map("sapo_id")
   code               String        @unique
   customerId         BigInt?       @map("customer_id")
-  branchId           BigInt        @map("branch_id")
+  warehouseId        BigInt        @map("location_id")
   source             OrderSource   @default(other)
   status             OrderStatus   @default(ordered)
   assignedToId       BigInt?       @map("assigned_to")
@@ -957,15 +303,13 @@ model Order {
   createdAt          DateTime      @default(now()) @map("created_at")
   updatedAt          DateTime      @updatedAt @map("updated_at")
 
-  customer   Customer?     @relation(fields: [customerId], references: [id])
-  branch     Branch        @relation(fields: [branchId], references: [id])
-  assignedTo User?         @relation("OrderAssignedTo", fields: [assignedToId], references: [id])
-  createdBy  User          @relation("OrderCreatedBy", fields: [createdById], references: [id])
+  customer   Customer?  @relation(fields: [customerId], references: [id])
+  warehouse  Warehouse  @relation(fields: [warehouseId], references: [id])
+  assignedTo User?      @relation("OrderAssignedTo", fields: [assignedToId], references: [id])
+  createdBy  User       @relation("OrderCreatedBy", fields: [createdById], references: [id])
   items      OrderItem[]
-  returns    OrderReturn[]
-  fromDraft  DraftOrder?   @relation("DraftConverted")
 
-  @@index([branchId, status, orderedAt])
+  @@index([warehouseId, status, orderedAt])
   @@index([orderedAt])
   @@index([customerId])
   @@index([assignedToId])
@@ -976,173 +320,19 @@ model OrderItem {
   id          BigInt  @id @default(autoincrement())
   orderId     BigInt  @map("order_id")
   variantId   BigInt  @map("variant_id")
-  warehouseId BigInt  @map("warehouse_id")
-  productName String  @map("product_name")
+  productName String  @map("name")
   sku         String
   quantity    Int
   price       Decimal @db.Decimal(18, 2)
-  discount    Decimal @default(0) @db.Decimal(18, 2)
-  total       Decimal @db.Decimal(18, 2)
+  discount    Decimal @default(0) @map("total_discount") @db.Decimal(18, 2)
+  total       Decimal @map("discounted_total") @db.Decimal(18, 2)
 
-  order     Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  variant   ProductVariant @relation(fields: [variantId], references: [id])
-  warehouse Warehouse      @relation(fields: [warehouseId], references: [id])
+  order   Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [variantId], references: [id])
 
   @@index([orderId])
   @@index([variantId])
-  @@index([warehouseId])
   @@map("order_items")
-}
-
-model DraftOrder {
-  id               BigInt           @id @default(autoincrement())
-  code             String           @unique
-  branchId         BigInt           @map("branch_id")
-  customerId       BigInt?          @map("customer_id")
-  source           OrderSource      @default(other)
-  status           DraftOrderStatus @default(draft)
-  createdById      BigInt           @map("created_by")
-  currency         String           @default("VND")
-  subtotal         Decimal          @default(0) @db.Decimal(18, 2)
-  discountTotal    Decimal          @default(0) @map("discount_total") @db.Decimal(18, 2)
-  taxTotal         Decimal          @default(0) @map("tax_total") @db.Decimal(18, 2)
-  shippingFee      Decimal          @default(0) @map("shipping_fee") @db.Decimal(18, 2)
-  totalAmount      Decimal          @default(0) @map("total_amount") @db.Decimal(18, 2)
-  shippingMethod   String?          @map("shipping_method")
-  note             String?          @db.Text
-  tags             String[]         @default([])
-  convertedOrderId BigInt?          @unique @map("converted_order_id")
-  createdAt        DateTime         @default(now()) @map("created_at")
-  updatedAt        DateTime         @updatedAt @map("updated_at")
-
-  branch         Branch           @relation(fields: [branchId], references: [id])
-  customer       Customer?        @relation(fields: [customerId], references: [id])
-  createdBy      User             @relation("DraftOrderCreatedBy", fields: [createdById], references: [id])
-  convertedOrder Order?           @relation("DraftConverted", fields: [convertedOrderId], references: [id])
-  items          DraftOrderItem[]
-
-  @@index([status, createdAt])
-  @@index([customerId])
-  @@map("draft_orders")
-}
-
-model DraftOrderItem {
-  id           BigInt  @id @default(autoincrement())
-  draftOrderId BigInt  @map("draft_order_id")
-  variantId    BigInt  @map("variant_id")
-  warehouseId  BigInt  @map("warehouse_id")
-  productName  String  @map("product_name")
-  sku          String
-  quantity     Int
-  price        Decimal @db.Decimal(18, 2)
-  discount     Decimal @default(0) @db.Decimal(18, 2)
-
-  draftOrder DraftOrder     @relation(fields: [draftOrderId], references: [id], onDelete: Cascade)
-  variant    ProductVariant @relation(fields: [variantId], references: [id])
-  warehouse  Warehouse      @relation(fields: [warehouseId], references: [id])
-
-  @@index([draftOrderId])
-  @@index([variantId])
-  @@index([warehouseId])
-  @@map("draft_order_items")
-}
-
-model OrderReturn {
-  id           BigInt   @id @default(autoincrement())
-  code         String   @unique
-  orderId      BigInt   @map("order_id")
-  reason       String?  @db.Text
-  refundAmount Decimal  @default(0) @map("refund_amount") @db.Decimal(18, 2)
-  restock      Boolean  @default(true)
-  createdById  BigInt   @map("created_by")
-  createdAt    DateTime @default(now()) @map("created_at")
-
-  order     Order             @relation(fields: [orderId], references: [id])
-  createdBy User              @relation("OrderReturnCreatedBy", fields: [createdById], references: [id])
-  items     OrderReturnItem[]
-
-  @@index([orderId])
-  @@index([createdAt])
-  @@map("order_returns")
-}
-
-model OrderReturnItem {
-  id            BigInt  @id @default(autoincrement())
-  orderReturnId BigInt  @map("order_return_id")
-  variantId     BigInt  @map("variant_id")
-  warehouseId   BigInt  @map("warehouse_id")
-  productName   String  @map("product_name")
-  sku           String
-  variantTitle  String? @map("variant_title")
-  quantity      Int
-  price         Decimal @db.Decimal(18, 2)
-
-  orderReturn OrderReturn    @relation(fields: [orderReturnId], references: [id], onDelete: Cascade)
-  variant     ProductVariant @relation(fields: [variantId], references: [id])
-  warehouse   Warehouse      @relation(fields: [warehouseId], references: [id])
-
-  @@index([orderReturnId])
-  @@index([variantId])
-  @@index([warehouseId])
-  @@map("order_return_items")
-}
-
-model Voucher {
-  id             BigInt      @id @default(autoincrement())
-  code           String      @unique
-  type           VoucherType
-  amountIn       Decimal     @default(0) @map("amount_in") @db.Decimal(18, 2)
-  amountOut      Decimal     @default(0) @map("amount_out") @db.Decimal(18, 2)
-  branchId       BigInt      @map("branch_id")
-  createdById    BigInt      @map("created_by")
-  sourceDocument String?     @map("source_document")
-  referenceType  String?     @map("reference_type")
-  referenceId    BigInt?     @map("reference_id")
-  reason         String?     @db.Text
-  recordedAt     DateTime    @default(now()) @map("recorded_at")
-  createdAt      DateTime    @default(now()) @map("created_at")
-
-  branch    Branch @relation(fields: [branchId], references: [id])
-  createdBy User   @relation("VoucherCreatedBy", fields: [createdById], references: [id])
-
-  @@index([branchId, type, recordedAt])
-  @@map("vouchers")
-}
-
-// --- Chat CSKH (002 US4) ---
-
-model Conversation {
-  id            BigInt      @id @default(autoincrement())
-  channel       OrderSource @default(other)
-  customerName  String      @map("customer_name")
-  customerPhone String      @map("customer_phone")
-  customerId    BigInt?     @map("customer_id")
-  assignedToId  BigInt?     @map("assigned_to")
-  lastMessageAt DateTime    @default(now()) @map("last_message_at")
-  createdAt     DateTime    @default(now()) @map("created_at")
-  updatedAt     DateTime    @updatedAt @map("updated_at")
-
-  customer   Customer?             @relation(fields: [customerId], references: [id])
-  assignedTo User?                 @relation("ConversationAssignedTo", fields: [assignedToId], references: [id])
-  messages   ConversationMessage[]
-
-  @@index([lastMessageAt])
-  @@map("conversations")
-}
-
-model ConversationMessage {
-  id             BigInt   @id @default(autoincrement())
-  conversationId BigInt   @map("conversation_id")
-  senderType     String   @map("sender_type")
-  body           String   @db.Text
-  createdById    BigInt?  @map("created_by")
-  createdAt      DateTime @default(now()) @map("created_at")
-
-  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  createdBy    User?        @relation("ConversationMessageAuthor", fields: [createdById], references: [id])
-
-  @@index([conversationId, createdAt])
-  @@map("conversation_messages")
 }
 
 // --- CQA CSKH / Facebook inbox ---

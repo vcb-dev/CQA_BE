@@ -311,7 +311,7 @@ async function main() {
   console.log(`Sapo → products import (concurrency=${CONCURRENCY}, skipInventory=${SKIP_INVENTORY})`);
   console.log(`Endpoint: GET https://${storeHost()}/admin/products.json`);
 
-  const warehouse = await prisma.warehouse.findFirst({ where: { isActive: true }, orderBy: { id: 'asc' } });
+  const warehouse = await prisma.warehouse.findFirst({ where: { status: 'active' }, orderBy: { id: 'asc' } });
   if (!warehouse) console.warn('Chưa có kho — bỏ qua inventory_levels');
 
   const products = await fetchAllProducts();

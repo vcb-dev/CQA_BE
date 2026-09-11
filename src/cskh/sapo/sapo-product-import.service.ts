@@ -533,7 +533,7 @@ export class SapoProductImportService {
 
   private async resolveDefaultWarehouseId(): Promise<bigint | null> {
     const wh = await this.prisma.warehouse.findFirst({
-      where: { isActive: true },
+      where: { status: 'active' },
       orderBy: { id: 'asc' },
     });
     return wh?.id ?? null;

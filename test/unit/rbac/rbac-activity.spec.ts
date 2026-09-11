@@ -5,7 +5,11 @@ import { RbacActivityInterceptor } from '../../../src/rbac/rbac-activity.interce
 describe('RbacActivityService', () => {
   const makeSvc = () => {
     const svc = new RbacActivityService({ get: () => undefined } as never);
-    const redis = { status: 'ready', set: jest.fn().mockResolvedValue('OK'), mget: jest.fn() };
+    const redis = {
+      status: 'ready',
+      set: jest.fn().mockResolvedValue('OK'),
+      mget: jest.fn(),
+    };
     (svc as unknown as { redis: unknown }).redis = redis;
     return { svc, redis };
   };
@@ -33,12 +37,45 @@ describe('RbacActivityService', () => {
     expect(redis.set).toHaveBeenCalledTimes(2);
   });
 
+  it('markActive: bộ nhớ ghi mọi lần, kể cả khi Redis bị throttle', async () => {
+    const { svc, redis } = makeSvc();
+    await svc.markActive(1);
+    await svc.markActive(1);
+    // Redis chỉ 1 lần...
+    expect(redis.set).toHaveBeenCalledTimes(1);
+    // ...nhưng mốc trong bộ nhớ vẫn đọc ra được.
+    redis.mget.mockResolvedValue([null]);
+    const map = await svc.getActiveMap([1]);
+    expect(map.get('1')).toBeDefined();
+  });
+
   it('getActiveMap: gộp kết quả mget theo String(id)', async () => {
     const { svc, redis } = makeSvc();
     redis.mget.mockResolvedValue(['2026-09-10T03:00:00.000Z', null]);
     const map = await svc.getActiveMap([1, 2]);
     expect(map.get('1')).toBe('2026-09-10T03:00:00.000Z');
+    // Chưa markActive nên không có mốc nào cho user 2.
     expect(map.has('2')).toBe(false);
+  });
+
+  it('getActiveMap: bộ nhớ mới hơn Redis thì lấy bộ nhớ', async () => {
+    const { svc, redis } = makeSvc();
+    await svc.markActive(1);
+    // Redis giữ mốc cũ vì chỉ đồng bộ 5 phút/lần.
+    redis.mget.mockResolvedValue(['2020-01-01T00:00:00.000Z']);
+    const map = await svc.getActiveMap([1]);
+    expect(new Date(map.get('1')!).getTime()).toBeGreaterThan(
+      new Date('2020-01-01T00:00:00.000Z').getTime(),
+    );
+  });
+
+  it('getActiveMap: Redis mới hơn bộ nhớ thì lấy Redis', async () => {
+    const { svc, redis } = makeSvc();
+    await svc.markActive(1);
+    const future = new Date(Date.now() + 60_000).toISOString();
+    redis.mget.mockResolvedValue([future]);
+    const map = await svc.getActiveMap([1]);
+    expect(map.get('1')).toBe(future);
   });
 
   it('getActiveMap: list rỗng → Map rỗng, không gọi Redis', async () => {
@@ -54,7 +91,16 @@ describe('RbacActivityService', () => {
     expect(redis.set).not.toHaveBeenCalled();
   });
 
-  it('getActiveMap: Redis chưa sẵn sàng → Map rỗng, không gọi mget', async () => {
+  it('getActiveMap: Redis chưa sẵn sàng vẫn trả mốc từ bộ nhớ', async () => {
+    const { svc, redis } = makeSvcRedisDown();
+    await svc.markActive(1);
+    const map = await svc.getActiveMap([1, 2]);
+    expect(map.get('1')).toBeDefined();
+    expect(map.has('2')).toBe(false);
+    expect(redis.mget).not.toHaveBeenCalled();
+  });
+
+  it('getActiveMap: chưa ai hoạt động + Redis chết → Map rỗng', async () => {
     const { svc, redis } = makeSvcRedisDown();
     const map = await svc.getActiveMap([1, 2]);
     expect(map.size).toBe(0);

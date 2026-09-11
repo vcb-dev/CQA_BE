@@ -1,4 +1,15 @@
-import { Body, Controller, Get, Param, Put, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+  Put,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -7,6 +18,8 @@ import { Roles } from '../common/decorators/roles.decorator';
 
 import { RbacService } from './rbac.service';
 import { AssignRoleDto } from './dto/assign-role.dto';
+import { CreateUserDto } from './dto/create-user.dto';
+import { ListUsersQueryDto } from './dto/list-users-query.dto';
 
 @ApiTags('rbac')
 @ApiBearerAuth('JWT-auth')
@@ -22,8 +35,15 @@ export class RbacController {
   }
 
   @Get('users')
-  async users() {
-    return { success: true, data: await this.rbac.listUsers() };
+  async users(@Query() query: ListUsersQueryDto) {
+    return { success: true, data: await this.rbac.listUsers(query) };
+  }
+
+  @Post('users')
+  @HttpCode(HttpStatus.CREATED)
+  async createUser(@Body() dto: CreateUserDto) {
+    const data = await this.rbac.createUser(dto);
+    return { success: true, message: 'Tạo người dùng thành công', data };
   }
 
   @Put('users/:id/role')

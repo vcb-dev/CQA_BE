@@ -344,6 +344,183 @@
         ]
       }
     },
+    "/api/v1/rbac/roles": {
+      "get": {
+        "operationId": "RbacController_roles",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "rbac"
+        ]
+      }
+    },
+    "/api/v1/rbac/users": {
+      "get": {
+        "operationId": "RbacController_users",
+        "parameters": [
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "Tìm theo tên hoặc email",
+            "schema": {
+              "example": "huong",
+              "type": "string"
+            }
+          },
+          {
+            "name": "role",
+            "required": false,
+            "in": "query",
+            "description": "Lọc theo vai trò",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "admin",
+                "manager",
+                "staff",
+                "user"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "pageSize",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "sortBy",
+            "required": false,
+            "in": "query",
+            "description": "Sắp theo tên (mặc định, orderBy ở DB) hoặc \"Hoạt động cuối\" (mốc không nằm trong DB, sort ở tầng ứng dụng).",
+            "schema": {
+              "default": "name",
+              "type": "string",
+              "enum": [
+                "name",
+                "lastActive"
+              ]
+            }
+          },
+          {
+            "name": "sortDir",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": "asc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "rbac"
+        ]
+      },
+      "post": {
+        "operationId": "RbacController_createUser",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUserDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "rbac"
+        ]
+      }
+    },
+    "/api/v1/rbac/users/{id}/role": {
+      "put": {
+        "operationId": "RbacController_assignRole",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignRoleDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "rbac"
+        ]
+      }
+    },
     "/api/v1/cskh/oauth/start": {
       "get": {
         "operationId": "CskhController_oauthStart",
@@ -471,6 +648,25 @@
                 }
               }
             }
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "cskh"
+        ]
+      }
+    },
+    "/api/v1/cskh/tiktok/connect": {
+      "post": {
+        "operationId": "CskhController_connectTikTokAccounts",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
           }
         },
         "security": [
@@ -1218,6 +1414,111 @@
         ]
       }
     },
+    "/api/v1/cskh/oms/catalog": {
+      "get": {
+        "operationId": "CskhController_getOmsCatalog",
+        "parameters": [
+          {
+            "name": "q",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "cskh"
+        ]
+      }
+    },
+    "/api/v1/cskh/oms/suggest": {
+      "get": {
+        "operationId": "CskhController_suggestOmsOrder",
+        "parameters": [
+          {
+            "name": "conversationId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "mentions",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "cskh"
+        ]
+      }
+    },
+    "/api/v1/cskh/oms/orders": {
+      "post": {
+        "operationId": "CskhController_createOmsOrder",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "cskh"
+        ]
+      }
+    },
     "/api/v1/cskh/customers": {
       "get": {
         "operationId": "CskhController_listCustomers",
@@ -1909,18 +2210,19 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "month",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
+            "description": ""
           }
         },
         "security": [
@@ -2035,6 +2337,14 @@
           },
           {
             "name": "platform",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "month",
             "required": true,
             "in": "query",
             "schema": {
@@ -2280,14 +2590,7 @@
         ],
         "responses": {
           "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
+            "description": ""
           }
         },
         "security": [
@@ -3545,16 +3848,77 @@
           "role": {
             "type": "string",
             "enum": [
+              "user",
               "admin",
               "manager",
-              "staff",
-              "user"
+              "staff"
             ]
           },
           "isActive": {
             "type": "boolean"
           }
         }
+      },
+      "CreateUserDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "example": "nhanvien@vienchibao.com"
+          },
+          "fullName": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 100,
+            "example": "Nguyễn Thu Hương"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 6,
+            "example": "Matkhau@123",
+            "description": "Mật khẩu tạm, người dùng đổi sau khi đăng nhập"
+          },
+          "role": {
+            "enum": [
+              "admin",
+              "manager",
+              "staff",
+              "user"
+            ],
+            "type": "string",
+            "example": "staff"
+          },
+          "phoneNumber": {
+            "type": "string",
+            "maxLength": 20,
+            "example": "0987654321"
+          }
+        },
+        "required": [
+          "email",
+          "fullName",
+          "password",
+          "role"
+        ]
+      },
+      "AssignRoleDto": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "enum": [
+              "admin",
+              "manager",
+              "staff",
+              "user"
+            ],
+            "type": "string",
+            "example": "manager"
+          }
+        },
+        "required": [
+          "role"
+        ]
       },
       "AssistantHistoryItemDto": {
         "type": "object",

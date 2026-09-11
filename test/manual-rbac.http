@@ -122,3 +122,66 @@ Cookie: {{cookie}}
 #     ...
 #   }
 # }
+
+### 9. Lọc theo từ khóa (tên hoặc email)
+GET {{base}}/rbac/users?search=huong
+Cookie: {{cookie}}
+# Kỳ vọng: 200, data.items chỉ còn user khớp; data.total phản ánh đúng số khớp
+
+### 10. Lọc theo vai trò
+GET {{base}}/rbac/users?role=manager
+Cookie: {{cookie}}
+# Kỳ vọng: 200, mọi dòng đều có role = "manager"
+
+### 11. Phân trang
+GET {{base}}/rbac/users?page=2&pageSize=10
+Cookie: {{cookie}}
+# Kỳ vọng: 200, data.page = 2, data.pageSize = 10, data.items tối đa 10 dòng
+
+### 12. Vai trò lọc sai → 400
+GET {{base}}/rbac/users?role=superadmin
+Cookie: {{cookie}}
+# Kỳ vọng: 400 "Vai trò không hợp lệ"
+
+### 13. Tạo người dùng mới
+POST {{base}}/rbac/users
+Cookie: {{cookie}}
+Content-Type: application/json
+X-CSRF-Token: <token từ GET /auth/csrf>
+
+{
+  "email": "nhanvienmoi@vienchibao.com",
+  "fullName": "Nhân Viên Mới",
+  "password": "Matkhau@123",
+  "role": "staff",
+  "phoneNumber": "0987654321"
+}
+# Kỳ vọng: 201, data có id + role "staff"; GET /rbac/users thấy user mới
+
+### 14. Tạo trùng email → 409
+POST {{base}}/rbac/users
+Cookie: {{cookie}}
+Content-Type: application/json
+X-CSRF-Token: <token>
+
+{
+  "email": "nhanvienmoi@vienchibao.com",
+  "fullName": "Trùng Email",
+  "password": "Matkhau@123",
+  "role": "user"
+}
+# Kỳ vọng: 409 "Email này đã được sử dụng"
+
+### 15. Mật khẩu quá ngắn → 400
+POST {{base}}/rbac/users
+Cookie: {{cookie}}
+Content-Type: application/json
+X-CSRF-Token: <token>
+
+{
+  "email": "ngan@vienchibao.com",
+  "fullName": "Mật khẩu ngắn",
+  "password": "123",
+  "role": "user"
+}
+# Kỳ vọng: 400 "Mật khẩu phải có ít nhất 6 ký tự"

@@ -58,14 +58,13 @@ async function main() {
   const host = sapoHost();
   const auth = sapoAuth();
 
-  const branch = await prisma.branch.findFirst({ orderBy: { id: 'asc' } });
   const user = await prisma.user.findFirst({ orderBy: { id: 'asc' } });
   const warehouse = await prisma.warehouse.findFirst({
-    where: { isActive: true },
+    where: { status: 'active' },
     orderBy: { id: 'asc' },
   });
-  if (!branch || !user || !warehouse) {
-    throw new Error('Need branch + user + warehouse');
+  if (!user || !warehouse) {
+    throw new Error('Need user + warehouse');
   }
 
   let unlinked = await prisma.product.findUnique({
@@ -198,7 +197,6 @@ async function main() {
             const price = dec(li.price);
             itemCreates.push({
               variantId,
-              warehouseId: warehouse.id,
               productName:
                 (li.name || li.title || 'Sapo item').trim() || 'Sapo item',
               sku:
@@ -214,7 +212,7 @@ async function main() {
           const baseData = {
             sapoId: BigInt(sapoId),
             customerId,
-            branchId: branch.id,
+            warehouseId: warehouse.id,
             source: 'sapo',
             status: mapStatus(raw),
             createdById: user.id,

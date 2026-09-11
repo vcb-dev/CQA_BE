@@ -14,20 +14,12 @@ export function primaryRoleFromPrisma(roles: UserRole[]): UserRole {
 export function prismaRolesFromInput(role: string): UserRole[] {
   switch (role) {
     case UserRole.admin:
-    case 'admin':
       return [UserRole.admin];
     case UserRole.manager:
-    case 'manager':
-    case 'store_manager':
       return [UserRole.manager];
     case UserRole.staff:
-    case 'staff':
-    case 'sales':
-    case 'warehouse_staff':
-    case 'purchasing':
       return [UserRole.staff];
     case UserRole.user:
-    case 'user':
       return [UserRole.user];
     default:
       return [UserRole.user];

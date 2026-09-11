@@ -28,7 +28,7 @@ async function main() {
   const auth = sapoAuth();
 
   const warehouse = await prisma.warehouse.findFirst({
-    where: { isActive: true },
+    where: { status: 'active' },
     orderBy: { id: 'asc' },
   });
   const warehouseId = warehouse?.id ?? null;

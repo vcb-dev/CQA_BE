@@ -224,11 +224,26 @@ export class RbacService {
     const id = BigInt(userId);
     const existing = await this.prisma.user.findUnique({
       where: { id },
-      select: { id: true },
+      select: { id: true, roles: true },
     });
     if (!existing) {
       throw new NotFoundException(`Không tìm thấy người dùng với id ${userId}`);
     }
+
+    // Chặn bỏ vai trò Admin của Admin cuối cùng — tránh tự/lẫn nhau khóa hết quyền quản trị.
+    const isCurrentlyAdmin =
+      primaryRoleFromPrisma(existing.roles) === UserRole.admin;
+    if (isCurrentlyAdmin && role !== UserRole.admin) {
+      const otherAdmins = await this.prisma.user.count({
+        where: { id: { not: id }, roles: { has: UserRole.admin } },
+      });
+      if (otherAdmins === 0) {
+        throw new ConflictException(
+          'Không thể bỏ vai trò Admin của Admin cuối cùng trong hệ thống',
+        );
+      }
+    }
+
     await this.prisma.user.update({
       where: { id },
       data: { roles: { set: prismaRolesFromInput(role) } },

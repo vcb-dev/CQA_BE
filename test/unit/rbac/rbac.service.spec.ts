@@ -58,7 +58,7 @@ const users = [
 const makePrisma = () => ({
   user: {
     findMany: jest.fn().mockResolvedValue(users),
-    findUnique: jest.fn().mockResolvedValue({ id: 2n }),
+    findUnique: jest.fn().mockResolvedValue({ id: 2n, roles: ['staff'] }),
     findFirst: jest.fn().mockResolvedValue(null),
     update: jest.fn().mockResolvedValue({ id: 2n }),
     count: jest.fn().mockResolvedValue(users.length),
@@ -337,6 +337,37 @@ describe('RbacService', () => {
     await expect(
       svc.assignRole('999', UserRole.manager),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('assignRole: chặn bỏ vai trò Admin của Admin cuối cùng', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({ id: 1n, roles: ['admin'] });
+    prisma.user.count.mockResolvedValue(0); // không còn admin nào khác
+    const svc = new RbacService(prisma as never, makeActivity() as never);
+    await expect(svc.assignRole('1', UserRole.manager)).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('assignRole: còn Admin khác thì vẫn đổi được vai trò Admin hiện tại', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({ id: 1n, roles: ['admin'] });
+    prisma.user.count.mockResolvedValue(1); // còn 1 admin khác
+    const svc = new RbacService(prisma as never, makeActivity() as never);
+    const out = await svc.assignRole('1', UserRole.manager);
+    expect(prisma.user.count).toHaveBeenCalledWith({
+      where: { id: { not: 1n }, roles: { has: UserRole.admin } },
+    });
+    expect(out).toEqual({ id: 1, role: 'manager' });
+  });
+
+  it('assignRole: đổi vai trò Admin → Admin (không đổi thật) không cần check', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({ id: 1n, roles: ['admin'] });
+    const svc = new RbacService(prisma as never, makeActivity() as never);
+    await svc.assignRole('1', UserRole.admin);
+    expect(prisma.user.count).not.toHaveBeenCalled();
   });
 });
 

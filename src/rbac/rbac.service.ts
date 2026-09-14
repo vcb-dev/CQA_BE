@@ -11,7 +11,6 @@ import {
   primaryRoleFromPrisma,
   prismaRolesFromInput,
 } from '../users/user-role.util';
-import { RbacActivityService } from './rbac-activity.service';
 import { RBAC_CATALOG, RBAC_CATALOG_BY_CODE } from './rbac.catalog';
 import { CreateUserDto } from './dto/create-user.dto';
 import {
@@ -23,10 +22,7 @@ const PASSWORD_SALT_ROUNDS = 12;
 
 @Injectable()
 export class RbacService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly activity: RbacActivityService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   /** Catalog 4 vai trò + số user đang giữ mỗi vai trò. */
   async listRoles() {
@@ -65,18 +61,29 @@ export class RbacService {
       where.roles = { has: query.role };
     }
 
-    // "Hoạt động cuối" không nằm trong DB (đọc từ RbacActivityService: bộ nhớ
-    // + Redis) nên không orderBy được bằng Prisma — phải lấy hết user khớp
-    // filter rồi sort/cắt trang ở tầng ứng dụng.
-    if (query.sortBy === 'lastActive') {
-      return this.listUsersSortedByLastActive(where, page, pageSize, sortDir);
-    }
+    // "Hoạt động cuối" giờ là cột DB thật (users.last_active_at) nên orderBy
+    // thẳng được ở Prisma, không cần lấy hết rồi sort tay như hồi còn Redis.
+    // null (chưa hoạt động bao giờ) luôn coi là mốc cũ nhất: asc → lên đầu,
+    // desc → xuống cuối — ngược với NULLS mặc định của Postgres nên khai rõ.
+    const orderBy: Prisma.UserOrderByWithRelationInput[] =
+      query.sortBy === 'lastActive'
+        ? [
+            {
+              lastActiveAt: {
+                sort: sortDir,
+                nulls: sortDir === 'desc' ? 'last' : 'first',
+              },
+            },
+            { name: 'asc' },
+            { id: 'asc' },
+          ]
+        : [{ name: sortDir }, { id: 'asc' }];
 
     const [total, rows] = await Promise.all([
       this.prisma.user.count({ where }),
       this.prisma.user.findMany({
         where,
-        orderBy: [{ name: sortDir }, { id: 'asc' }],
+        orderBy,
         skip: (page - 1) * pageSize,
         take: pageSize,
         select: {
@@ -85,12 +92,12 @@ export class RbacService {
           email: true,
           roles: true,
           avatarUrl: true,
+          lastActiveAt: true,
         },
       }),
     ]);
 
-    const activeMap = await this.activity.getActiveMap(rows.map((u) => u.id));
-    const items = rows.map((u) => this.toRbacUserItem(u, activeMap));
+    const items = rows.map((u) => this.toRbacUserItem(u));
 
     return {
       items,
@@ -101,64 +108,14 @@ export class RbacService {
     };
   }
 
-  private async listUsersSortedByLastActive(
-    where: Prisma.UserWhereInput,
-    page: number,
-    pageSize: number,
-    sortDir: 'asc' | 'desc',
-  ) {
-    const rows = await this.prisma.user.findMany({
-      where,
-      orderBy: [{ name: 'asc' }, { id: 'asc' }],
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        roles: true,
-        avatarUrl: true,
-      },
-    });
-
-    const activeMap = await this.activity.getActiveMap(rows.map((u) => u.id));
-    const items = rows.map((u) => this.toRbacUserItem(u, activeMap));
-
-    const dir = sortDir === 'desc' ? -1 : 1;
-    items.sort((a, b) => {
-      // Chưa hoạt động bao giờ (null) coi là cũ nhất (-Infinity):
-      // desc (lần bấm đầu ở FE) → hoạt động gần đây nhất lên trước, null xuống cuối.
-      // asc (bấm lần nữa, đảo ngược) → null lên đầu, dễ tìm ngay ai chưa từng dùng.
-      const at = a.lastActiveAt
-        ? new Date(a.lastActiveAt).getTime()
-        : -Infinity;
-      const bt = b.lastActiveAt
-        ? new Date(b.lastActiveAt).getTime()
-        : -Infinity;
-      if (at !== bt) return (at - bt) * dir;
-      return (a.fullName || '').localeCompare(b.fullName || '');
-    });
-
-    const total = items.length;
-    const start = (page - 1) * pageSize;
-
-    return {
-      items: items.slice(start, start + pageSize),
-      total,
-      page,
-      pageSize,
-      totalPages: Math.max(1, Math.ceil(total / pageSize)),
-    };
-  }
-
-  private toRbacUserItem(
-    u: {
-      id: bigint;
-      name: string | null;
-      email: string;
-      roles: UserRole[];
-      avatarUrl: string | null;
-    },
-    activeMap: Map<string, string>,
-  ) {
+  private toRbacUserItem(u: {
+    id: bigint;
+    name: string | null;
+    email: string;
+    roles: UserRole[];
+    avatarUrl: string | null;
+    lastActiveAt: Date | null;
+  }) {
     const role = primaryRoleFromPrisma(u.roles);
     const def = RBAC_CATALOG_BY_CODE[role];
     return {
@@ -170,7 +127,7 @@ export class RbacService {
       roleLabel: def.label,
       permissionSummary: def.description,
       permissions: def.permissions,
-      lastActiveAt: activeMap.get(String(u.id)) ?? null,
+      lastActiveAt: u.lastActiveAt ? u.lastActiveAt.toISOString() : null,
     };
   }
 
@@ -209,11 +166,11 @@ export class RbacService {
         email: true,
         roles: true,
         avatarUrl: true,
+        lastActiveAt: true,
       },
     });
 
-    // User vừa tạo chưa gọi API lần nào — không cần tra activeMap.
-    return this.toRbacUserItem(created, new Map());
+    return this.toRbacUserItem(created);
   }
 
   /** Đổi vai trò của 1 user. Ghi thẳng cột users.roles. */

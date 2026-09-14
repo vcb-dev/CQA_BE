@@ -1,134 +1,67 @@
-import {
-  Injectable,
-  Logger,
-  OnModuleDestroy,
-  OnModuleInit,
-} from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import type Redis from 'ioredis';
-import {
-  connectCskhRedis,
-  createCskhRedisClient,
-  isRedisClientReady,
-  isRedisDisabledByEnv,
-  resolveRedisConnectionConfig,
-} from '../cskh/redis/cskh-redis-client';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { Interval } from '@nestjs/schedule';
+import { PrismaService } from '../prisma/prisma.service';
 
-const KEY_PREFIX = 'rbac:last_active:';
-const TTL_SECONDS = 60 * 60 * 24 * 30; // 30 ngày
-const THROTTLE_MS = 5 * 60_000; // ghi Redis tối đa 1 lần / 5 phút / user
+const FLUSH_INTERVAL_MS = 30_000; // gom ghi DB theo lô mỗi 30 giây
 
 /**
- * Ghi/đọc mốc "Hoạt động cuối" của user.
+ * Ghi mốc "Hoạt động cuối" vào cột DB `users.last_active_at`, gom theo lô.
  *
- * DB dùng chung không có cột last_login nên mốc này nằm ngoài DB:
- * - Bộ nhớ process: luôn ghi, luôn đọc được — mất khi restart, không chia sẻ giữa nhiều instance.
- * - Redis: bản chia sẻ + bền, ghi tối đa 1 lần / 5 phút / user để khỏi spam.
- *
- * Không có Redis thì cột vẫn chạy, chỉ trong phạm vi 1 process.
+ * `RbacActivityInterceptor` gọi `markActive` ở MỌI request đã xác thực. Ghi
+ * DB ngay lúc đó thì với nhiều nhân viên cùng hoạt động, các lượt `UPDATE`
+ * dồn cụm tranh connection trong pool hẹp (dùng chung với warehouse-be).
+ * Nên `markActive` chỉ ghi vào `Map` trong bộ nhớ (tức thời, không đụng DB);
+ * cứ mỗi `FLUSH_INTERVAL_MS`, `flush()` gom hết user đang chờ, lọc bỏ user
+ * không còn tồn tại (vd vừa bị xóa), rồi ghi cả lô trong 1 transaction —
+ * giữ đúng 1 connection cho cả lô thay vì mỗi user tự giành 1 connection.
  */
 @Injectable()
-export class RbacActivityService implements OnModuleInit, OnModuleDestroy {
+export class RbacActivityService implements OnModuleDestroy {
   private readonly logger = new Logger(RbacActivityService.name);
-  private redis: Redis | null = null;
-  /** userId → { at: mốc hoạt động cuối, syncedAt: lần cuối đẩy lên Redis }. */
-  private readonly lastActive = new Map<
-    string,
-    { at: number; syncedAt: number }
-  >();
+  /** userId → mốc hoạt động, chờ tới lượt flush kế tiếp. */
+  private readonly pending = new Map<string, Date>();
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
-  async onModuleInit(): Promise<void> {
-    if (isRedisDisabledByEnv()) {
-      this.logger.warn('CSKH_REDIS_ENABLED=false — không ghi "Hoạt động cuối"');
-      return;
-    }
-    const cfg = resolveRedisConnectionConfig(this.configService);
-    this.redis = createCskhRedisClient(cfg, {
-      logger: this.logger,
-      label: 'rbac-activity',
-    });
-    const ok = await connectCskhRedis(this.redis, {
-      logger: this.logger,
-      label: 'rbac-activity',
-    });
-    if (!ok) {
-      this.redis = null;
-      this.logger.warn(
-        'Redis last-active không sẵn sàng — cột "Hoạt động cuối" trống',
-      );
-    }
+  /** Không đụng DB — chỉ ghi vào bộ nhớ, cực rẻ. */
+  markActive(userId: bigint | number | string): void {
+    this.pending.set(String(userId), new Date());
   }
 
-  async onModuleDestroy(): Promise<void> {
-    await this.redis?.quit().catch(() => undefined);
-  }
+  @Interval(FLUSH_INTERVAL_MS)
+  async flush(): Promise<void> {
+    if (this.pending.size === 0) return;
+    const batch = Array.from(this.pending.entries());
+    this.pending.clear();
 
-  /**
-   * Ghi mốc hoạt động. Bộ nhớ ghi mọi lần; Redis throttle 5 phút/user.
-   * Fire-and-forget — lỗi Redis không được ném ra.
-   */
-  async markActive(userId: bigint | number | string): Promise<void> {
-    const key = String(userId);
-    const now = Date.now();
-    const syncedAt = this.lastActive.get(key)?.syncedAt ?? 0;
-    const shouldSync = now - syncedAt >= THROTTLE_MS;
-
-    this.lastActive.set(key, {
-      at: now,
-      syncedAt: shouldSync ? now : syncedAt,
-    });
-
-    if (!shouldSync || !isRedisClientReady(this.redis)) return;
     try {
-      await this.redis!.set(
-        `${KEY_PREFIX}${key}`,
-        new Date(now).toISOString(),
-        'EX',
-        TTL_SECONDS,
-      );
-    } catch (e) {
-      this.logger.warn(`markActive ${key} lỗi: ${(e as Error).message}`);
-    }
-  }
-
-  /**
-   * Map String(userId) → ISO timestamp. Gộp bộ nhớ process với Redis,
-   * lấy mốc mới hơn. Redis chết → vẫn trả được phần trong bộ nhớ.
-   */
-  async getActiveMap(
-    userIds: Array<bigint | number | string>,
-  ): Promise<Map<string, string>> {
-    const out = new Map<string, string>();
-    if (userIds.length === 0) return out;
-
-    const localMs = new Map<string, number>();
-    for (const id of userIds) {
-      const key = String(id);
-      const entry = this.lastActive.get(key);
-      if (entry) {
-        localMs.set(key, entry.at);
-        out.set(key, new Date(entry.at).toISOString());
-      }
-    }
-
-    if (!isRedisClientReady(this.redis)) return out;
-    try {
-      const keys = userIds.map((id) => `${KEY_PREFIX}${id}`);
-      const values = await this.redis!.mget(...keys);
-      userIds.forEach((id, i) => {
-        const v = values[i];
-        if (!v) return;
-        const key = String(id);
-        const remoteMs = new Date(v).getTime();
-        if (Number.isNaN(remoteMs)) return;
-        // Bộ nhớ có thể mới hơn Redis vì Redis chỉ ghi 5 phút/lần.
-        if (remoteMs > (localMs.get(key) ?? 0)) out.set(key, v);
+      const ids = batch.map(([id]) => BigInt(id));
+      // Lọc bỏ user không còn tồn tại — tránh cả lô fail vì 1 id đã bị xóa.
+      const existing = await this.prisma.user.findMany({
+        where: { id: { in: ids } },
+        select: { id: true },
       });
+      const existingIds = new Set(existing.map((u) => String(u.id)));
+      const updates = batch.filter(([id]) => existingIds.has(id));
+      if (updates.length === 0) return;
+
+      await this.prisma.$transaction(
+        updates.map(([id, at]) =>
+          this.prisma.user.update({
+            where: { id: BigInt(id) },
+            data: { lastActiveAt: at },
+          }),
+        ),
+      );
     } catch (e) {
-      this.logger.warn(`getActiveMap lỗi: ${(e as Error).message}`);
+      this.logger.warn(
+        `flush ${batch.length} user lỗi: ${(e as Error).message}`,
+      );
     }
-    return out;
+  }
+
+  /** Ghi nốt phần đang chờ trước khi server tắt — không thì mất mốc lượt cuối. */
+  async onModuleDestroy(): Promise<void> {
+    await this.flush();
   }
 }

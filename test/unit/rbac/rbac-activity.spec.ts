@@ -3,108 +3,109 @@ import { RbacActivityService } from '../../../src/rbac/rbac-activity.service';
 import { RbacActivityInterceptor } from '../../../src/rbac/rbac-activity.interceptor';
 
 describe('RbacActivityService', () => {
-  const makeSvc = () => {
-    const svc = new RbacActivityService({ get: () => undefined } as never);
-    const redis = {
-      status: 'ready',
-      set: jest.fn().mockResolvedValue('OK'),
-      mget: jest.fn(),
+  const makePrisma = () => {
+    const state: { existing: bigint[] } = { existing: [] };
+    return {
+      state,
+      user: {
+        findMany: jest.fn(({ where }: { where: { id: { in: bigint[] } } }) =>
+          Promise.resolve(
+            where.id.in
+              .filter((id) => state.existing.includes(id))
+              .map((id) => ({ id })),
+          ),
+        ),
+        update: jest.fn((args: { where: { id: bigint } }) =>
+          Promise.resolve({ id: args.where.id }),
+        ),
+      },
+      $transaction: jest.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
     };
-    (svc as unknown as { redis: unknown }).redis = redis;
-    return { svc, redis };
   };
 
-  /** Redis chưa sẵn sàng (chưa connect được / mất kết nối) — status khác 'ready'. */
-  const makeSvcRedisDown = () => {
-    const svc = new RbacActivityService({ get: () => undefined } as never);
-    const redis = { status: 'end', set: jest.fn(), mget: jest.fn() };
-    (svc as unknown as { redis: unknown }).redis = redis;
-    return { svc, redis };
-  };
-
-  it('markActive: chỉ ghi Redis 1 lần trong cửa sổ throttle', async () => {
-    const { svc, redis } = makeSvc();
-    await svc.markActive(1);
-    await svc.markActive(1);
-    expect(redis.set).toHaveBeenCalledTimes(1);
-    expect(redis.set.mock.calls[0][0]).toBe('rbac:last_active:1');
+  it('markActive: chỉ ghi vào bộ nhớ, không đụng DB', () => {
+    const prisma = makePrisma();
+    const svc = new RbacActivityService(prisma as never);
+    svc.markActive(1);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('markActive: user khác nhau ghi riêng', async () => {
-    const { svc, redis } = makeSvc();
-    await svc.markActive(1);
-    await svc.markActive(2);
-    expect(redis.set).toHaveBeenCalledTimes(2);
+  it('flush: pending rỗng → không gọi DB', async () => {
+    const prisma = makePrisma();
+    const svc = new RbacActivityService(prisma as never);
+    await svc.flush();
+    expect(prisma.user.findMany).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('markActive: bộ nhớ ghi mọi lần, kể cả khi Redis bị throttle', async () => {
-    const { svc, redis } = makeSvc();
-    await svc.markActive(1);
-    await svc.markActive(1);
-    // Redis chỉ 1 lần...
-    expect(redis.set).toHaveBeenCalledTimes(1);
-    // ...nhưng mốc trong bộ nhớ vẫn đọc ra được.
-    redis.mget.mockResolvedValue([null]);
-    const map = await svc.getActiveMap([1]);
-    expect(map.get('1')).toBeDefined();
-  });
+  it('flush: gom nhiều user đang chờ, ghi cả lô trong 1 transaction', async () => {
+    const prisma = makePrisma();
+    prisma.state.existing = [1n, 2n];
+    const svc = new RbacActivityService(prisma as never);
+    svc.markActive(1);
+    svc.markActive(2);
+    await svc.flush();
 
-  it('getActiveMap: gộp kết quả mget theo String(id)', async () => {
-    const { svc, redis } = makeSvc();
-    redis.mget.mockResolvedValue(['2026-09-10T03:00:00.000Z', null]);
-    const map = await svc.getActiveMap([1, 2]);
-    expect(map.get('1')).toBe('2026-09-10T03:00:00.000Z');
-    // Chưa markActive nên không có mốc nào cho user 2.
-    expect(map.has('2')).toBe(false);
-  });
-
-  it('getActiveMap: bộ nhớ mới hơn Redis thì lấy bộ nhớ', async () => {
-    const { svc, redis } = makeSvc();
-    await svc.markActive(1);
-    // Redis giữ mốc cũ vì chỉ đồng bộ 5 phút/lần.
-    redis.mget.mockResolvedValue(['2020-01-01T00:00:00.000Z']);
-    const map = await svc.getActiveMap([1]);
-    expect(new Date(map.get('1')!).getTime()).toBeGreaterThan(
-      new Date('2020-01-01T00:00:00.000Z').getTime(),
+    expect(prisma.user.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.user.update).toHaveBeenCalledTimes(2);
+    expect(prisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 1n } }),
+    );
+    expect(prisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 2n } }),
     );
   });
 
-  it('getActiveMap: Redis mới hơn bộ nhớ thì lấy Redis', async () => {
-    const { svc, redis } = makeSvc();
-    await svc.markActive(1);
-    const future = new Date(Date.now() + 60_000).toISOString();
-    redis.mget.mockResolvedValue([future]);
-    const map = await svc.getActiveMap([1]);
-    expect(map.get('1')).toBe(future);
+  it('flush: lọc bỏ user không còn tồn tại, không kéo cả lô rollback', async () => {
+    const prisma = makePrisma();
+    prisma.state.existing = [1n]; // user 2 coi như đã bị xóa
+    const svc = new RbacActivityService(prisma as never);
+    svc.markActive(1);
+    svc.markActive(2);
+    await svc.flush();
+
+    expect(prisma.user.update).toHaveBeenCalledTimes(1);
+    expect(prisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 1n } }),
+    );
   });
 
-  it('getActiveMap: list rỗng → Map rỗng, không gọi Redis', async () => {
-    const { svc, redis } = makeSvc();
-    const map = await svc.getActiveMap([]);
-    expect(map.size).toBe(0);
-    expect(redis.mget).not.toHaveBeenCalled();
+  it('flush: tất cả user trong lô đều không còn tồn tại → không gọi transaction', async () => {
+    const prisma = makePrisma();
+    prisma.state.existing = [];
+    const svc = new RbacActivityService(prisma as never);
+    svc.markActive(1);
+    await svc.flush();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('markActive: Redis chưa sẵn sàng → không gọi set, không ném lỗi', async () => {
-    const { svc, redis } = makeSvcRedisDown();
-    await expect(svc.markActive(1)).resolves.toBeUndefined();
-    expect(redis.set).not.toHaveBeenCalled();
+  it('flush: xóa pending sau khi flush — gọi flush lần nữa không ghi lại', async () => {
+    const prisma = makePrisma();
+    prisma.state.existing = [1n];
+    const svc = new RbacActivityService(prisma as never);
+    svc.markActive(1);
+    await svc.flush();
+    await svc.flush();
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 
-  it('getActiveMap: Redis chưa sẵn sàng vẫn trả mốc từ bộ nhớ', async () => {
-    const { svc, redis } = makeSvcRedisDown();
-    await svc.markActive(1);
-    const map = await svc.getActiveMap([1, 2]);
-    expect(map.get('1')).toBeDefined();
-    expect(map.has('2')).toBe(false);
-    expect(redis.mget).not.toHaveBeenCalled();
+  it('flush: DB lỗi → không ném lỗi ra ngoài', async () => {
+    const prisma = makePrisma();
+    prisma.user.findMany.mockRejectedValue(new Error('DB busy'));
+    const svc = new RbacActivityService(prisma as never);
+    svc.markActive(1);
+    await expect(svc.flush()).resolves.toBeUndefined();
   });
 
-  it('getActiveMap: chưa ai hoạt động + Redis chết → Map rỗng', async () => {
-    const { svc, redis } = makeSvcRedisDown();
-    const map = await svc.getActiveMap([1, 2]);
-    expect(map.size).toBe(0);
-    expect(redis.mget).not.toHaveBeenCalled();
+  it('onModuleDestroy: flush nốt phần đang chờ trước khi server tắt', async () => {
+    const prisma = makePrisma();
+    prisma.state.existing = [1n];
+    const svc = new RbacActivityService(prisma as never);
+    svc.markActive(1);
+    await svc.onModuleDestroy();
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 });
 

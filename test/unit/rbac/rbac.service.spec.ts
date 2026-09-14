@@ -30,6 +30,7 @@ const users = [
     email: 'cuong@vienchibao.com',
     roles: ['admin'],
     avatarUrl: null,
+    lastActiveAt: new Date('2026-09-10T03:00:00.000Z'),
   },
   {
     id: 2n,
@@ -37,6 +38,7 @@ const users = [
     email: 'vylt@vienchibao.com',
     roles: ['staff'],
     avatarUrl: null,
+    lastActiveAt: null,
   },
   {
     id: 3n,
@@ -44,6 +46,7 @@ const users = [
     email: 'quantm@vienchibao.com',
     roles: [],
     avatarUrl: null,
+    lastActiveAt: null,
   },
   // Nhiều role cùng lúc — kiểm tra primaryRoleFromPrisma ưu tiên admin cao nhất.
   {
@@ -52,6 +55,7 @@ const users = [
     email: 'tuanpa@vienchibao.com',
     roles: ['staff', 'admin'],
     avatarUrl: null,
+    lastActiveAt: null,
   },
 ];
 
@@ -68,19 +72,17 @@ const makePrisma = () => ({
       email: 'moi@vienchibao.com',
       roles: ['staff'],
       avatarUrl: null,
+      lastActiveAt: null,
     }),
   },
   tenant: { findFirst: jest.fn().mockResolvedValue({ id: 'tenant-uuid' }) },
-});
-const makeActivity = (map = new Map<string, string>()) => ({
-  getActiveMap: jest.fn().mockResolvedValue(map),
 });
 
 describe('RbacService.createUser', () => {
   it('email trùng → ConflictException, không tạo gì', async () => {
     const prisma = makePrisma();
     prisma.user.findFirst.mockResolvedValue({ id: 1n });
-    const svc = new RbacService(prisma as never, makeActivity() as never);
+    const svc = new RbacService(prisma as never);
     await expect(
       svc.createUser({
         email: 'cuong@vienchibao.com',
@@ -94,7 +96,7 @@ describe('RbacService.createUser', () => {
 
   it('chuẩn hóa email, hash mật khẩu, gắn tenant và set vai trò', async () => {
     const prisma = makePrisma();
-    const svc = new RbacService(prisma as never, makeActivity() as never);
+    const svc = new RbacService(prisma as never);
     const out = await svc.createUser({
       email: '  MOI@VienChiBao.com ',
       fullName: '  Nhân viên mới  ',
@@ -113,13 +115,18 @@ describe('RbacService.createUser', () => {
     expect(data.passwordHash).not.toBe('Matkhau@123');
     expect(await bcrypt.compare('Matkhau@123', data.passwordHash)).toBe(true);
 
-    expect(out).toMatchObject({ id: 9, role: 'staff', roleLabel: 'Staff' });
+    expect(out).toMatchObject({
+      id: 9,
+      role: 'staff',
+      roleLabel: 'Staff',
+      lastActiveAt: null,
+    });
   });
 
   it('không có tenant nào → tenantId null, vẫn tạo được', async () => {
     const prisma = makePrisma();
     prisma.tenant.findFirst.mockResolvedValue(null);
-    const svc = new RbacService(prisma as never, makeActivity() as never);
+    const svc = new RbacService(prisma as never);
     await svc.createUser({
       email: 'moi2@vienchibao.com',
       fullName: 'Không tenant',
@@ -132,7 +139,7 @@ describe('RbacService.createUser', () => {
 
 describe('RbacService', () => {
   it('listRoles trả 4 vai trò + userCount', async () => {
-    const svc = new RbacService(makePrisma() as never, makeActivity() as never);
+    const svc = new RbacService(makePrisma() as never);
     const roles = await svc.listRoles();
     expect(roles.map((r) => r.code)).toEqual([
       'admin',
@@ -150,12 +157,8 @@ describe('RbacService', () => {
     );
   });
 
-  it('listUsers gộp role + lastActiveAt', async () => {
-    const map = new Map([['1', '2026-09-10T03:00:00.000Z']]);
-    const svc = new RbacService(
-      makePrisma() as never,
-      makeActivity(map) as never,
-    );
+  it('listUsers gộp role + lastActiveAt (đọc thẳng cột DB, không qua Redis/bộ nhớ)', async () => {
+    const svc = new RbacService(makePrisma() as never);
     const {
       items: rows,
       total,
@@ -184,9 +187,18 @@ describe('RbacService', () => {
     });
   });
 
+  it('listUsers: select có lastActiveAt', async () => {
+    const prisma = makePrisma();
+    const svc = new RbacService(prisma as never);
+    await svc.listUsers();
+    expect(prisma.user.findMany.mock.calls[0][0].select).toMatchObject({
+      lastActiveAt: true,
+    });
+  });
+
   it('listUsers: search lọc theo tên hoặc email, không phân biệt hoa thường', async () => {
     const prisma = makePrisma();
-    const svc = new RbacService(prisma as never, makeActivity() as never);
+    const svc = new RbacService(prisma as never);
     await svc.listUsers({ search: '  Huong  ' });
     const where = prisma.user.findMany.mock.calls[0][0].where;
     expect(where.OR).toEqual([
@@ -199,7 +211,7 @@ describe('RbacService', () => {
 
   it('listUsers: lọc theo vai trò dùng roles has', async () => {
     const prisma = makePrisma();
-    const svc = new RbacService(prisma as never, makeActivity() as never);
+    const svc = new RbacService(prisma as never);
     await svc.listUsers({ role: UserRole.manager });
     expect(prisma.user.findMany.mock.calls[0][0].where).toEqual({
       roles: { has: 'manager' },
@@ -209,7 +221,7 @@ describe('RbacService', () => {
   it('listUsers: phân trang tính skip/take đúng', async () => {
     const prisma = makePrisma();
     prisma.user.count.mockResolvedValue(45);
-    const svc = new RbacService(prisma as never, makeActivity() as never);
+    const svc = new RbacService(prisma as never);
     const out = await svc.listUsers({ page: 3, pageSize: 10 });
     expect(prisma.user.findMany.mock.calls[0][0]).toMatchObject({
       skip: 20,
@@ -225,14 +237,14 @@ describe('RbacService', () => {
 
   it('listUsers: không có filter thì where rỗng', async () => {
     const prisma = makePrisma();
-    const svc = new RbacService(prisma as never, makeActivity() as never);
+    const svc = new RbacService(prisma as never);
     await svc.listUsers({ search: '   ' });
     expect(prisma.user.findMany.mock.calls[0][0].where).toEqual({});
   });
 
   it('listUsers: sortDir áp cho orderBy tên (mặc định sortBy=name)', async () => {
     const prisma = makePrisma();
-    const svc = new RbacService(prisma as never, makeActivity() as never);
+    const svc = new RbacService(prisma as never);
     await svc.listUsers({ sortDir: 'desc' });
     expect(prisma.user.findMany.mock.calls[0][0].orderBy).toEqual([
       { name: 'desc' },
@@ -240,70 +252,54 @@ describe('RbacService', () => {
     ]);
   });
 
-  describe('listUsers: sortBy=lastActive — sort ở tầng ứng dụng, không orderBy DB', () => {
-    // id1 mới nhất, id4 giữa, id2 cũ nhất, id3 chưa hoạt động bao giờ (null).
-    const map = new Map([
-      ['1', '2026-09-10T05:00:00.000Z'],
-      ['2', '2026-09-10T01:00:00.000Z'],
-      ['4', '2026-09-10T03:00:00.000Z'],
-    ]);
-
-    it('desc (mặc định bấm lần đầu ở FE): mới → cũ, null (chưa hoạt động) xuống cuối', async () => {
-      const svc = new RbacService(
-        makePrisma() as never,
-        makeActivity(map) as never,
-      );
-      const { items, total } = await svc.listUsers({
-        sortBy: 'lastActive',
-        sortDir: 'desc',
-        pageSize: 20,
-      });
-      expect(items.map((u) => u.id)).toEqual([1, 4, 2, 3]);
-      expect(total).toBe(4);
-    });
-
-    it('asc (bấm lần nữa, đảo ngược): null (chưa hoạt động) lên đầu, rồi cũ → mới', async () => {
-      const svc = new RbacService(
-        makePrisma() as never,
-        makeActivity(map) as never,
-      );
-      const { items } = await svc.listUsers({
-        sortBy: 'lastActive',
-        pageSize: 20,
-      });
-      expect(items.map((u) => u.id)).toEqual([3, 2, 4, 1]);
-    });
-
-    it('phân trang cắt đúng sau khi sort, total tính trên toàn bộ danh sách', async () => {
-      const svc = new RbacService(
-        makePrisma() as never,
-        makeActivity(map) as never,
-      );
-      const { items, total, totalPages } = await svc.listUsers({
-        sortBy: 'lastActive',
-        page: 2,
-        pageSize: 2,
-      });
-      // Thứ tự asc mặc định đầy đủ: [3, 2, 4, 1] → trang 2 (size 2) là [4, 1].
-      expect(items.map((u) => u.id)).toEqual([4, 1]);
-      expect(total).toBe(4);
-      expect(totalPages).toBe(2);
-    });
-
-    it('không gọi prisma.user.count — tự tính total từ danh sách đã lấy hết', async () => {
+  describe('listUsers: sortBy=lastActive — orderBy thẳng ở Prisma trên cột DB thật', () => {
+    it('desc (mặc định bấm lần đầu ở FE): orderBy lastActiveAt desc, null xuống cuối (nulls last)', async () => {
       const prisma = makePrisma();
-      const svc = new RbacService(prisma as never, makeActivity(map) as never);
+      const svc = new RbacService(prisma as never);
+      await svc.listUsers({ sortBy: 'lastActive', sortDir: 'desc' });
+      expect(prisma.user.findMany.mock.calls[0][0].orderBy).toEqual([
+        { lastActiveAt: { sort: 'desc', nulls: 'last' } },
+        { name: 'asc' },
+        { id: 'asc' },
+      ]);
+    });
+
+    it('asc (bấm lần nữa, đảo ngược, cũng là mặc định khi không truyền sortDir): null lên đầu (nulls first)', async () => {
+      const prisma = makePrisma();
+      const svc = new RbacService(prisma as never);
       await svc.listUsers({ sortBy: 'lastActive' });
-      expect(prisma.user.count).not.toHaveBeenCalled();
-      // Lấy hết (không skip/take) để sort đúng trước khi cắt trang.
-      expect(prisma.user.findMany.mock.calls[0][0].skip).toBeUndefined();
-      expect(prisma.user.findMany.mock.calls[0][0].take).toBeUndefined();
+      expect(prisma.user.findMany.mock.calls[0][0].orderBy).toEqual([
+        { lastActiveAt: { sort: 'asc', nulls: 'first' } },
+        { name: 'asc' },
+        { id: 'asc' },
+      ]);
+    });
+
+    it('vẫn phân trang + đếm tổng ở DB như đường sort tên — không còn lấy hết rồi cắt tay', async () => {
+      const prisma = makePrisma();
+      prisma.user.count.mockResolvedValue(45);
+      const svc = new RbacService(prisma as never);
+      const out = await svc.listUsers({
+        sortBy: 'lastActive',
+        page: 3,
+        pageSize: 10,
+      });
+      expect(prisma.user.findMany.mock.calls[0][0]).toMatchObject({
+        skip: 20,
+        take: 10,
+      });
+      expect(out).toMatchObject({
+        total: 45,
+        page: 3,
+        pageSize: 10,
+        totalPages: 5,
+      });
     });
   });
 
   it('assignRole map role → update users.roles bằng { set }', async () => {
     const prisma = makePrisma();
-    const svc = new RbacService(prisma as never, makeActivity() as never);
+    const svc = new RbacService(prisma as never);
     const out = await svc.assignRole('2', UserRole.manager);
     expect(prisma.user.update).toHaveBeenCalledWith({
       where: { id: 2n },
@@ -314,7 +310,7 @@ describe('RbacService', () => {
 
   it("assignRole map role staff → update users.roles bằng { set: ['staff'] }", async () => {
     const prisma = makePrisma();
-    const svc = new RbacService(prisma as never, makeActivity() as never);
+    const svc = new RbacService(prisma as never);
     const out = await svc.assignRole('2', UserRole.staff);
     expect(prisma.user.update).toHaveBeenCalledWith({
       where: { id: 2n },
@@ -324,7 +320,7 @@ describe('RbacService', () => {
   });
 
   it('assignRole: id không phải số → BadRequestException', async () => {
-    const svc = new RbacService(makePrisma() as never, makeActivity() as never);
+    const svc = new RbacService(makePrisma() as never);
     await expect(
       svc.assignRole('abc', UserRole.manager),
     ).rejects.toBeInstanceOf(BadRequestException);
@@ -333,7 +329,7 @@ describe('RbacService', () => {
   it('assignRole: user không tồn tại → NotFoundException', async () => {
     const prisma = makePrisma();
     prisma.user.findUnique.mockResolvedValue(null);
-    const svc = new RbacService(prisma as never, makeActivity() as never);
+    const svc = new RbacService(prisma as never);
     await expect(
       svc.assignRole('999', UserRole.manager),
     ).rejects.toBeInstanceOf(NotFoundException);
@@ -343,7 +339,7 @@ describe('RbacService', () => {
     const prisma = makePrisma();
     prisma.user.findUnique.mockResolvedValue({ id: 1n, roles: ['admin'] });
     prisma.user.count.mockResolvedValue(0); // không còn admin nào khác
-    const svc = new RbacService(prisma as never, makeActivity() as never);
+    const svc = new RbacService(prisma as never);
     await expect(svc.assignRole('1', UserRole.manager)).rejects.toBeInstanceOf(
       ConflictException,
     );
@@ -354,7 +350,7 @@ describe('RbacService', () => {
     const prisma = makePrisma();
     prisma.user.findUnique.mockResolvedValue({ id: 1n, roles: ['admin'] });
     prisma.user.count.mockResolvedValue(1); // còn 1 admin khác
-    const svc = new RbacService(prisma as never, makeActivity() as never);
+    const svc = new RbacService(prisma as never);
     const out = await svc.assignRole('1', UserRole.manager);
     expect(prisma.user.count).toHaveBeenCalledWith({
       where: { id: { not: 1n }, roles: { has: UserRole.admin } },
@@ -365,7 +361,7 @@ describe('RbacService', () => {
   it('assignRole: đổi vai trò Admin → Admin (không đổi thật) không cần check', async () => {
     const prisma = makePrisma();
     prisma.user.findUnique.mockResolvedValue({ id: 1n, roles: ['admin'] });
-    const svc = new RbacService(prisma as never, makeActivity() as never);
+    const svc = new RbacService(prisma as never);
     await svc.assignRole('1', UserRole.admin);
     expect(prisma.user.count).not.toHaveBeenCalled();
   });

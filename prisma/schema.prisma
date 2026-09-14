@@ -99,6 +99,8 @@ model User {
   isActive     Boolean       @default(true) @map("active")
   createdAt    DateTime      @default(now()) @map("created_on") @db.Timestamp(6)
   updatedAt    DateTime      @updatedAt @map("modified_on") @db.Timestamp(6)
+  /// "Hoạt động cuối" cho trang Phân quyền — RbacActivityService ghi throttle 5 phút/lần.
+  lastActiveAt DateTime?     @map("last_active_at")
 
   tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 

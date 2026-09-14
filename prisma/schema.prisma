@@ -367,11 +367,15 @@ model FacebookCskhConfig {
   pageAccessToken String   @map("page_access_token") @db.Text
   enabled         Boolean  @default(true)
   metadata        Json?
+  // Gắn nhãn quản lý — nhập tay, không ràng buộc bảng nào (không phải User/Team thật).
+  team            String?  @db.VarChar(120)
+  managerName     String?  @map("manager_name") @db.VarChar(120)
+  region          String?  @db.VarChar(120)
   tenantId        String?  @map("tenant_id") @db.Uuid
   tenant          Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
-  
+
   @@map("facebook_cskh_configs")
 }
 

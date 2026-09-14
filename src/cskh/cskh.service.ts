@@ -547,6 +547,9 @@ export class CskhService implements OnModuleInit {
       enabled: boolean;
       updatedAt: Date;
       metadata: Prisma.JsonValue | null;
+      team: string | null;
+      managerName: string | null;
+      region: string | null;
     };
     const pageListSelect = {
       pageId: true,
@@ -554,6 +557,9 @@ export class CskhService implements OnModuleInit {
       enabled: true,
       updatedAt: true,
       metadata: true,
+      team: true,
+      managerName: true,
+      region: true,
     } as const;
 
     const month = options?.month?.trim();
@@ -720,6 +726,9 @@ export class CskhService implements OnModuleInit {
         updatedAt: row.updatedAt,
         pagePictureUrl: this.pagePictureUrl(row.metadata),
         platform: cskhChannelPlatform(row.metadata),
+        team: row.team,
+        managerName: row.managerName,
+        region: row.region,
         conversationCount: convCountMap.get(row.pageId) || 0,
         messageCount: totalMessageStatsMap.get(row.pageId) || 0,
         unreadConversationCount: unreadCountMap.get(row.pageId) || 0,
@@ -773,6 +782,9 @@ export class CskhService implements OnModuleInit {
       enabled: boolean;
       updatedAt: Date;
       metadata: Prisma.JsonValue | null;
+      team: string | null;
+      managerName: string | null;
+      region: string | null;
     }>,
   ) {
     const oauth = await this.prisma.facebookOAuthSession.findFirst({
@@ -802,6 +814,9 @@ export class CskhService implements OnModuleInit {
         updatedAt: row.updatedAt,
         pagePictureUrl: this.pagePictureUrl(row.metadata),
         platform: cskhChannelPlatform(row.metadata),
+        team: row.team,
+        managerName: row.managerName,
+        region: row.region,
       })),
       oauthConnected: Boolean(oauth),
       oauthUser: oauth?.fbUserName || oauth?.fbUserId || null,
@@ -2165,6 +2180,33 @@ export class CskhService implements OnModuleInit {
       throw new NotFoundException('Không tìm thấy page hoặc không có quyền');
     }
     return { pageId, enabled };
+  }
+
+  /** Gắn nhãn quản lý (team/người quản lý/khu vực) cho 1 kênh — nhập tay ở Cài đặt, không liên kết bảng nào khác. */
+  async setPageInfo(
+    pageId: string,
+    data: { team?: string | null; managerName?: string | null; region?: string | null },
+    tenantId?: string,
+  ) {
+    const where = tenantId ? { pageId, tenantId } : { pageId };
+    const trim = (v?: string | null) => {
+      if (v === undefined) return undefined;
+      const t = v?.trim() ?? '';
+      return t.length ? t : null;
+    };
+    const result = await this.prisma.facebookCskhConfig.updateMany({
+      where,
+      data: {
+        team: trim(data.team),
+        managerName: trim(data.managerName),
+        region: trim(data.region),
+      },
+    });
+    if (result.count === 0) {
+      throw new NotFoundException('Không tìm thấy page hoặc không có quyền');
+    }
+    this.invalidatePageListLiteCache(tenantId);
+    return { pageId, ...data };
   }
 
   async setPagesEnabledBulk(enabled: boolean, pageIds?: string[], tenantId?: string) {

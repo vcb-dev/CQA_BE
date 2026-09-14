@@ -1093,24 +1093,6 @@ export class CskhInsightService {
     });
   }
 
-  private buildAdEfficiency(adSources: Map<string, { count: number; pass: number; fromAd: number }>) {
-    return [...adSources.entries()]
-      .sort((a, b) => b[1].count - a[1].count)
-      .slice(0, 6)
-      .map(([name, s]) => {
-        const passRate = s.count > 0 ? s.pass / s.count : 0;
-        const stars = Math.min(5, Math.max(1, Math.round(passRate * 5)));
-        return {
-          name,
-          quality: passRate >= 0.7 ? 'Tốt' : passRate >= 0.5 ? 'Khá' : 'Cần cải thiện',
-          stars,
-          closeRate: `${Math.round(passRate * 100)}% đạt QA`,
-          roas: s.fromAd ? '—' : 'N/A',
-          conversationCount: s.count,
-        };
-      });
-  }
-
   private buildProducts(products: Map<string, number>, productLabels: Map<string, string>) {
     const top = topEntries(products, 8, (k) => productLabel(productLabels, k));
     return top.map((x) => ({

@@ -11,7 +11,7 @@ import { RegisterDto } from './dto/register.dto';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
 import { User } from '@prisma/client';
 import axios from 'axios';
-import { cqaRoleFromPrisma, toPublicUser } from '../users/user-role.util';
+import { primaryRoleFromPrisma, toPublicUser } from '../users/user-role.util';
 
 @Injectable()
 export class AuthService {
@@ -105,7 +105,7 @@ export class AuthService {
     const payload: JwtPayload = {
       sub: user.id.toString(),
       email: user.email,
-      role: cqaRoleFromPrisma(user.roles),
+      role: primaryRoleFromPrisma(user.roles),
     };
 
     const [accessToken, refreshToken] = await Promise.all([

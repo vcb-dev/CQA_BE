@@ -14,11 +14,10 @@ datasource db {
 // --- Enums ---
 
 enum UserRole {
-  warehouse_staff
-  purchasing
-  store_manager
-  sales
   admin
+  manager
+  staff
+  user
 }
 
 enum PermissionScope {

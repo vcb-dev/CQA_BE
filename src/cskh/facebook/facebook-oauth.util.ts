@@ -13,6 +13,7 @@ export const FB_OAUTH_SCOPES = [
   'pages_messaging',
   'pages_manage_metadata',
   'pages_read_engagement',
+  'pages_events',
   'instagram_basic',
   'instagram_manage_messages',
   'ads_read',

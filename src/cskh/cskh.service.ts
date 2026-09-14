@@ -1621,6 +1621,7 @@ export class CskhService implements OnModuleInit {
       adName: conv.adTitle,
       adsetName: null,
       campaignName: null,
+      adImageUrl: null,
       currency: null,
       spend: null,
       impressions: null,
@@ -1693,10 +1694,14 @@ export class CskhService implements OnModuleInit {
           ? 'ads_read_missing'
           : 'api_error';
         this.logger.warn(`getConversationAdInsights ${conversationId}: ${msg}`);
+        const creative = await this.ads
+          .fetchAdCreativePreview(effectiveAdId, session.userAccessToken)
+          .catch(() => ({ adName: null as string | null, adImageUrl: null as string | null }));
         return {
           ...empty(reason),
           adId: effectiveAdId,
-          adName: conv.adTitle,
+          adName: creative.adName ?? conv.adTitle,
+          adImageUrl: creative.adImageUrl,
           localConversationCount,
         };
       }

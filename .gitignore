@@ -35,3 +35,4 @@ lerna-debug.log*
 # TypeScript incremental (đừng commit — gây CI thiếu dist/main.js)
 *.tsbuildinfo
 tsconfig.build.tsbuildinfo
+.cursor*

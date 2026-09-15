@@ -363,10 +363,39 @@ export class CskhInsightService {
     return rows;
   }
 
-  /**
-   * Audit stats cho danh sách kênh — chỉ lọc created_at (có index).
-   * Bỏ filter JSON metadata dates (rất chậm); đủ cho badge điểm trên UI list.
-   */
+  /** Cùng bộ lọc kỳ cho tổng quan và chi tiết; ngày tạo chỉ fallback cho bản ghi không có ngày audit. */
+  private auditPeriodFilter(from: string, to: string): Prisma.Sql {
+    const { start, end } = this.graph.vietnamDateRange(from, to);
+    return Prisma.sql`(
+      (
+        NULLIF(metadata->>'activityDateFrom', '') IS NOT NULL
+        AND NULLIF(metadata->>'activityDateFrom', '') <= ${to}
+        AND COALESCE(NULLIF(metadata->>'activityDateTo', ''), metadata->>'activityDateFrom') >= ${from}
+      )
+      OR (
+        NULLIF(metadata->>'activityDateFrom', '') IS NULL
+        AND NULLIF(metadata->>'auditDateFrom', '') IS NOT NULL
+        AND metadata->>'auditDateFrom' <= ${to}
+        AND COALESCE(NULLIF(metadata->>'auditDateTo', ''), metadata->>'auditDateFrom') >= ${from}
+      )
+      OR (
+        NULLIF(metadata->>'activityDateFrom', '') IS NULL
+        AND NULLIF(metadata->>'auditDateFrom', '') IS NULL
+        AND NULLIF(metadata->>'auditDate', '') IS NOT NULL
+        AND metadata->>'auditDate' >= ${from}
+        AND metadata->>'auditDate' <= ${to}
+      )
+      OR (
+        NULLIF(metadata->>'activityDateFrom', '') IS NULL
+        AND NULLIF(metadata->>'auditDateFrom', '') IS NULL
+        AND NULLIF(metadata->>'auditDate', '') IS NULL
+        AND created_at >= ${start}
+        AND created_at <= ${end}
+      )
+    )`;
+  }
+
+  /** Audit stats cho danh sách kênh — tổng hợp trong DB, không tải transcript. */
   private async fetchPageAuditStats(
     from: string,
     to: string,
@@ -382,8 +411,6 @@ export class CskhInsightService {
       neutralCount: number;
       negativeCount: number;
     };
-
-    const { start: createdStart, end: createdEnd } = this.graph.vietnamDateRange(from, to);
 
     let rows: Row[] = [];
     try {
@@ -402,8 +429,7 @@ export class CskhInsightService {
           COUNT(*) FILTER (WHERE COALESCE(metadata->'sentiment'->>'tone', '') = 'negative')::int AS "negativeCount"
         FROM chat_audits
         WHERE (${tenantId}::uuid IS NULL OR tenant_id = ${tenantId}::uuid)
-          AND created_at >= ${createdStart}
-          AND created_at <= ${createdEnd}
+          AND ${this.auditPeriodFilter(from, to)}
           AND transcript IS NOT NULL
           AND NULLIF(TRIM(metadata->>'pageId'), '') IS NOT NULL
         GROUP BY TRIM(metadata->>'pageId')
@@ -436,11 +462,6 @@ export class CskhInsightService {
     to: string,
     tenantId?: string,
   ): Promise<AuditRow[]> {
-    const padFrom = addDays(parseYmd(from), -60).toISOString().slice(0, 10);
-    const padTo = addDays(parseYmd(to), 14).toISOString().slice(0, 10);
-    const { start: createdPadStart } = this.graph.vietnamDateRange(padFrom, padFrom);
-    const { end: createdPadEnd } = this.graph.vietnamDateRange(padTo, padTo);
-    const { start: rangeStart, end: rangeEnd } = this.graph.vietnamDateRange(from, to);
     const maxRows = Math.min(
       800,
       Math.max(100, Number(process.env.CSKH_INSIGHT_DETAIL_MAX_AUDITS || 400)),
@@ -451,37 +472,9 @@ export class CskhInsightService {
         SELECT score, metadata
         FROM chat_audits
         WHERE (${tenantId}::uuid IS NULL OR tenant_id = ${tenantId}::uuid)
-          AND created_at >= ${createdPadStart}
-          AND created_at <= ${createdPadEnd}
           AND transcript IS NOT NULL
           AND TRIM(metadata->>'pageId') = ${pageId}
-          AND (
-            (
-              NULLIF(metadata->>'activityDateFrom', '') IS NOT NULL
-              AND NULLIF(metadata->>'activityDateFrom', '') <= ${to}
-              AND COALESCE(NULLIF(metadata->>'activityDateTo', ''), metadata->>'activityDateFrom') >= ${from}
-            )
-            OR (
-              NULLIF(metadata->>'activityDateFrom', '') IS NULL
-              AND NULLIF(metadata->>'auditDateFrom', '') IS NOT NULL
-              AND metadata->>'auditDateFrom' <= ${to}
-              AND COALESCE(NULLIF(metadata->>'auditDateTo', ''), metadata->>'auditDateFrom') >= ${from}
-            )
-            OR (
-              NULLIF(metadata->>'activityDateFrom', '') IS NULL
-              AND NULLIF(metadata->>'auditDateFrom', '') IS NULL
-              AND NULLIF(metadata->>'auditDate', '') IS NOT NULL
-              AND metadata->>'auditDate' >= ${from}
-              AND metadata->>'auditDate' <= ${to}
-            )
-            OR (
-              NULLIF(metadata->>'activityDateFrom', '') IS NULL
-              AND NULLIF(metadata->>'auditDateFrom', '') IS NULL
-              AND NULLIF(metadata->>'auditDate', '') IS NULL
-              AND created_at >= ${rangeStart}
-              AND created_at <= ${rangeEnd}
-            )
-          )
+          AND ${this.auditPeriodFilter(from, to)}
         ORDER BY created_at DESC
         LIMIT ${maxRows}
       `;
@@ -1048,33 +1041,35 @@ export class CskhInsightService {
     };
   }
 
-  /** Nguồn ads từ inbox thật — không gắn % QA giả khi chưa audit. */
   private buildInboxAdSources(
-    adSources: Map<string, { count: number; pass: number; fromAd: number }>,
-    hasAuditQa: boolean,
+    inboxSources: Map<string, { count: number; pass: number; fromAd: number }>,
+    auditSources: Map<string, { count: number; pass: number; fromAd: number }> | null,
   ) {
-    return [...adSources.entries()]
+    return [...inboxSources.entries()]
       .sort((a, b) => b[1].count - a[1].count)
       .slice(0, 6)
       .map(([name, s]) => {
-        if (!hasAuditQa) {
+        const source = s.fromAd ? 'Quảng cáo' : 'Tự nhiên';
+        const audit = auditSources?.get(name);
+        if (!audit || audit.count <= 0) {
           return {
             name,
-            quality: 'Inbox',
+            quality: 'Chưa audit',
             stars: 0,
-            closeRate: `${s.count.toLocaleString('vi-VN')} hội thoại`,
-            roas: s.fromAd ? 'Ads' : 'Organic',
+            closeRate: '—',
+            auditCount: 0,
+            source,
             conversationCount: s.count,
           };
         }
-        const passRate = s.count > 0 ? s.pass / s.count : 0;
-        const stars = Math.min(5, Math.max(1, Math.round(passRate * 5)));
+        const passRate = audit.pass / audit.count;
         return {
           name,
           quality: passRate >= 0.7 ? 'Tốt' : passRate >= 0.5 ? 'Khá' : 'Cần cải thiện',
-          stars,
-          closeRate: `${Math.round(passRate * 100)}% đạt QA`,
-          roas: s.fromAd ? '—' : 'N/A',
+          stars: Math.min(5, Math.max(1, Math.round(passRate * 5))),
+          closeRate: `${Math.round(passRate * 100)}%`,
+          auditCount: audit.count,
+          source,
           conversationCount: s.count,
         };
       });
@@ -1096,24 +1091,6 @@ export class CskhInsightService {
         cta: topic.cta,
       };
     });
-  }
-
-  private buildAdEfficiency(adSources: Map<string, { count: number; pass: number; fromAd: number }>) {
-    return [...adSources.entries()]
-      .sort((a, b) => b[1].count - a[1].count)
-      .slice(0, 6)
-      .map(([name, s]) => {
-        const passRate = s.count > 0 ? s.pass / s.count : 0;
-        const stars = Math.min(5, Math.max(1, Math.round(passRate * 5)));
-        return {
-          name,
-          quality: passRate >= 0.7 ? 'Tốt' : passRate >= 0.5 ? 'Khá' : 'Cần cải thiện',
-          stars,
-          closeRate: `${Math.round(passRate * 100)}% đạt QA`,
-          roas: s.fromAd ? '—' : 'N/A',
-          conversationCount: s.count,
-        };
-      });
   }
 
   private buildProducts(products: Map<string, number>, productLabels: Map<string, string>) {
@@ -1348,7 +1325,7 @@ export class CskhInsightService {
       sentiment: hasAudit
         ? { ...sentimentPct, positiveChange: 0 }
         : { positive: 0, neutral: 0, negative: 0, positiveChange: 0 },
-      adEfficiency: this.buildInboxAdSources(curInbox.adSources, false),
+      adEfficiency: this.buildInboxAdSources(curInbox.adSources, curAudit?.adSources ?? null),
       highCloseRate: curAudit && curAudit.total > 0 ? Math.round((curAudit.highClose / curAudit.total) * 100) : null,
       lowCloseRate: curAudit && curAudit.total > 0 ? Math.round((curAudit.lowClose / curAudit.total) * 100) : null,
       byPage: null,

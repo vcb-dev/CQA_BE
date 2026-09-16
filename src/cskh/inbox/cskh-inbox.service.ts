@@ -1,37 +1,77 @@
-import { BadRequestException, Injectable, Logger, NotFoundException, Inject, forwardRef, OnModuleDestroy, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
+import {
+  BadRequestException,
+  forwardRef,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleDestroy,
+  OnModuleInit,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import type {
+  CskhInboxConversation,
+  CskhInboxMessage,
+  FacebookCskhConfig,
+} from '@prisma/client';
 import { Prisma } from '@prisma/client';
-import type { CskhInboxConversation, CskhInboxMessage, FacebookCskhConfig } from '@prisma/client';
-import { GraphApiCoordinatorService } from '../facebook/graph-api-coordinator.service';
-import {
-  customerWaitingFromMessages,
-  isStaffLastMessage,
-  lastMessagePreviewMismatch,
-} from './cskh-inbox-unread.util';
-import { RedisQueueService } from '../redis/redis-queue.service';
-import { PrismaService } from '../../prisma/prisma.service';
 import { AiService } from '../../ai/ai.service';
-import { FacebookGraphService, type FbMessage, type FbConversation } from '../facebook/facebook-graph.service';
+import { isPrismaRecentlyBusy } from '../../common/prisma-busy.util';
+import { PrismaService } from '../../prisma/prisma.service';
 import {
-  dedupeMediaUrls,
-  repairStoredMessage,
+  getCskhRunMode,
+  isCskhApiProcess,
+  isCskhWorkerProcess,
+} from '../cskh-run-mode';
+import { CskhService } from '../cskh.service';
+import {
+  FacebookGraphService,
+  type FbConversation,
+  type FbMessage,
+} from '../facebook/facebook-graph.service';
+import {
   computeTrailingCustomerUnread,
-  isMessengerFromCustomer,
-  resolveMessengerCustomerPsid,
-  inboxListPreview,
+  dedupeMediaUrls,
   groupInboxMediaRows,
+  inboxListPreview,
+  isMessengerFromCustomer,
+  repairStoredMessage,
+  resolveMessengerCustomerPsid,
 } from '../facebook/facebook-message.util';
 import {
-  detectAdFromFbMessages,
-  AD_REFERRAL_ILIKE_SUBSTRINGS,
-  type FbWebhookReferral,
-  parseWebhookReferral,
-} from '../facebook/facebook-referral.util';
-import {
-  getFacebookWebhookVerifyToken,
-  cskhInboxGraphPlatform,
   cskhChannelPlatform,
+  cskhGraphConversationsOwnerId,
+  cskhGraphMessagingOwnerId,
+  cskhInboxGraphPlatform,
+  getFacebookWebhookVerifyToken,
   isMetaGraphChannel,
 } from '../facebook/facebook-oauth.util';
+import {
+  AD_REFERRAL_ILIKE_SUBSTRINGS,
+  detectAdFromFbMessages,
+  parseWebhookReferral,
+  type FbWebhookReferral,
+} from '../facebook/facebook-referral.util';
+import { GraphApiCoordinatorService } from '../facebook/graph-api-coordinator.service';
+import { RedisQueueService } from '../redis/redis-queue.service';
+import { matchInterestedProducts } from '../sapo/sapo-product-match.util';
+import { SapoProductService } from '../sapo/sapo-product.service';
+import {
+  findInboxConversationById,
+  findInboxConversationByPageParticipant,
+  isInboxSchemaMigrationError,
+  isPrismaRetryableDbError,
+  type InboxConversationAccess,
+} from './cskh-inbox-conversation.util';
+import {
+  CskhInboxLabelsService,
+  type InboxLabelDto,
+} from './cskh-inbox-labels.service';
+import {
+  currentInboxMonthKey,
+  parseInboxMonthKey,
+  type InboxMonthRange,
+} from './cskh-inbox-month.util';
 import {
   CskhInboxRealtimeService,
   type CustomerIntentPayload,
@@ -39,33 +79,21 @@ import {
   type InboxMessagePayload,
 } from './cskh-inbox-realtime.service';
 import {
-  inboxRtTraceDone,
-  inboxRtTraceMark,
-  inboxRtTraceStart,
-} from './inbox-realtime-debug.util';
+  customerWaitingFromMessages,
+  isStaffLastMessage,
+  lastMessagePreviewMismatch,
+} from './cskh-inbox-unread.util';
 import {
   capIntentMessages,
   inboxToIntentMessages,
   intentMessagesSignature,
   mergeTranscriptWithInboxTail,
 } from './cskh-intent-messages.util';
-import { matchInterestedProducts } from '../sapo/sapo-product-match.util';
-import { SapoProductService } from '../sapo/sapo-product.service';
-import { CskhInboxLabelsService, type InboxLabelDto } from './cskh-inbox-labels.service';
-import { CskhService } from '../cskh.service';
-import { findInboxConversationById,
-  findInboxConversationByPageParticipant,
-  isInboxSchemaMigrationError,
-  isPrismaRetryableDbError,
-  type InboxConversationAccess,
-} from './cskh-inbox-conversation.util';
-import { getCskhRunMode, isCskhApiProcess, isCskhWorkerProcess } from '../cskh-run-mode';
-import { isPrismaRecentlyBusy } from '../../common/prisma-busy.util';
 import {
-  currentInboxMonthKey,
-  parseInboxMonthKey,
-  type InboxMonthRange,
-} from './cskh-inbox-month.util';
+  inboxRtTraceDone,
+  inboxRtTraceMark,
+  inboxRtTraceStart,
+} from './inbox-realtime-debug.util';
 
 type WebhookMessagingEvent = {
   sender?: { id?: string };
@@ -125,15 +153,21 @@ type InboxMessageRow = {
 export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(CskhInboxService.name);
   private readonly syncLimit = Number(process.env.CSKH_INBOX_SYNC_LIMIT || 150);
-  private readonly listSyncCooldownMs = Number(process.env.CSKH_INBOX_LIST_SYNC_COOLDOWN_MS || 3_000);
+  private readonly listSyncCooldownMs = Number(
+    process.env.CSKH_INBOX_LIST_SYNC_COOLDOWN_MS || 3_000,
+  );
   private readonly lastListSync = new Map<string, number>();
   /** Quét luân phiên khi xem "Tất cả Page" — mỗi lần sync N page, không quét 87 page cùng lúc. */
-  private readonly allPagesSyncBatch = Number(process.env.CSKH_INBOX_ALL_PAGES_SYNC_BATCH || 2);
+  private readonly allPagesSyncBatch = Number(
+    process.env.CSKH_INBOX_ALL_PAGES_SYNC_BATCH || 2,
+  );
   private readonly allPagesSyncCooldownMs = Number(
     process.env.CSKH_INBOX_ALL_PAGES_SYNC_COOLDOWN_MS || 45_000,
   );
   /** Redis tắt — quét nhiều page hơn / cooldown ngắn hơn để bù webhook. */
-  private readonly redisOffSyncBatch = Number(process.env.CSKH_INBOX_REDIS_OFF_SYNC_BATCH || 4);
+  private readonly redisOffSyncBatch = Number(
+    process.env.CSKH_INBOX_REDIS_OFF_SYNC_BATCH || 4,
+  );
   private readonly redisOffSyncCooldownMs = Number(
     process.env.CSKH_INBOX_REDIS_OFF_SYNC_COOLDOWN_MS || 20_000,
   );
@@ -148,7 +182,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   private readonly rotatingSyncEnabled =
     process.env.CSKH_INBOX_ROTATING_SYNC_ENABLED === 'true';
   /** Poll Graph bù tin mới khi webhook Meta chưa về. Tắt: CSKH_INBOX_CATCHUP_ENABLED=false */
-  private readonly catchUpEnabled = process.env.CSKH_INBOX_CATCHUP_ENABLED !== 'false';
+  private readonly catchUpEnabled =
+    process.env.CSKH_INBOX_CATCHUP_ENABLED !== 'false';
   private readonly catchUpIntervalMs = Math.max(
     2_000,
     Number(process.env.CSKH_INBOX_CATCHUP_INTERVAL_MS || 2_000),
@@ -165,7 +200,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   private liveCatchUpRunning = false;
   private liveViewedPageId: string | null = null;
   private catchUpBackoffUntil = 0;
-  private auditRunningCache: { at: number; value: boolean } = { at: 0, value: false };
+  private auditRunningCache: { at: number; value: boolean } = {
+    at: 0,
+    value: false,
+  };
   private readonly msgLimit = Number(process.env.CSKH_INBOX_MSG_LIMIT || 250);
   /** Khi recheck audit — tải nhiều tin hơn để so khớp transcript. */
   private readonly auditRecheckMsgLimit = Number(
@@ -176,6 +214,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     process.env.CSKH_GRAPH_REFRESH_COOLDOWN_MS || 60_000,
   );
   private readonly lastGraphRefresh = new Map<string, number>();
+  /** Tránh spam Graph (#3) khi Meta chưa cấp capability IG. */
+  private readonly igGraphCapabilityBackoff = new Map<string, number>();
   private readonly lastReconcileRead = new Map<string, number>();
   private readonly reconcileReadCooldownMs = 45_000;
   private readonly pendingIntentRequests = new Set<string>();
@@ -184,11 +224,17 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     { signature: string; at: number; data: CustomerIntentPayload }
   >();
   private readonly intentCacheTtlMs = 600_000;
-  private readonly configCache = new Map<string, { config: FacebookCskhConfig | null; at: number }>();
+  private readonly configCache = new Map<
+    string,
+    { config: FacebookCskhConfig | null; at: number }
+  >();
   private readonly configCacheTtlMs = 60_000;
   private readonly conversationStatsCache = new Map<
     string,
-    { at: number; data: { total: number; fromAd: number; unread: number; normal: number } }
+    {
+      at: number;
+      data: { total: number; fromAd: number; unread: number; normal: number };
+    }
   >();
   private readonly conversationStatsInflight = new Map<
     string,
@@ -201,17 +247,34 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   );
   private readonly conversationListCache = new Map<
     string,
-    { at: number; data: { items: CskhInboxConversation[]; nextCursor: string | null; hasMore: boolean } }
+    {
+      at: number;
+      data: {
+        items: CskhInboxConversation[];
+        nextCursor: string | null;
+        hasMore: boolean;
+      };
+    }
   >();
   private readonly conversationListInflight = new Map<
     string,
-    Promise<{ items: CskhInboxConversation[]; nextCursor: string | null; hasMore: boolean }>
+    Promise<{
+      items: CskhInboxConversation[];
+      nextCursor: string | null;
+      hasMore: boolean;
+    }>
   >();
-  private readonly conversationListTtlMs = Number(process.env.CSKH_INBOX_LIST_CACHE_MS || 12_000);
-  private readonly inboxListDefaultDays = Number(process.env.CSKH_INBOX_LIST_DEFAULT_DAYS || 21);
+  private readonly conversationListTtlMs = Number(
+    process.env.CSKH_INBOX_LIST_CACHE_MS || 12_000,
+  );
+  private readonly inboxListDefaultDays = Number(
+    process.env.CSKH_INBOX_LIST_DEFAULT_DAYS || 21,
+  );
   /** Giới hạn webhook xử lý inline trên API khi worker chết — tránh treo web. */
   private inlineWebhookInflight = 0;
-  private readonly maxInlineWebhook = Number(process.env.CSKH_WEBHOOK_INLINE_MAX || 3);
+  private readonly maxInlineWebhook = Number(
+    process.env.CSKH_WEBHOOK_INLINE_MAX || 3,
+  );
   /** Tối đa thời gian quét 1 kênh — tránh treo vô hạn trên page lớn. */
   private readonly backfillPageTimeoutMs = Number(
     process.env.CSKH_BACKFILL_PAGE_TIMEOUT_MS || 1_200_000,
@@ -224,16 +287,23 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     5,
   );
   /** Số hội thoại tối đa trả về — 0 = không giới hạn (cẩn thận với DB lớn). */
-  private readonly listConversationsLimit = Number(process.env.CSKH_INBOX_LIST_LIMIT || 50000);
+  private readonly listConversationsLimit = Number(
+    process.env.CSKH_INBOX_LIST_LIMIT || 50000,
+  );
   private readonly adReferralBackfillCooldownMs = Number(
     process.env.CSKH_AD_REFERRAL_BACKFILL_COOLDOWN_MS || 600_000,
   );
   private lastAdReferralBackfillAt = 0;
   private adReferralBackfillRunning = false;
   /** Chặn double-click / retry gửi cùng nội dung trong vài giây. */
-  private readonly inflightSends = new Map<string, Promise<InboxMessagePayload>>();
+  private readonly inflightSends = new Map<
+    string,
+    Promise<InboxMessagePayload>
+  >();
   /** Giới hạn kéo lịch sử Graph khi mở / cuộn lên (toàn bộ tin cũ). */
-  private readonly historyMsgLimit = Number(process.env.CSKH_INBOX_HISTORY_LIMIT || 1200);
+  private readonly historyMsgLimit = Number(
+    process.env.CSKH_INBOX_HISTORY_LIMIT || 1200,
+  );
   private readonly lastDeepHistory = new Map<string, number>();
   private readonly inflightDeepHistory = new Map<string, Promise<void>>();
   private readonly deepHistoryCooldownMs = Number(
@@ -285,7 +355,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     return { ...this.backfillState };
   }
 
-  private jobSummaryToState(summary: Record<string, unknown> | null | undefined) {
+  private jobSummaryToState(
+    summary: Record<string, unknown> | null | undefined,
+  ) {
     const s = summary ?? {};
     const scanDateRaw = typeof s.scanDate === 'string' ? s.scanDate.trim() : '';
     return {
@@ -296,7 +368,12 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       pageConvsDone: Number(s.pageConvsDone ?? 0),
       addedMessages: Number(s.addedMessages ?? 0),
       okPages: Number(s.okPages ?? 0),
-      errorPages: (s.errorPages as Array<{ page: string; error: string; pageId?: string }>) ?? [],
+      errorPages:
+        (s.errorPages as Array<{
+          page: string;
+          error: string;
+          pageId?: string;
+        }>) ?? [],
       completedPageIds: (s.completedPageIds as string[]) ?? [],
       scanDate: /^\d{4}-\d{2}-\d{2}$/.test(scanDateRaw) ? scanDateRaw : null,
     };
@@ -347,9 +424,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     },
     overrides?: { running?: boolean; paused?: boolean },
   ) {
-    const parsed = this.jobSummaryToState(job.summary as Record<string, unknown>);
-    const summaryPaused = (job.summary as Record<string, unknown> | null)?.paused === true;
-    const pauseRequested = (job.summary as Record<string, unknown> | null)?.pauseRequested === true;
+    const parsed = this.jobSummaryToState(
+      job.summary as Record<string, unknown>,
+    );
+    const summaryPaused =
+      (job.summary as Record<string, unknown> | null)?.paused === true;
+    const pauseRequested =
+      (job.summary as Record<string, unknown> | null)?.pauseRequested === true;
     return {
       running: overrides?.running ?? job.status === 'running',
       paused: overrides?.paused ?? (job.status === 'paused' || summaryPaused),
@@ -379,7 +460,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       ? Prisma.sql`AND cfg.tenant_id = ${tenantId}::uuid`
       : Prisma.empty;
 
-    const allPages = await this.prisma.$queryRaw<Array<{ pageId: string; pageName: string | null }>>`
+    const allPages = await this.prisma.$queryRaw<
+      Array<{ pageId: string; pageName: string | null }>
+    >`
       SELECT cfg.page_id AS "pageId", cfg.page_name AS "pageName"
       FROM facebook_cskh_configs cfg
       WHERE cfg.page_access_token IS NOT NULL AND cfg.page_access_token <> ''
@@ -388,7 +471,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     `;
 
     if (scope === 'empty') {
-      const emptyRows = await this.prisma.$queryRaw<Array<{ pageId: string; pageName: string | null }>>`
+      const emptyRows = await this.prisma.$queryRaw<
+        Array<{ pageId: string; pageName: string | null }>
+      >`
         SELECT cfg.page_id AS "pageId", cfg.page_name AS "pageName"
         FROM facebook_cskh_configs cfg
         WHERE cfg.page_access_token IS NOT NULL AND cfg.page_access_token <> ''
@@ -421,13 +506,18 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async markBackfillPauseRequestedInDb(jobId: string): Promise<void> {
-    const job = await this.prisma.cskhJobRun.findUnique({ where: { id: jobId } });
+    const job = await this.prisma.cskhJobRun.findUnique({
+      where: { id: jobId },
+    });
     if (!job) return;
     const prev = (job.summary as Record<string, unknown> | null) ?? {};
     await this.prisma.cskhJobRun.update({
       where: { id: jobId },
       data: {
-        summary: { ...prev, pauseRequested: true } as unknown as Prisma.InputJsonValue,
+        summary: {
+          ...prev,
+          pauseRequested: true,
+        } as unknown as Prisma.InputJsonValue,
       },
     });
   }
@@ -435,7 +525,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   private async isBackfillPauseRequestedNow(): Promise<boolean> {
     if (this.backfillPauseRequested) return true;
     if (!this.backfillJobId) return false;
-    const remote = await this.redisQueue.isBackfillPauseRequested(this.backfillJobId);
+    const remote = await this.redisQueue.isBackfillPauseRequested(
+      this.backfillJobId,
+    );
     if (remote) this.backfillPauseRequested = true;
     return remote;
   }
@@ -527,12 +619,16 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  private async getCachedPageConfig(pageId: string): Promise<FacebookCskhConfig | null> {
+  private async getCachedPageConfig(
+    pageId: string,
+  ): Promise<FacebookCskhConfig | null> {
     const cached = this.configCache.get(pageId);
     if (cached && Date.now() - cached.at < this.configCacheTtlMs) {
       return cached.config;
     }
-    const config = await this.prisma.facebookCskhConfig.findUnique({ where: { pageId } });
+    const config = await this.prisma.facebookCskhConfig.findUnique({
+      where: { pageId },
+    });
     this.configCache.set(pageId, { config, at: Date.now() });
     return config;
   }
@@ -580,9 +676,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     if (cskhInboxGraphPlatform(page.metadata) !== 'instagram') return;
     if (!page.pageAccessToken || this.igWebhookEnsured.has(page.pageId)) return;
     this.igWebhookEnsured.add(page.pageId);
-    void this.cskh.subscribeInstagramToWebhook(page.pageId, page.pageAccessToken).catch((e) => {
-      this.logger.warn(`[Webhook] IG subscribe ${page.pageId}: ${(e as Error).message}`);
-    });
+    void this.cskh
+      .subscribeInstagramToWebhook(page.pageId, page.pageAccessToken)
+      .catch((e) => {
+        this.logger.warn(
+          `[Webhook] IG subscribe ${page.pageId}: ${(e as Error).message}`,
+        );
+      });
   }
 
   private async findInstagramConfigByFacebookPageId(
@@ -600,7 +700,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         },
       });
       this.configCache.set(cacheKey, { config, at: Date.now() });
-      if (config) this.configCache.set(config.pageId, { config, at: Date.now() });
+      if (config)
+        this.configCache.set(config.pageId, { config, at: Date.now() });
       return config;
     } catch {
       return null;
@@ -624,7 +725,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   onModuleInit(): void {
     if (!this.catchUpEnabled) return;
     if (!isCskhApiProcess()) {
-      this.logger.log('[catch-up] Bỏ qua trên worker — webhook + API lo realtime');
+      this.logger.log(
+        '[catch-up] Bỏ qua trên worker — webhook + API lo realtime',
+      );
       return;
     }
     this.logger.log(
@@ -662,7 +765,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     void this.redisQueue.markViewedInboxPage(id);
   }
 
-  private readIntentCache(cacheKey: string, signature: string): CustomerIntentPayload | null {
+  private readIntentCache(
+    cacheKey: string,
+    signature: string,
+  ): CustomerIntentPayload | null {
     const row = this.intentCache.get(cacheKey);
     if (!row || Date.now() - row.at > this.intentCacheTtlMs) {
       if (row) this.intentCache.delete(cacheKey);
@@ -690,7 +796,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       groupedMediaCount?: number;
     },
   ): InboxMessagePayload {
-    const urls = dedupeMediaUrls([...(row.attachmentUrls ?? []), row.attachmentUrl]);
+    const urls = dedupeMediaUrls([
+      ...(row.attachmentUrls ?? []),
+      row.attachmentUrl,
+    ]);
     return {
       id: row.id,
       conversationId: row.conversationId,
@@ -710,12 +819,16 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private conversationPlatformFromCache(pageId: string): 'messenger' | 'instagram' | 'tiktok' {
+  private conversationPlatformFromCache(
+    pageId: string,
+  ): 'messenger' | 'instagram' | 'tiktok' {
     const cached = this.configCache.get(pageId);
     return cskhChannelPlatform(cached?.config?.metadata);
   }
 
-  private formatConversationRow(conv: CskhInboxConversation | InboxConversationAccess): InboxConversationPayload {
+  private formatConversationRow(
+    conv: CskhInboxConversation | InboxConversationAccess,
+  ): InboxConversationPayload {
     return {
       id: conv.id,
       pageId: conv.pageId,
@@ -805,7 +918,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     )
       .then(() => undefined)
       .finally(() => {
-        if (this.inflightDeepHistory.get(conv.id) === run) this.inflightDeepHistory.delete(conv.id);
+        if (this.inflightDeepHistory.get(conv.id) === run)
+          this.inflightDeepHistory.delete(conv.id);
       });
     this.inflightDeepHistory.set(conv.id, run);
     this.lastDeepHistory.set(conv.id, Date.now());
@@ -851,13 +965,18 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   ): void {
     const liveCutoff = Date.now() - 120_000;
     const live = messages.filter((m) => {
-      const t = m.sentAt instanceof Date ? m.sentAt.getTime() : new Date(m.sentAt).getTime();
+      const t =
+        m.sentAt instanceof Date
+          ? m.sentAt.getTime()
+          : new Date(m.sentAt).getTime();
       return Number.isFinite(t) && t >= liveCutoff;
     });
     if (!live.length) return;
     const startPublish = Date.now();
     const last = live[live.length - 1];
-    this.logger.log(`[Realtime Publish Start] messagesCount=${live.length} conversationId=${conversationId}`);
+    this.logger.log(
+      `[Realtime Publish Start] messagesCount=${live.length} conversationId=${conversationId}`,
+    );
     const publishTrace = inboxRtTraceStart('publish-realtime', {
       conversationId,
       pageId,
@@ -875,14 +994,18 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         }));
       const dbLookupMs = Date.now() - startPublish;
       const finalTenantId = tenantId || freshConv?.tenantId || undefined;
-      const convPayload = freshConv ? this.formatConversationRow(freshConv) : undefined;
+      const convPayload = freshConv
+        ? this.formatConversationRow(freshConv)
+        : undefined;
 
       // Push SSE ngay — không chờ query nhãn (tránh delay vài trăm ms khi pool DB bận)
       this.realtime.publish({
         type: 'message',
         pageId,
         conversationId,
-        messages: groupInboxMediaRows(live).map((m) => this.formatMessageRow(m)),
+        messages: groupInboxMediaRows(live).map((m) =>
+          this.formatMessageRow(m),
+        ),
         conversation: convPayload
           ? {
               ...convPayload,
@@ -904,9 +1027,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       });
 
       if (analyzeIntent && messages.some((m) => m.senderType === 'customer')) {
-        void this.redisQueue.enqueueIntent(conversationId, finalTenantId).catch((e) => {
-          this.logger.warn(`Intent enqueue failed: ${(e as Error).message}`);
-        });
+        void this.redisQueue
+          .enqueueIntent(conversationId, finalTenantId)
+          .catch((e) => {
+            this.logger.warn(`Intent enqueue failed: ${(e as Error).message}`);
+          });
       }
 
       void this.inboxLabels
@@ -927,11 +1052,15 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         })
         .catch((e) => {
           if (!this.isInboxSchemaMigrationError(e)) {
-            this.logger.debug(`Labels patch after message publish failed: ${(e as Error).message}`);
+            this.logger.debug(
+              `Labels patch after message publish failed: ${(e as Error).message}`,
+            );
           }
         });
     })().catch((e) => {
-      this.logger.warn(`publishMessageRealtime failed: ${(e as Error).message}`);
+      this.logger.warn(
+        `publishMessageRealtime failed: ${(e as Error).message}`,
+      );
     });
   }
 
@@ -941,8 +1070,15 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     tenantId?: string,
     forceSync = false,
   ): Promise<CustomerIntentPayload> {
-    const conv = await findInboxConversationById(this.prisma, conversationId, tenantId);
-    if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
+    const conv = await findInboxConversationById(
+      this.prisma,
+      conversationId,
+      tenantId,
+    );
+    if (!conv)
+      throw new NotFoundException(
+        'Hội thoại không tồn tại hoặc không có quyền',
+      );
 
     const rows = (
       await this.prisma.cskhInboxMessage.findMany({
@@ -961,7 +1097,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         select: { transcript: true },
       });
       if (audit?.transcript) {
-        aiMessages = capIntentMessages(mergeTranscriptWithInboxTail(audit.transcript, rows));
+        aiMessages = capIntentMessages(
+          mergeTranscriptWithInboxTail(audit.transcript, rows),
+        );
       } else {
         aiMessages = capIntentMessages(inboxToIntentMessages(rows));
       }
@@ -970,7 +1108,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     }
 
     const signature = `${auditKey}|${intentMessagesSignature(aiMessages)}`;
-    const cacheKey = auditKey ? `${conversationId}:${auditKey}` : conversationId;
+    const cacheKey = auditKey
+      ? `${conversationId}:${auditKey}`
+      : conversationId;
 
     const localCached = this.readIntentCache(cacheKey, signature);
     if (localCached) {
@@ -1007,7 +1147,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         products,
         sapoConfigured,
       };
-      
+
       this.writeIntentCache(cacheKey, signature, payload);
       return { ...payload, isStale: false };
     }
@@ -1095,7 +1235,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           tenantId,
         });
       } catch (err) {
-        this.logger.error(`Background intent analysis failed: ${(err as Error).message}`);
+        this.logger.error(
+          `Background intent analysis failed: ${(err as Error).message}`,
+        );
       } finally {
         this.pendingIntentRequests.delete(cacheKey);
       }
@@ -1103,7 +1245,12 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   async analyzeAndBroadcastIntent(conversationId: string, tenantId?: string) {
-    const intent = await this.getCustomerIntent(conversationId, undefined, tenantId, true);
+    const intent = await this.getCustomerIntent(
+      conversationId,
+      undefined,
+      tenantId,
+      true,
+    );
     this.realtime.publish({ type: 'intent', conversationId, intent, tenantId });
   }
 
@@ -1127,7 +1274,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         standby?: WebhookMessagingEvent[];
       }>;
     };
-    if ((body.object !== 'page' && body.object !== 'instagram') || !Array.isArray(body.entry)) {
+    if (
+      (body.object !== 'page' && body.object !== 'instagram') ||
+      !Array.isArray(body.entry)
+    ) {
       return { ok: true };
     }
 
@@ -1147,12 +1297,19 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     this.logger.log(
       `[Webhook] object=${body.object} ${eventCount} events (inline=${inlineCount}, redis=${this.redisQueue.isRedisQueueEnabled() ? 'on' : 'off'}), ${Date.now() - startWebhook}ms`,
     );
-    inboxRtTraceDone(trace, { eventCount, inlineCount, ackMs: Date.now() - startWebhook });
+    inboxRtTraceDone(trace, {
+      eventCount,
+      inlineCount,
+      ackMs: Date.now() - startWebhook,
+    });
     return { ok: true };
   }
 
   /** Lưu tin webhook vào DB ngay — fallback khi Redis/worker không dùng được. */
-  private scheduleWebhookIngestInline(pageId: string, event: WebhookMessagingEvent): void {
+  private scheduleWebhookIngestInline(
+    pageId: string,
+    event: WebhookMessagingEvent,
+  ): void {
     if (this.inlineWebhookInflight >= this.maxInlineWebhook) {
       this.logger.warn(
         `[Webhook] inline backlog ${this.inlineWebhookInflight}/${this.maxInlineWebhook} — vẫn xử lý (không bỏ event)`,
@@ -1167,7 +1324,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         );
       })
       .finally(() => {
-        this.inlineWebhookInflight = Math.max(0, this.inlineWebhookInflight - 1);
+        this.inlineWebhookInflight = Math.max(
+          0,
+          this.inlineWebhookInflight - 1,
+        );
       });
   }
 
@@ -1182,7 +1342,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       await this.redisQueue.markInboxActivity();
     }
     const senderId = event.sender?.id;
-    this.logger.log(`[Webhook Worker Ingest Start] pageId=${pageId} sender=${senderId}`);
+    this.logger.log(
+      `[Webhook Worker Ingest Start] pageId=${pageId} sender=${senderId}`,
+    );
     const msg = event.message;
     const referral = event.referral ?? msg?.referral;
     if (referral) {
@@ -1199,7 +1361,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         const customerPsid = isFromPage ? recipientPsid : senderPsid;
         if (customerPsid && customerPsid !== pageId) {
           const conv = await this.prisma.cskhInboxConversation.findUnique({
-            where: { pageId_participantPsid: { pageId, participantPsid: customerPsid } },
+            where: {
+              pageId_participantPsid: { pageId, participantPsid: customerPsid },
+            },
           });
           if (conv) {
             this.realtime.publish({
@@ -1224,14 +1388,17 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         const customerPsid = isFromPage ? recipientPsid : senderPsid;
         if (customerPsid && customerPsid !== pageId) {
           const conv = await this.prisma.cskhInboxConversation.findUnique({
-            where: { pageId_participantPsid: { pageId, participantPsid: customerPsid } },
+            where: {
+              pageId_participantPsid: { pageId, participantPsid: customerPsid },
+            },
           });
           if (conv) {
             if (isFromPage) {
-              const updatedConv = await this.prisma.cskhInboxConversation.update({
-                where: { id: conv.id },
-                data: { unreadCount: 0 },
-              });
+              const updatedConv =
+                await this.prisma.cskhInboxConversation.update({
+                  where: { id: conv.id },
+                  data: { unreadCount: 0 },
+                });
 
               // Mark inbound messages as read in our DB
               const msgWhere: any = {
@@ -1259,7 +1426,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    if (!msg?.text && !msg?.mid && !msg?.attachments?.length && !msg?.sticker_id) return;
+    if (
+      !msg?.text &&
+      !msg?.mid &&
+      !msg?.attachments?.length &&
+      !msg?.sticker_id
+    )
+      return;
     const senderPsid = String(event.sender?.id || '');
     const recipientPsid = String(event.recipient?.id || '');
     if (!senderPsid) return;
@@ -1276,7 +1449,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     });
 
     const config = await this.getCachedPageConfig(pageId);
-    inboxRtTraceMark(trace, 'page-config-loaded', { pageName: config?.pageName ?? null });
+    inboxRtTraceMark(trace, 'page-config-loaded', {
+      pageName: config?.pageName ?? null,
+    });
     if (!config?.pageAccessToken) {
       this.logger.warn(
         `[Webhook] Chưa có token kênh pageId=${pageId} — inbox vẫn lưu tin nhưng không lấy avatar/gửi được. Kết nối lại Facebook (IG Professional phải gắn Fanpage).`,
@@ -1284,12 +1459,19 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     }
     const pageName = config?.pageName ?? null;
 
-    const prelimCustomer = resolveMessengerCustomerPsid(senderPsid, recipientPsid, pageId, {
-      isEcho,
-    });
+    const prelimCustomer = resolveMessengerCustomerPsid(
+      senderPsid,
+      recipientPsid,
+      pageId,
+      {
+        isEcho,
+      },
+    );
     const existingConv = prelimCustomer
       ? await this.prisma.cskhInboxConversation.findUnique({
-          where: { pageId_participantPsid: { pageId, participantPsid: prelimCustomer } },
+          where: {
+            pageId_participantPsid: { pageId, participantPsid: prelimCustomer },
+          },
         })
       : null;
 
@@ -1313,7 +1495,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     });
 
     const conv = await this.prisma.cskhInboxConversation.upsert({
-      where: { pageId_participantPsid: { pageId, participantPsid: customerPsid } },
+      where: {
+        pageId_participantPsid: { pageId, participantPsid: customerPsid },
+      },
       create: {
         pageId,
         pageName,
@@ -1347,9 +1531,18 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     });
 
     // Lấy avatar/tên nếu hội thoại mới hoặc chưa có ảnh
-    if ((!existingConv?.customerPictureUrl || !existingConv?.customerName) && config?.pageAccessToken) {
-      void this.enrichNewConversationProfile(conv.id, customerPsid, config.pageAccessToken).catch((e) => {
-        this.logger.warn(`Background profile enrichment failed: ${(e as Error).message}`);
+    if (
+      (!existingConv?.customerPictureUrl || !existingConv?.customerName) &&
+      config?.pageAccessToken
+    ) {
+      void this.enrichNewConversationProfile(
+        conv.id,
+        customerPsid,
+        config.pageAccessToken,
+      ).catch((e) => {
+        this.logger.warn(
+          `Background profile enrichment failed: ${(e as Error).message}`,
+        );
       });
     }
 
@@ -1361,10 +1554,17 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       const extraHttpUrls = (msg.attachments ?? [])
         .map((a) => a.payload?.url)
         .filter((u): u is string => Boolean(u?.startsWith('http')));
-      if (existing && attCount <= 1 && extraHttpUrls.every((u) => u === existing!.attachmentUrl)) {
+      if (
+        existing &&
+        attCount <= 1 &&
+        extraHttpUrls.every((u) => u === existing!.attachmentUrl)
+      ) {
         const senderType = isFromPage ? 'staff' : 'customer';
         const direction = isFromPage ? 'outbound' : 'inbound';
-        if (existing.senderType !== senderType || existing.direction !== direction) {
+        if (
+          existing.senderType !== senderType ||
+          existing.direction !== direction
+        ) {
           existing = await this.prisma.cskhInboxMessage.update({
             where: { id: existing.id },
             data: { senderType, direction },
@@ -1378,7 +1578,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           conv.tenantId || undefined,
           conv,
         );
-        inboxRtTraceDone(trace, { conversationId: conv.id, path: 'duplicate-fb-mid' });
+        inboxRtTraceDone(trace, {
+          conversationId: conv.id,
+          path: 'duplicate-fb-mid',
+        });
         return;
       }
     }
@@ -1388,7 +1591,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
     const sentAt = new Date(event.timestamp ?? Date.now());
     if (isFromPage && msg.mid) {
-      const pendingMatch = await this.findPendingOutboundToLink(conv.id, text, sentAt);
+      const pendingMatch = await this.findPendingOutboundToLink(
+        conv.id,
+        text,
+        sentAt,
+      );
       if (pendingMatch) {
         try {
           const linked = await this.prisma.cskhInboxMessage.update({
@@ -1403,7 +1610,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
             conv.tenantId || undefined,
             conv,
           );
-          inboxRtTraceDone(trace, { conversationId: conv.id, path: 'echo-link-pending' });
+          inboxRtTraceDone(trace, {
+            conversationId: conv.id,
+            path: 'echo-link-pending',
+          });
           return;
         } catch (e) {
           if ((e as { code?: string }).code !== 'P2002') throw e;
@@ -1415,9 +1625,15 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
     if (webhookAttachments.length > 0) {
       for (const att of webhookAttachments) {
-        const url = att.payload?.url?.startsWith('http') ? att.payload.url : null;
+        const url = att.payload?.url?.startsWith('http')
+          ? att.payload.url
+          : null;
         const messageType =
-          att.type === 'video' ? 'video' : att.type === 'image' || att.type === 'file' ? 'image' : 'text';
+          att.type === 'video'
+            ? 'video'
+            : att.type === 'image' || att.type === 'file'
+              ? 'image'
+              : 'text';
         mediaItems.push({ url, messageType });
       }
     } else if (msg.sticker_id) {
@@ -1430,7 +1646,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       msg.mid &&
       config?.pageAccessToken &&
       (mediaItems.length > 1 ||
-        mediaItems.some((m) => !m.url && m.messageType !== 'text' && m.messageType !== 'sticker'))
+        mediaItems.some(
+          (m) =>
+            !m.url && m.messageType !== 'text' && m.messageType !== 'sticker',
+        ))
     ) {
       // Không chờ Graph khi audit/inbox đang bận — push SSE trước, resolve media nền sau.
       needsBackgroundMedia = true;
@@ -1519,9 +1738,12 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
     const previewAfter = inboxListPreview({
       text: createdMessages[0]?.text || text,
-      messageType: createdMessages[0]?.messageType || mediaItems[0]?.messageType,
-      attachmentCount: createdMessages.filter((m) => m.messageType === 'image' || m.messageType === 'video').length
-        || mediaItems.length,
+      messageType:
+        createdMessages[0]?.messageType || mediaItems[0]?.messageType,
+      attachmentCount:
+        createdMessages.filter(
+          (m) => m.messageType === 'image' || m.messageType === 'video',
+        ).length || mediaItems.length,
     });
     if (previewAfter && previewAfter !== conv.lastMessage) {
       await this.prisma.cskhInboxConversation
@@ -1555,7 +1777,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         config.pageAccessToken,
         conv.tenantId || undefined,
       ).catch((e) => {
-        this.logger.warn(`Background webhook media resolve failed: ${(e as Error).message}`);
+        this.logger.warn(
+          `Background webhook media resolve failed: ${(e as Error).message}`,
+        );
       });
     }
 
@@ -1565,7 +1789,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       senderId,
       ingestMs: Date.now() - startIngest,
     });
-    this.logger.log(`[Webhook Worker Ingest Done] pageId=${pageId} sender=${senderId} took ${Date.now() - startIngest}ms`);
+    this.logger.log(
+      `[Webhook Worker Ingest Done] pageId=${pageId} sender=${senderId} took ${Date.now() - startIngest}ms`,
+    );
   }
 
   /** Resolve ảnh/video từ Graph sau khi đã push SSE — không chặn realtime inbox. */
@@ -1581,14 +1807,23 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     });
     if (!existing) return;
 
-    const resolvedAll = await this.graph.resolveAllMessageMediaUrls(fbMessageId, pageAccessToken);
+    const resolvedAll = await this.graph.resolveAllMessageMediaUrls(
+      fbMessageId,
+      pageAccessToken,
+    );
     const resolvedItems = resolvedAll.length
       ? resolvedAll.map((r) => ({ url: r.url, messageType: r.messageType }))
       : [];
     if (!resolvedItems.length) {
-      const resolved = await this.graph.resolveMessageMediaUrl(fbMessageId, pageAccessToken);
+      const resolved = await this.graph.resolveMessageMediaUrl(
+        fbMessageId,
+        pageAccessToken,
+      );
       if (resolved.url) {
-        resolvedItems.push({ url: resolved.url, messageType: resolved.messageType ?? 'image' });
+        resolvedItems.push({
+          url: resolved.url,
+          messageType: resolved.messageType ?? 'image',
+        });
       }
     }
     if (!resolvedItems.length) return;
@@ -1617,7 +1852,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     });
     if (preview) {
       await this.prisma.cskhInboxConversation
-        .update({ where: { id: conversationId }, data: { lastMessage: preview } })
+        .update({
+          where: { id: conversationId },
+          data: { lastMessage: preview },
+        })
         .catch(() => undefined);
     }
 
@@ -1650,7 +1888,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
     // Luôn ghi đè ad mới nhất khi Meta gửi referral (không giữ QC lần đầu).
     const conv = await this.prisma.cskhInboxConversation.upsert({
-      where: { pageId_participantPsid: { pageId, participantPsid: customerPsid } },
+      where: {
+        pageId_participantPsid: { pageId, participantPsid: customerPsid },
+      },
       create: {
         pageId,
         pageName,
@@ -1748,7 +1988,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
   private isInboxSchemaMigrationError = isInboxSchemaMigrationError;
 
-  private unreadStatusWhere(includeAwaitingLabel: boolean): Prisma.CskhInboxConversationWhereInput {
+  private unreadStatusWhere(
+    includeAwaitingLabel: boolean,
+  ): Prisma.CskhInboxConversationWhereInput {
     if (includeAwaitingLabel) {
       return { OR: [{ unreadCount: { gt: 0 } }, { awaitingLabel: true }] };
     }
@@ -1756,12 +1998,18 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Cần `npx prisma generate` sau khi đổi schema — filter qua relation labelAssignments. */
-  private labelIdWhere(labelId: string): Prisma.CskhInboxConversationWhereInput {
-    return { labelAssignments: { some: { labelId } } } as Prisma.CskhInboxConversationWhereInput;
+  private labelIdWhere(
+    labelId: string,
+  ): Prisma.CskhInboxConversationWhereInput {
+    return {
+      labelAssignments: { some: { labelId } },
+    } as Prisma.CskhInboxConversationWhereInput;
   }
 
   private unlabeledWhere(): Prisma.CskhInboxConversationWhereInput {
-    return { labelAssignments: { none: {} } } as Prisma.CskhInboxConversationWhereInput;
+    return {
+      labelAssignments: { none: {} },
+    } as Prisma.CskhInboxConversationWhereInput;
   }
 
   /** Tháng lịch VN, hoặc sinceDays nếu client cũ gửi. Mặc định = tháng hiện tại. */
@@ -1775,7 +2023,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       return { sinceDays: Math.min(Math.floor(opts.sinceDays), 365) };
     }
     const current = parseInboxMonthKey(currentInboxMonthKey());
-    return current ? { month: current } : { sinceDays: this.inboxListDefaultDays };
+    return current
+      ? { month: current }
+      : { sinceDays: this.inboxListDefaultDays };
   }
 
   private buildListConversationWhere(
@@ -1804,7 +2054,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     }
     if (tenantId) andClauses.push({ tenantId });
     if (opts.fromAdOnly) andClauses.push({ fromAd: true });
-    if (opts.unreadOnly) andClauses.push(this.unreadStatusWhere(flags.includeAwaitingInUnread));
+    if (opts.unreadOnly)
+      andClauses.push(this.unreadStatusWhere(flags.includeAwaitingInUnread));
     if (opts.organicOnly) andClauses.push({ fromAd: false });
     if (flags.includeLabelFilters && opts.labelId) {
       andClauses.push(this.labelIdWhere(opts.labelId));
@@ -1842,7 +2093,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       andClauses.push({
         OR: [
           { lastMessageAt: { lt: opts.cursor.lastMessageAt } },
-          { lastMessageAt: opts.cursor.lastMessageAt, id: { lt: opts.cursor.id } },
+          {
+            lastMessageAt: opts.cursor.lastMessageAt,
+            id: { lt: opts.cursor.id },
+          },
         ],
       });
     }
@@ -1879,7 +2133,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     if (inflight) return inflight;
 
     if (isPrismaRecentlyBusy(15_000) && cached) {
-      this.logger.warn('[getConversationStats] pool bận — trả cache, không đếm chồng');
+      this.logger.warn(
+        '[getConversationStats] pool bận — trả cache, không đếm chồng',
+      );
       return cached.data;
     }
 
@@ -1889,12 +2145,22 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         return again.data;
       }
       try {
-        const result = await this.computeConversationStats(pageId, tenantId, platform, month);
-        this.conversationStatsCache.set(cacheKey, { at: Date.now(), data: result });
+        const result = await this.computeConversationStats(
+          pageId,
+          tenantId,
+          platform,
+          month,
+        );
+        this.conversationStatsCache.set(cacheKey, {
+          at: Date.now(),
+          data: result,
+        });
         return result;
       } catch (e) {
         const msg = (e as Error).message || '';
-        this.logger.warn(`[getConversationStats] ${msg.slice(0, 160)} — không cache số 0`);
+        this.logger.warn(
+          `[getConversationStats] ${msg.slice(0, 160)} — không cache số 0`,
+        );
         throw e;
       }
     });
@@ -1945,7 +2211,12 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     },
     flags: { includeAwaitingInUnread: boolean; includeLabelFilters: boolean },
   ): Promise<number | null> {
-    const where = this.buildListConversationWhere(pageId, tenantId, opts, flags);
+    const where = this.buildListConversationWhere(
+      pageId,
+      tenantId,
+      opts,
+      flags,
+    );
     try {
       return await this.prisma.$transaction(
         async (tx) => {
@@ -1970,11 +2241,18 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     from: Date | undefined,
     to: Date | undefined,
     includeAwaiting: boolean,
-  ): Promise<{ total: number; fromAd: number; unread: number; normal: number } | null> {
+  ): Promise<{
+    total: number;
+    fromAd: number;
+    unread: number;
+    normal: number;
+  } | null> {
     let whereSql = Prisma.sql`WHERE c.last_message_at IS NOT NULL`;
-    if (from) whereSql = Prisma.sql`${whereSql} AND c.last_message_at >= ${from}`;
+    if (from)
+      whereSql = Prisma.sql`${whereSql} AND c.last_message_at >= ${from}`;
     if (to) whereSql = Prisma.sql`${whereSql} AND c.last_message_at < ${to}`;
-    if (tenantId) whereSql = Prisma.sql`${whereSql} AND c.tenant_id = ${tenantId}::uuid`;
+    if (tenantId)
+      whereSql = Prisma.sql`${whereSql} AND c.tenant_id = ${tenantId}::uuid`;
     if (pageId) {
       whereSql = Prisma.sql`${whereSql} AND c.page_id = ${pageId}`;
     } else if (pageIds?.length) {
@@ -2028,10 +2306,16 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     tenantId?: string,
     pageIds?: string[],
     month?: string,
-  ): Promise<{ total: number; fromAd: number; unread: number; normal: number }> {
+  ): Promise<{
+    total: number;
+    fromAd: number;
+    unread: number;
+    normal: number;
+  }> {
     const window = this.resolveInboxTimeWindow({ month });
-    const from = window.month?.from
-      ?? (window.sinceDays
+    const from =
+      window.month?.from ??
+      (window.sinceDays
         ? new Date(Date.now() - window.sinceDays * 86_400_000)
         : undefined);
     const to = window.month?.to;
@@ -2061,16 +2345,31 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       month: window.month,
       pageIds,
     };
-    const flags = { includeAwaitingInUnread: false, includeLabelFilters: false as const };
+    const flags = {
+      includeAwaitingInUnread: false,
+      includeLabelFilters: false as const,
+    };
     const [total, fromAd] = await Promise.all([
       this.countListMatching(pageId, tenantId, base, flags),
-      this.countListMatching(pageId, tenantId, { ...base, fromAdOnly: true }, flags),
+      this.countListMatching(
+        pageId,
+        tenantId,
+        { ...base, fromAdOnly: true },
+        flags,
+      ),
     ]);
     if (total == null || fromAd == null) {
-      throw new ServiceUnavailableException('Không đếm được thống kê hội thoại. Thử lại sau.');
+      throw new ServiceUnavailableException(
+        'Không đếm được thống kê hội thoại. Thử lại sau.',
+      );
     }
     const unread =
-      (await this.countListMatching(pageId, tenantId, { ...base, unreadOnly: true }, flags)) ?? 0;
+      (await this.countListMatching(
+        pageId,
+        tenantId,
+        { ...base, unreadOnly: true },
+        flags,
+      )) ?? 0;
     return { total, fromAd, unread, normal: Math.max(0, total - fromAd) };
   }
 
@@ -2091,7 +2390,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       includeLabels?: boolean;
       platform?: 'messenger' | 'instagram' | 'tiktok';
     },
-  ): Promise<{ items: CskhInboxConversation[]; nextCursor: string | null; hasMore: boolean }> {
+  ): Promise<{
+    items: CskhInboxConversation[];
+    nextCursor: string | null;
+    hasMore: boolean;
+  }> {
     this.touchUserActivity(pageId);
     const window = this.resolveInboxTimeWindow({
       month: opts?.month,
@@ -2112,12 +2415,19 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     ].join('|');
     if (!opts?.cursor) {
       const cachedList = this.conversationListCache.get(listCacheKey);
-      if (cachedList && Date.now() - cachedList.at < this.conversationListTtlMs) {
+      if (
+        cachedList &&
+        Date.now() - cachedList.at < this.conversationListTtlMs
+      ) {
         return cachedList.data;
       }
       if (isPrismaRecentlyBusy(15_000)) {
-        this.logger.warn('[listConversations] pool bận — trả cache/rỗng, không chờ 20s');
-        return cachedList?.data ?? { items: [], nextCursor: null, hasMore: false };
+        this.logger.warn(
+          '[listConversations] pool bận — trả cache/rỗng, không chờ 20s',
+        );
+        return (
+          cachedList?.data ?? { items: [], nextCursor: null, hasMore: false }
+        );
       }
       const inflight = this.conversationListInflight.get(listCacheKey);
       if (inflight) return inflight;
@@ -2135,7 +2445,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     );
     if (!opts?.cursor) {
       this.conversationListInflight.set(listCacheKey, load);
-      void load.finally(() => this.conversationListInflight.delete(listCacheKey));
+      void load.finally(() =>
+        this.conversationListInflight.delete(listCacheKey),
+      );
     }
     return load;
   }
@@ -2143,25 +2455,34 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   private async loadConversationListPage(
     pageId: string | undefined,
     tenantId: string | undefined,
-    opts: {
-      fromAdOnly?: boolean;
-      unreadOnly?: boolean;
-      organicOnly?: boolean;
-      limit?: number;
-      cursor?: string;
-      search?: string;
-      sinceDays?: number;
-      month?: string;
-      labelId?: string;
-      unlabeledOnly?: boolean;
-      includeLabels?: boolean;
-      platform?: 'messenger' | 'instagram' | 'tiktok';
-    } | undefined,
+    opts:
+      | {
+          fromAdOnly?: boolean;
+          unreadOnly?: boolean;
+          organicOnly?: boolean;
+          limit?: number;
+          cursor?: string;
+          search?: string;
+          sinceDays?: number;
+          month?: string;
+          labelId?: string;
+          unlabeledOnly?: boolean;
+          includeLabels?: boolean;
+          platform?: 'messenger' | 'instagram' | 'tiktok';
+        }
+      | undefined,
     listCacheKey: string,
-  ): Promise<{ items: CskhInboxConversation[]; nextCursor: string | null; hasMore: boolean }> {
+  ): Promise<{
+    items: CskhInboxConversation[];
+    nextCursor: string | null;
+    hasMore: boolean;
+  }> {
     let platformPageIds: string[] | undefined;
     if (!pageId && opts?.platform) {
-      platformPageIds = await this.pageIdsForGraphPlatform(opts.platform, tenantId);
+      platformPageIds = await this.pageIdsForGraphPlatform(
+        opts.platform,
+        tenantId,
+      );
       if (!platformPageIds.length) {
         return { items: [], nextCursor: null, hasMore: false };
       }
@@ -2177,8 +2498,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       opts?.search?.trim() ||
       hasLabelFilter
     );
-    const needLabels =
-      opts?.includeLabels === true || hasLabelFilter;
+    const needLabels = opts?.includeLabels === true || hasLabelFilter;
     const monthRange = parseInboxMonthKey(opts?.month);
     const listOpts = {
       fromAdOnly: opts?.fromAdOnly,
@@ -2198,12 +2518,16 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         const redisOff = !this.redisQueue.isRedisQueueEnabled();
         if (!redisOff && !this.backgroundInboxSyncRunning) {
           void this.maybeBackfillAdReferralsFromDb(tenantId).catch((e) => {
-            this.logger.warn(`Ad referral backfill failed: ${(e as Error).message}`);
+            this.logger.warn(
+              `Ad referral backfill failed: ${(e as Error).message}`,
+            );
           });
         }
       }
       void this.maybeTriggerListSync(pageId, tenantId).catch((e) => {
-        this.logger.warn(`Background list sync trigger failed: ${(e as Error).message}`);
+        this.logger.warn(
+          `Background list sync trigger failed: ${(e as Error).message}`,
+        );
       });
     }
 
@@ -2244,9 +2568,19 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       updatedAt: true,
     } as const;
 
-    const fetchPage = async (flags: { includeAwaitingInUnread: boolean; includeLabelFilters: boolean }) => {
-      const where = this.buildListConversationWhere(pageId, tenantId, listOpts, flags);
-      const select = flags.includeAwaitingInUnread ? selectWithAwaiting : selectLegacy;
+    const fetchPage = async (flags: {
+      includeAwaitingInUnread: boolean;
+      includeLabelFilters: boolean;
+    }) => {
+      const where = this.buildListConversationWhere(
+        pageId,
+        tenantId,
+        listOpts,
+        flags,
+      );
+      const select = flags.includeAwaitingInUnread
+        ? selectWithAwaiting
+        : selectLegacy;
       const rows = await this.prisma.$transaction(
         async (tx) => {
           await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = '2500ms'`);
@@ -2286,7 +2620,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       > & { awaitingLabel?: boolean }
     >;
     try {
-      rows = await fetchPage({ includeAwaitingInUnread: true, includeLabelFilters: true });
+      rows = await fetchPage({
+        includeAwaitingInUnread: true,
+        includeLabelFilters: true,
+      });
     } catch (e) {
       if (isPrismaRetryableDbError(e)) {
         this.logger.warn(
@@ -2295,11 +2632,16 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         return { items: [], nextCursor: null, hasMore: false };
       }
       if (!this.isInboxSchemaMigrationError(e)) throw e;
-      this.logger.warn('[listConversations] schema chưa migrate — fallback không nhãn/awaiting_label');
+      this.logger.warn(
+        '[listConversations] schema chưa migrate — fallback không nhãn/awaiting_label',
+      );
       if (opts?.labelId || opts?.unlabeledOnly) {
         return { items: [], nextCursor: null, hasMore: false };
       }
-      rows = await fetchPage({ includeAwaitingInUnread: false, includeLabelFilters: false });
+      rows = await fetchPage({
+        includeAwaitingInUnread: false,
+        includeLabelFilters: false,
+      });
     }
 
     const hasMore = rows.length > pageSize;
@@ -2307,8 +2649,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const items =
       isScrollPage || !opts?.unreadOnly
         ? (slice as CskhInboxConversation[])
-        : await this.correctUnreadFromLastMessage(slice as CskhInboxConversation[]).catch((e) => {
-            if (isPrismaRetryableDbError(e)) return slice as CskhInboxConversation[];
+        : await this.correctUnreadFromLastMessage(
+            slice as CskhInboxConversation[],
+          ).catch((e) => {
+            if (isPrismaRetryableDbError(e))
+              return slice as CskhInboxConversation[];
             throw e;
           });
     const last = items[items.length - 1];
@@ -2320,9 +2665,15 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     let labelMap = new Map<string, InboxLabelDto[]>();
     if (needLabels) {
       try {
-        labelMap = await this.inboxLabels.attachLabelsMap(items.map((i) => i.id));
+        labelMap = await this.inboxLabels.attachLabelsMap(
+          items.map((i) => i.id),
+        );
       } catch (e) {
-        if (!this.isInboxSchemaMigrationError(e) && !isPrismaRetryableDbError(e)) throw e;
+        if (
+          !this.isInboxSchemaMigrationError(e) &&
+          !isPrismaRetryableDbError(e)
+        )
+          throw e;
       }
     }
 
@@ -2332,13 +2683,19 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       labelsLocked: needLabels ? (labelMap.get(i.id) ?? []).length > 0 : false,
     }));
 
-    const awaitingIds = itemsWithLabels.filter((i) => i.awaitingLabel).map((i) => i.id);
+    const awaitingIds = itemsWithLabels
+      .filter((i) => i.awaitingLabel)
+      .map((i) => i.id);
     let viewerCountMap = new Map<string, number>();
     if (awaitingIds.length) {
       try {
         viewerCountMap = await this.inboxLabels.countViewersMap(awaitingIds);
       } catch (e) {
-        if (!this.isInboxSchemaMigrationError(e) && !isPrismaRetryableDbError(e)) throw e;
+        if (
+          !this.isInboxSchemaMigrationError(e) &&
+          !isPrismaRetryableDbError(e)
+        )
+          throw e;
       }
     }
 
@@ -2347,18 +2704,26 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const itemsWithMeta = itemsWithLabels.map((i) => ({
       ...i,
       platform: this.conversationPlatformFromCache(i.pageId),
-      pendingViewerCount: i.awaitingLabel ? (viewerCountMap.get(i.id) ?? 0) : undefined,
+      pendingViewerCount: i.awaitingLabel
+        ? (viewerCountMap.get(i.id) ?? 0)
+        : undefined,
     }));
 
     const missingPictureIds = itemsWithMeta
       .filter((i) => !i.customerPictureUrl && i.participantPsid)
       .slice(0, 3)
       .map((i) => i.id);
-    if (missingPictureIds.length && !this.avatarEnrichRunning && !isPrismaRecentlyBusy(15_000)) {
+    if (
+      missingPictureIds.length &&
+      !this.avatarEnrichRunning &&
+      !isPrismaRecentlyBusy(15_000)
+    ) {
       this.avatarEnrichRunning = true;
       void this.enrichCustomerPictures(missingPictureIds)
         .catch((e) => {
-          this.logger.debug(`Background avatar enrich failed: ${(e as Error).message}`);
+          this.logger.debug(
+            `Background avatar enrich failed: ${(e as Error).message}`,
+          );
         })
         .finally(() => {
           this.avatarEnrichRunning = false;
@@ -2367,7 +2732,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
     const result = { items: itemsWithMeta, nextCursor, hasMore };
     if (!opts?.cursor) {
-      this.conversationListCache.set(listCacheKey, { at: Date.now(), data: result });
+      this.conversationListCache.set(listCacheKey, {
+        at: Date.now(),
+        data: result,
+      });
     }
     return result;
   }
@@ -2417,7 +2785,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Quét DB gắn fromAd cho hội thoại có tin hệ thống "vào từ quảng cáo" (kể cả tiếng Thái). */
-  async backfillAdReferralsFromDb(tenantId?: string): Promise<{ updated: number }> {
+  async backfillAdReferralsFromDb(
+    tenantId?: string,
+  ): Promise<{ updated: number }> {
     if (this.backgroundInboxSyncRunning) {
       return { updated: 0 };
     }
@@ -2458,15 +2828,23 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       updated += Number(count) || 0;
     }
     if (updated > 0) {
-      this.logger.log(`[ad-backfill] Gắn tag Ads cho ${updated} hội thoại (tenant=${tenantId ?? 'all'})`);
+      this.logger.log(
+        `[ad-backfill] Gắn tag Ads cho ${updated} hội thoại (tenant=${tenantId ?? 'all'})`,
+      );
     }
     return { updated };
   }
 
-  private async maybeBackfillAdReferralsFromDb(tenantId?: string): Promise<void> {
+  private async maybeBackfillAdReferralsFromDb(
+    tenantId?: string,
+  ): Promise<void> {
     if (!isCskhWorkerProcess()) return;
     if (this.adReferralBackfillRunning) return;
-    if (Date.now() - this.lastAdReferralBackfillAt < this.adReferralBackfillCooldownMs) return;
+    if (
+      Date.now() - this.lastAdReferralBackfillAt <
+      this.adReferralBackfillCooldownMs
+    )
+      return;
     this.adReferralBackfillRunning = true;
     this.lastAdReferralBackfillAt = Date.now();
     try {
@@ -2477,7 +2855,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Gắn Ads từ tin cũ nhất trong DB (khi sync Graph không còn tin hệ thống). */
-  private async markAdFromStoredMessages(conversationId: string): Promise<void> {
+  private async markAdFromStoredMessages(
+    conversationId: string,
+  ): Promise<void> {
     const rows = await this.prisma.cskhInboxMessage.findMany({
       where: { conversationId },
       orderBy: { sentAt: 'asc' },
@@ -2496,7 +2876,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Kích hoạt sync nhẹ từ Graph sau khi trả danh sách — không block request. */
-  private async maybeTriggerListSync(pageId?: string, tenantId?: string): Promise<void> {
+  private async maybeTriggerListSync(
+    pageId?: string,
+    tenantId?: string,
+  ): Promise<void> {
     if (isPrismaRecentlyBusy(20_000)) return;
     // Catch-up đã poll page đang xem — đừng Graph-sync thêm mỗi lần mở list (tranh pool + SSE tin cũ).
     if (pageId) {
@@ -2505,7 +2888,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       const lastSync = this.lastListSync.get(syncKey) ?? 0;
       if (Date.now() - lastSync < this.listSyncCooldownMs) return;
       this.lastListSync.set(syncKey, Date.now());
-      void this.syncFromGraph(pageId, tenantId, { lightweight: true, liveHead: true }).catch((e) => {
+      void this.syncFromGraph(pageId, tenantId, {
+        lightweight: true,
+        liveHead: true,
+      }).catch((e) => {
         this.logger.warn(`[list-sync] page ${pageId}: ${(e as Error).message}`);
       });
       return;
@@ -2525,7 +2911,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   /**
    * Redis/worker tắt — quét nhẹ vài page từ Graph để bù tin webhook bị mất (Meta không retry mãi).
    */
-  private async maybeCatchUpSyncWithoutRedis(pageId?: string, tenantId?: string): Promise<void> {
+  private async maybeCatchUpSyncWithoutRedis(
+    pageId?: string,
+    tenantId?: string,
+  ): Promise<void> {
     if (this.backgroundInboxSyncRunning) return;
     if (pageId) {
       const syncKey = `${pageId}:${tenantId ?? ''}`;
@@ -2565,11 +2954,23 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       let synced = 0;
       for (const page of pages) {
         if (!page.pageAccessToken) continue;
+        if (Date.now() < (this.igGraphCapabilityBackoff.get(page.pageId) ?? 0)) {
+          continue;
+        }
         try {
-          synced += await this.syncSinglePageFromGraph(page, false, true, { liveHead: true });
+          synced += await this.syncSinglePageFromGraph(page, false, true, {
+            liveHead: true,
+          });
         } catch (e) {
+          const msg = (e as Error).message || String(e);
+          if (
+            cskhInboxGraphPlatform(page.metadata) === 'instagram' &&
+            /capability|#3\)/i.test(msg)
+          ) {
+            this.igGraphCapabilityBackoff.set(page.pageId, Date.now() + 180_000);
+          }
           this.logger.warn(
-            `[catch-up] Lỗi page ${page.pageName || page.pageId}: ${(e as Error).message}`,
+            `[catch-up] Lỗi page ${page.pageName || page.pageId}: ${msg}`,
           );
         }
       }
@@ -2583,9 +2984,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async findLiveCatchUpPages(tenantId?: string): Promise<FacebookCskhConfig[]> {
+  private async findLiveCatchUpPages(
+    tenantId?: string,
+  ): Promise<FacebookCskhConfig[]> {
     const viewedId =
-      this.liveViewedPageId || (await this.redisQueue.getViewedInboxPage()) || null;
+      this.liveViewedPageId ||
+      (await this.redisQueue.getViewedInboxPage()) ||
+      null;
 
     const allPages = (
       await this.prisma.facebookCskhConfig.findMany({
@@ -2608,7 +3013,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     if (viewedId) hotIds.push(viewedId);
     for (const row of recent) {
       if (!hotIds.includes(row.pageId)) hotIds.push(row.pageId);
-      if (hotIds.length >= Math.max(this.catchUpHotPages, viewedId ? 2 : 1)) break;
+      if (hotIds.length >= Math.max(this.catchUpHotPages, viewedId ? 2 : 1))
+        break;
     }
 
     const byId = new Map(allPages.map((p) => [p.pageId, p]));
@@ -2621,15 +3027,20 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       if (cskhInboxGraphPlatform(page.metadata) !== 'instagram') continue;
       if (selected.some((p) => p.pageId === page.pageId)) continue;
       const fbPageId = String(
-        (page.metadata as { facebookPageId?: unknown } | null)?.facebookPageId || '',
+        (page.metadata as { facebookPageId?: unknown } | null)
+          ?.facebookPageId || '',
       );
       if (viewedId && (page.pageId === viewedId || fbPageId === viewedId)) {
         selected.push(page);
         this.ensureInstagramWebhook(page);
       }
     }
-    if (!selected.some((p) => cskhInboxGraphPlatform(p.metadata) === 'instagram')) {
-      const firstIg = allPages.find((p) => cskhInboxGraphPlatform(p.metadata) === 'instagram');
+    if (
+      !selected.some((p) => cskhInboxGraphPlatform(p.metadata) === 'instagram')
+    ) {
+      const firstIg = allPages.find(
+        (p) => cskhInboxGraphPlatform(p.metadata) === 'instagram',
+      );
       if (firstIg) {
         selected.push(firstIg);
         this.ensureInstagramWebhook(firstIg);
@@ -2674,9 +3085,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     tenantId?: string,
     opts?: { forceWithoutRedis?: boolean },
   ): Promise<void> {
-    const redisOff = opts?.forceWithoutRedis === true || !this.redisQueue.isRedisQueueEnabled();
+    const redisOff =
+      opts?.forceWithoutRedis === true ||
+      !this.redisQueue.isRedisQueueEnabled();
     if (this.backgroundInboxSyncRunning) return;
-    const cooldownMs = redisOff ? this.redisOffSyncCooldownMs : this.allPagesSyncCooldownMs;
+    const cooldownMs = redisOff
+      ? this.redisOffSyncCooldownMs
+      : this.allPagesSyncCooldownMs;
     if (Date.now() - this.lastAllPagesRotatingSync < cooldownMs) return;
     if (await this.isAuditJobRunning(tenantId)) return;
     if (!redisOff && (await this.redisQueue.isInboxSyncActive())) return;
@@ -2688,7 +3103,12 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     };
     const pages = await this.prisma.facebookCskhConfig.findMany({
       where,
-      select: { pageId: true, pageName: true, pageAccessToken: true, tenantId: true },
+      select: {
+        pageId: true,
+        pageName: true,
+        pageAccessToken: true,
+        tenantId: true,
+      },
       orderBy: { pageName: 'asc' },
     });
     if (!pages.length) return;
@@ -2700,7 +3120,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     for (let i = 0; i < batchSize; i++) {
       batch.push(pages[(this.allPagesSyncCursor + i) % pages.length]);
     }
-    this.allPagesSyncCursor = (this.allPagesSyncCursor + batchSize) % pages.length;
+    this.allPagesSyncCursor =
+      (this.allPagesSyncCursor + batchSize) % pages.length;
 
     this.logger.log(
       `[rotating-sync] Quét ${batch.length}/${pages.length} page (bắt đầu từ ${batch[0]?.pageName || batch[0]?.pageId})${redisOff ? ' [redis-off]' : ''}`,
@@ -2739,7 +3160,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     conversations: CskhInboxConversation[],
   ): Promise<CskhInboxConversation[]> {
     if (!conversations.length) return conversations;
-    const needsFix = conversations.some((c) => c.unreadCount > 0 || c.awaitingLabel);
+    const needsFix = conversations.some(
+      (c) => c.unreadCount > 0 || c.awaitingLabel,
+    );
     if (!needsFix) return conversations;
 
     const ids = conversations
@@ -2785,7 +3208,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           data: { unreadCount: 0 },
         })
         .catch((e) => {
-          this.logger.warn(`correctUnreadFromLastMessage DB update failed: ${(e as Error).message}`);
+          this.logger.warn(
+            `correctUnreadFromLastMessage DB update failed: ${(e as Error).message}`,
+          );
         });
     }
     if (toClearAwaiting.length) {
@@ -2923,7 +3348,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           tenantId: conv.tenantId || undefined,
         });
       } catch (e) {
-        this.logger.warn(`Failed to enrich picture for conv ${conv.id}: ${(e as Error).message}`);
+        this.logger.warn(
+          `Failed to enrich picture for conv ${conv.id}: ${(e as Error).message}`,
+        );
       }
     }
   }
@@ -2944,9 +3371,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
             select: { metadata: true },
           })
         : null;
-      const profile = await this.graph.getMessengerUserProfile(customerPsid, pageAccessToken, {
-        platform: cskhInboxGraphPlatform(pageMeta?.metadata),
-      });
+      const profile = await this.graph.getMessengerUserProfile(
+        customerPsid,
+        pageAccessToken,
+        {
+          platform: cskhInboxGraphPlatform(pageMeta?.metadata),
+        },
+      );
       if (!profile.name && !profile.pictureUrl) return;
       const updatedConv = await this.prisma.cskhInboxConversation.update({
         where: { id: conversationId },
@@ -2963,7 +3394,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         tenantId: updatedConv.tenantId || undefined,
       });
     } catch (e) {
-      this.logger.debug(`Background profile fetch failed for ${customerPsid}: ${(e as Error).message}`);
+      this.logger.debug(
+        `Background profile fetch failed for ${customerPsid}: ${(e as Error).message}`,
+      );
     }
   }
 
@@ -2988,29 +3421,41 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const labelsPromise = this.inboxLabels
       .getLabelsForConversation(conversationId)
       .catch((e) => {
-        if (this.isInboxSchemaMigrationError(e) || isPrismaRetryableDbError(e)) return [] as InboxLabelDto[];
+        if (this.isInboxSchemaMigrationError(e) || isPrismaRetryableDbError(e))
+          return [] as InboxLabelDto[];
         throw e;
       });
 
     let conv: Awaited<ReturnType<typeof findInboxConversationById>> = null;
-    let messages: Awaited<ReturnType<typeof this.loadConversationMessages>> = [];
+    let messages: Awaited<ReturnType<typeof this.loadConversationMessages>> =
+      [];
 
     try {
       [conv, messages] = await Promise.all([
         findInboxConversationById(this.prisma, conversationId, tenantId),
-        this.loadConversationMessages(conversationId, sinceDate, fetchLimit, beforeDate),
+        this.loadConversationMessages(
+          conversationId,
+          sinceDate,
+          fetchLimit,
+          beforeDate,
+        ),
       ]);
     } catch (e) {
       if (isPrismaRetryableDbError(e)) {
         this.logger.warn(
           `getMessages pool busy conv=${conversationId.slice(0, 8)} — 503, không 500/404 giả`,
         );
-        throw new ServiceUnavailableException('Hệ thống đang bận. Thử lại sau vài giây.');
+        throw new ServiceUnavailableException(
+          'Hệ thống đang bận. Thử lại sau vài giây.',
+        );
       }
       throw e;
     }
 
-    if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
+    if (!conv)
+      throw new NotFoundException(
+        'Hội thoại không tồn tại hoặc không có quyền',
+      );
     this.touchUserActivity(conv.pageId);
 
     conv = await this.ensureFbConversationLinked(conv);
@@ -3019,9 +3464,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const hasBefore = beforeDate && !Number.isNaN(beforeDate.getTime());
     if (conv.fbConversationId && conv.participantPsid) {
       const previewMismatch =
-        !hasSince && !hasBefore && lastMessagePreviewMismatch(conv.lastMessage, messages);
+        !hasSince &&
+        !hasBefore &&
+        lastMessagePreviewMismatch(conv.lastMessage, messages);
       const needsReconcile =
-        !hasSince && !hasBefore && (previewMismatch || messages.length === 0 || forceRefresh);
+        !hasSince &&
+        !hasBefore &&
+        (previewMismatch || messages.length === 0 || forceRefresh);
       if (needsReconcile) {
         this.lastReconcileRead.set(conversationId, Date.now());
         const reconcileTask = this.syncReconcileConversationMessages(
@@ -3031,7 +3480,12 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         );
         if (messages.length === 0) {
           await reconcileTask;
-          messages = await this.loadConversationMessages(conversationId, sinceDate, fetchLimit, beforeDate);
+          messages = await this.loadConversationMessages(
+            conversationId,
+            sinceDate,
+            fetchLimit,
+            beforeDate,
+          );
         } else {
           void reconcileTask.catch((e) => {
             this.logger.debug(
@@ -3043,11 +3497,14 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
       const lastGraph = this.lastGraphRefresh.get(conversationId) ?? 0;
       const graphCooled = Date.now() - lastGraph >= this.graphRefreshCooldownMs;
-      const needOlderFromGraph = hasBefore && messages.length < Math.min(fetchLimit, 8);
+      const needOlderFromGraph =
+        hasBefore && messages.length < Math.min(fetchLimit, 8);
       // Có tin trong DB thì trả ngay — đừng chờ Graph (mở chat bị trống/treo).
       const mustAwaitGraph =
-        (!hasSince && !hasBefore && messages.length === 0) || needOlderFromGraph;
-      const shouldGraphRefresh = mustAwaitGraph || (forceRefresh && graphCooled);
+        (!hasSince && !hasBefore && messages.length === 0) ||
+        needOlderFromGraph;
+      const shouldGraphRefresh =
+        mustAwaitGraph || (forceRefresh && graphCooled);
       const fbConversationId = conv.fbConversationId;
 
       if ((shouldGraphRefresh || needOlderFromGraph) && fbConversationId) {
@@ -3138,20 +3595,29 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     }
 
     const hasLabels = labels.length > 0;
-    const customerWaiting = !hasLabels && customerWaitingFromMessages(messages, conv.lastMessage);
+    const customerWaiting =
+      !hasLabels && customerWaitingFromMessages(messages, conv.lastMessage);
     const awaitingLabel = customerWaiting;
 
     if (viewerUserId) {
-      this.inboxLabels.recordConversationViewLite(conversationId, viewerUserId, {
-        pageId: conv.pageId,
-        tenantId: conv.tenantId,
-        hasLabels,
-        customerWaiting,
-      });
+      this.inboxLabels.recordConversationViewLite(
+        conversationId,
+        viewerUserId,
+        {
+          pageId: conv.pageId,
+          tenantId: conv.tenantId,
+          hasLabels,
+          customerWaiting,
+        },
+      );
       if (hasLabels) {
-        void this.markInboundMessagesRead(conversationId, tenantId).catch((err) => {
-          this.logger.warn(`getMessages mark inbound read failed: ${(err as Error).message}`);
-        });
+        void this.markInboundMessagesRead(conversationId, tenantId).catch(
+          (err) => {
+            this.logger.warn(
+              `getMessages mark inbound read failed: ${(err as Error).message}`,
+            );
+          },
+        );
       }
     } else if (hasLabels) {
       void this.prisma.cskhInboxConversation
@@ -3162,15 +3628,22 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         .catch((err) => {
           if (this.isInboxSchemaMigrationError(err)) {
             void this.prisma.cskhInboxConversation
-              .update({ where: { id: conversationId }, data: { unreadCount: 0 } })
+              .update({
+                where: { id: conversationId },
+                data: { unreadCount: 0 },
+              })
               .catch(() => undefined);
             return;
           }
-          this.logger.warn(`getMessages unread reset failed: ${(err as Error).message}`);
+          this.logger.warn(
+            `getMessages unread reset failed: ${(err as Error).message}`,
+          );
         });
     }
 
-    const filtered = (messages ?? []).filter((m) => !this.graph.isStoredMessageNoise(m.text));
+    const filtered = (messages ?? []).filter(
+      (m) => !this.graph.isStoredMessageNoise(m.text),
+    );
     this.ensureMessageTranslations(conv, filtered, tenantId);
 
     return {
@@ -3186,7 +3659,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private async markInboundMessagesRead(conversationId: string, tenantId?: string) {
+  private async markInboundMessagesRead(
+    conversationId: string,
+    tenantId?: string,
+  ) {
     const where: Prisma.CskhInboxMessageWhereInput = {
       conversationId,
       direction: 'inbound',
@@ -3208,7 +3684,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     tenantId?: string,
     options?: { bypassHotGuard?: boolean },
   ) {
-    if (!options?.bypassHotGuard && (await this.redisQueue.shouldDeferInboxSync())) {
+    if (
+      !options?.bypassHotGuard &&
+      (await this.redisQueue.shouldDeferInboxSync())
+    ) {
       return;
     }
     try {
@@ -3220,14 +3699,18 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
       const cap = Math.max(this.auditRecheckMsgLimit, this.historyMsgLimit);
       const safeLimit = Math.min(Math.max(msgLimit, 10), cap);
-      const rawMsgs = await this.graph.fetchMessages(fbConversationId, token, safeLimit);
+      const rawMsgs = await this.graph.fetchMessages(
+        fbConversationId,
+        token,
+        safeLimit,
+      );
       const ordered = [...rawMsgs].reverse();
 
       const existing = await this.prisma.cskhInboxMessage.findMany({
         where: { conversationId },
         select: { id: true, text: true },
       });
-      
+
       // Bulk delete noise messages to optimize DB round trips
       const noiseIds = existing
         .filter((row) => this.graph.isStoredMessageNoise(row.text))
@@ -3268,7 +3751,12 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       );
       await this.repairLegacyInboxMessages(conversationId, token);
       if (customerPsid) {
-        await this.reconcileMessageSenders(conversationId, pageId, customerPsid, rawMsgs);
+        await this.reconcileMessageSenders(
+          conversationId,
+          pageId,
+          customerPsid,
+          rawMsgs,
+        );
       }
 
       if (lastPreview) {
@@ -3301,7 +3789,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           messages: groupInboxMediaRows(liveRows.slice(-20)).map((m) =>
             this.formatMessageRow(m as CskhInboxMessage),
           ),
-          conversation: freshConv ? this.formatConversationRow(freshConv) : undefined,
+          conversation: freshConv
+            ? this.formatConversationRow(freshConv)
+            : undefined,
           tenantId,
         });
       }
@@ -3370,16 +3860,26 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     });
     if (!missing.length) return;
 
-    const rawMsgs = await this.graph.fetchMessages(fbConversationId, token, this.msgLimit);
+    const rawMsgs = await this.graph.fetchMessages(
+      fbConversationId,
+      token,
+      this.msgLimit,
+    );
     for (const row of missing) {
       const rowTs = row.sentAt.getTime();
       const isStaff = row.senderType === 'staff';
       const match = rawMsgs.find((msg) => {
-        const normalized = this.graph.normalizeMessageForInbox(msg, pageId, customerPsid);
+        const normalized = this.graph.normalizeMessageForInbox(
+          msg,
+          pageId,
+          customerPsid,
+        );
         if (!normalized) return false;
         const msgStaff = normalized.sender === 'Staff';
         if (msgStaff !== isStaff) return false;
-        const msgTs = msg.created_time ? new Date(msg.created_time).getTime() : 0;
+        const msgTs = msg.created_time
+          ? new Date(msg.created_time).getTime()
+          : 0;
         if (Math.abs(msgTs - rowTs) > 5000) return false;
         return (
           normalized.messageType === 'image' ||
@@ -3402,7 +3902,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
             data: { fbMessageId },
           });
         } catch (e) {
-          this.logger.debug(`linkFbMessageIds skipped duplicate fb_message_id ${fbMessageId}: ${(e as Error).message}`);
+          this.logger.debug(
+            `linkFbMessageIds skipped duplicate fb_message_id ${fbMessageId}: ${(e as Error).message}`,
+          );
         }
       }
     }
@@ -3448,58 +3950,70 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
     const result = [...rows];
     const batchSize = Number(process.env.CSKH_MEDIA_BACKFILL_BATCH || 6);
-    const mediaConcurrency = Number(process.env.CSKH_MEDIA_BACKFILL_CONCURRENCY || 3);
+    const mediaConcurrency = Number(
+      process.env.CSKH_MEDIA_BACKFILL_CONCURRENCY || 3,
+    );
     for (let round = 0; round < 3; round++) {
-      const missing = result.filter((r) => this.needsMediaBackfill(r)).slice(0, batchSize);
+      const missing = result
+        .filter((r) => this.needsMediaBackfill(r))
+        .slice(0, batchSize);
       if (!missing.length) break;
       let progress = false;
       let next = 0;
-      const workers = Array.from({ length: Math.min(mediaConcurrency, missing.length) }, async () => {
-        while (true) {
-          const idx = next++;
-          if (idx >= missing.length) return;
-          const row = missing[idx];
-          try {
-            const resolved = await this.graph.resolveMessageMediaUrl(
-              row.fbMessageId!,
-              config.pageAccessToken,
-            );
-            if (!resolved.url) return;
-            progress = true;
-            const newText =
-              row.text === '[Ảnh]' || row.text === '[attachment]' ? '' : row.text;
-            const updated = await this.prisma.cskhInboxMessage.update({
-              where: { id: row.id },
-              data: {
-                attachmentUrl: resolved.url,
-                messageType: resolved.messageType ?? row.messageType,
-                text: newText,
-              },
-            });
-            const resultIdx = result.findIndex((r) => r.id === row.id);
-            if (resultIdx >= 0) {
-              result[resultIdx] = {
-                ...result[resultIdx],
-                attachmentUrl: resolved.url,
-                messageType: resolved.messageType ?? row.messageType,
-                text: newText,
-              };
+      const workers = Array.from(
+        { length: Math.min(mediaConcurrency, missing.length) },
+        async () => {
+          while (true) {
+            const idx = next++;
+            if (idx >= missing.length) return;
+            const row = missing[idx];
+            try {
+              const resolved = await this.graph.resolveMessageMediaUrl(
+                row.fbMessageId!,
+                config.pageAccessToken,
+              );
+              if (!resolved.url) return;
+              progress = true;
+              const newText =
+                row.text === '[Ảnh]' || row.text === '[attachment]'
+                  ? ''
+                  : row.text;
+              const updated = await this.prisma.cskhInboxMessage.update({
+                where: { id: row.id },
+                data: {
+                  attachmentUrl: resolved.url,
+                  messageType: resolved.messageType ?? row.messageType,
+                  text: newText,
+                },
+              });
+              const resultIdx = result.findIndex((r) => r.id === row.id);
+              if (resultIdx >= 0) {
+                result[resultIdx] = {
+                  ...result[resultIdx],
+                  attachmentUrl: resolved.url,
+                  messageType: resolved.messageType ?? row.messageType,
+                  text: newText,
+                };
+              }
+              this.publishMessageRealtime(pageId, conversationId, [updated]);
+            } catch (e) {
+              this.logger.debug(
+                `backfillMissingMediaUrls ${row.id}: ${(e as Error).message}`,
+              );
             }
-            this.publishMessageRealtime(pageId, conversationId, [updated]);
-          } catch (e) {
-            this.logger.debug(
-              `backfillMissingMediaUrls ${row.id}: ${(e as Error).message}`,
-            );
           }
-        }
-      });
+        },
+      );
       await Promise.all(workers);
       if (!progress) break;
     }
     return result;
   }
 
-  private async repairLegacyInboxMessages(conversationId: string, token?: string) {
+  private async repairLegacyInboxMessages(
+    conversationId: string,
+    token?: string,
+  ) {
     const rows = await this.prisma.cskhInboxMessage.findMany({
       where: { conversationId },
       select: {
@@ -3538,7 +4052,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       select: { id: true, text: true, attachmentUrl: true, messageType: true },
     });
     for (const row of fresh) {
-      const repaired = repairStoredMessage(row.text, row.attachmentUrl, row.messageType);
+      const repaired = repairStoredMessage(
+        row.text,
+        row.attachmentUrl,
+        row.messageType,
+      );
       if (!repaired.changed) continue;
       await this.prisma.cskhInboxMessage.update({
         where: { id: row.id },
@@ -3563,7 +4081,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     if (token) {
       enriched = await this.graph.enrichMessageWithMedia(msg, token);
     }
-    let normalized = this.graph.normalizeMessageForInbox(enriched, pageId, customerPsid);
+    let normalized = this.graph.normalizeMessageForInbox(
+      enriched,
+      pageId,
+      customerPsid,
+    );
     if (!normalized) return null;
 
     const attCount = enriched.attachments?.data?.length ?? 0;
@@ -3580,7 +4102,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         normalized.text === '[Video]' ||
         attCount > 0;
       if (looksLikeMedia) {
-        const resolvedAll = await this.graph.resolveAllMessageMediaUrls(enriched.id!, token!);
+        const resolvedAll = await this.graph.resolveAllMessageMediaUrls(
+          enriched.id!,
+          token!,
+        );
         if (resolvedAll.length) {
           const urls = dedupeMediaUrls(resolvedAll.map((r) => r.url));
           normalized = {
@@ -3608,18 +4133,19 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const senderType = isStaff ? 'staff' : 'customer';
     const direction = isStaff ? 'outbound' : 'inbound';
     const fbMessageId = msg.id ? String(msg.id) : null;
-    const mediaUrls =
-      dedupeMediaUrls(
-        normalized.attachmentUrls?.length
-          ? normalized.attachmentUrls
-          : normalized.attachmentUrl
-            ? [normalized.attachmentUrl]
-            : [],
-      );
+    const mediaUrls = dedupeMediaUrls(
+      normalized.attachmentUrls?.length
+        ? normalized.attachmentUrls
+        : normalized.attachmentUrl
+          ? [normalized.attachmentUrl]
+          : [],
+    );
 
     if (!mediaUrls.length) {
       let exists = fbMessageId
-        ? await this.prisma.cskhInboxMessage.findUnique({ where: { fbMessageId } })
+        ? await this.prisma.cskhInboxMessage.findUnique({
+            where: { fbMessageId },
+          })
         : null;
       if (!exists) {
         exists = await this.findStoredMessageNearSentAt(
@@ -3630,7 +4156,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         );
       }
       if (!exists && isStaff) {
-        exists = await this.findPendingOutboundToLink(conversationId, normalized.text, sentAt);
+        exists = await this.findPendingOutboundToLink(
+          conversationId,
+          normalized.text,
+          sentAt,
+        );
       }
       const payload = {
         text: normalized.text,
@@ -3657,7 +4187,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
               },
             });
           } catch (e) {
-            this.logger.debug(`Failed to update legacy message ${exists.id} with fbMessageId ${fbMessageId}: ${(e as Error).message}`);
+            this.logger.debug(
+              `Failed to update legacy message ${exists.id} with fbMessageId ${fbMessageId}: ${(e as Error).message}`,
+            );
             if (fbMessageId && !exists.fbMessageId) {
               try {
                 await this.prisma.cskhInboxMessage.update({
@@ -3665,17 +4197,20 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
                   data: { ...payload, senderType, direction },
                 });
               } catch (retryErr) {
-                this.logger.error(`Retry update legacy message ${exists.id} failed: ${(retryErr as Error).message}`);
+                this.logger.error(
+                  `Retry update legacy message ${exists.id} failed: ${(retryErr as Error).message}`,
+                );
               }
             }
           }
         }
         return {
-          text: inboxListPreview({
-            text: normalized.text,
-            messageType: normalized.messageType,
-            attachmentCount: 0,
-          }) || normalized.text,
+          text:
+            inboxListPreview({
+              text: normalized.text,
+              messageType: normalized.messageType,
+              attachmentCount: 0,
+            }) || normalized.text,
         };
       }
       try {
@@ -3695,11 +4230,12 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         if ((e as { code?: string }).code !== 'P2002') throw e;
       }
       return {
-        text: inboxListPreview({
-          text: normalized.text,
-          messageType: normalized.messageType,
-          attachmentCount: 0,
-        }) || normalized.text,
+        text:
+          inboxListPreview({
+            text: normalized.text,
+            messageType: normalized.messageType,
+            attachmentCount: 0,
+          }) || normalized.text,
       };
     }
 
@@ -3709,7 +4245,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       const rowText =
         i === 0
           ? normalized.text
-          : normalized.messageType === 'image' || normalized.messageType === 'video'
+          : normalized.messageType === 'image' ||
+              normalized.messageType === 'video'
             ? ''
             : normalized.text;
       const payload = {
@@ -3719,7 +4256,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       };
 
       let exists = rowFbMessageId
-        ? await this.prisma.cskhInboxMessage.findUnique({ where: { fbMessageId: rowFbMessageId } })
+        ? await this.prisma.cskhInboxMessage.findUnique({
+            where: { fbMessageId: rowFbMessageId },
+          })
         : null;
       if (!exists && attachmentUrl) {
         const urlPath = attachmentUrl.split('?')[0];
@@ -3762,11 +4301,15 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
                 ...payload,
                 senderType,
                 direction,
-                ...(rowFbMessageId && !exists.fbMessageId ? { fbMessageId: rowFbMessageId } : {}),
+                ...(rowFbMessageId && !exists.fbMessageId
+                  ? { fbMessageId: rowFbMessageId }
+                  : {}),
               },
             });
           } catch (e) {
-            this.logger.debug(`Failed to update message ${exists.id} with fbMessageId ${rowFbMessageId}: ${(e as Error).message}`);
+            this.logger.debug(
+              `Failed to update message ${exists.id} with fbMessageId ${rowFbMessageId}: ${(e as Error).message}`,
+            );
             if (rowFbMessageId && !exists.fbMessageId) {
               try {
                 await this.prisma.cskhInboxMessage.update({
@@ -3774,7 +4317,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
                   data: { ...payload, senderType, direction },
                 });
               } catch (retryErr) {
-                this.logger.error(`Retry update message ${exists.id} failed: ${(retryErr as Error).message}`);
+                this.logger.error(
+                  `Retry update message ${exists.id} failed: ${(retryErr as Error).message}`,
+                );
               }
             }
           }
@@ -3890,7 +4435,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
               attachmentUrl: item.url,
               messageType: item.messageType,
               text:
-                placeholder.text === '[Ảnh]' || placeholder.text === '[attachment]'
+                placeholder.text === '[Ảnh]' ||
+                placeholder.text === '[attachment]'
                   ? ''
                   : placeholder.text,
             },
@@ -3959,7 +4505,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         return {
           id: row.id,
           attachmentUrl: row.attachmentUrl,
-          attachmentUrls: attachmentUrls.length > 1 ? attachmentUrls : undefined,
+          attachmentUrls:
+            attachmentUrls.length > 1 ? attachmentUrls : undefined,
           messageType: row.messageType,
           text: row.text,
         };
@@ -4003,7 +4550,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         sentAt: this.mediaSentWindow(row.sentAt, 15_000),
       },
       orderBy: { sentAt: 'asc' },
-      select: { id: true, fbMessageId: true, attachmentUrl: true, text: true, messageType: true },
+      select: {
+        id: true,
+        fbMessageId: true,
+        attachmentUrl: true,
+        text: true,
+        messageType: true,
+      },
     });
     const mids = [
       ...new Set(
@@ -4014,9 +4567,16 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     ];
     const resolvedAll: Array<{ url: string; messageType: string }> = [];
     for (const mid of mids.slice(0, 12)) {
-      const part = await this.graph.resolveAllMessageMediaUrls(mid, config.pageAccessToken);
+      const part = await this.graph.resolveAllMessageMediaUrls(
+        mid,
+        config.pageAccessToken,
+      );
       for (const item of part) {
-        if (!resolvedAll.some((x) => x.url.split('?')[0] === item.url.split('?')[0])) {
+        if (
+          !resolvedAll.some(
+            (x) => x.url.split('?')[0] === item.url.split('?')[0],
+          )
+        ) {
           resolvedAll.push(item);
         }
       }
@@ -4070,11 +4630,17 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const lockKey = `${conversationId}:${trimmed}`;
     const inflight = this.inflightSends.get(lockKey);
     if (inflight) return inflight;
-    const run = this.sendMessageUnlocked(conversationId, trimmed, tenantId, options);
+    const run = this.sendMessageUnlocked(
+      conversationId,
+      trimmed,
+      tenantId,
+      options,
+    );
     this.inflightSends.set(lockKey, run);
     void run.finally(() => {
       setTimeout(() => {
-        if (this.inflightSends.get(lockKey) === run) this.inflightSends.delete(lockKey);
+        if (this.inflightSends.get(lockKey) === run)
+          this.inflightSends.delete(lockKey);
       }, 2500);
     });
     return run;
@@ -4086,9 +4652,15 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     tenantId?: string,
     options?: { autoTranslate?: boolean; originalText?: string },
   ) {
-
-    const conv = await findInboxConversationById(this.prisma, conversationId, tenantId);
-    if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
+    const conv = await findInboxConversationById(
+      this.prisma,
+      conversationId,
+      tenantId,
+    );
+    if (!conv)
+      throw new NotFoundException(
+        'Hội thoại không tồn tại hoặc không có quyền',
+      );
 
     if (!conv.participantPsid?.trim()) {
       throw new BadRequestException(
@@ -4097,10 +4669,42 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     }
 
     const config = await this.prisma.facebookCskhConfig.findFirst({
-      where: tenantId ? { pageId: conv.pageId, tenantId } : { pageId: conv.pageId },
+      where: tenantId
+        ? { pageId: conv.pageId, tenantId }
+        : { pageId: conv.pageId },
     });
     if (!config?.pageAccessToken) {
       throw new BadRequestException('Page chưa có access token');
+    }
+
+    let messagingOwnerId = cskhGraphMessagingOwnerId(
+      config.pageId,
+      config.metadata,
+    );
+    if (
+      cskhInboxGraphPlatform(config.metadata) === 'instagram' &&
+      messagingOwnerId === config.pageId
+    ) {
+      await this.cskh.repairInstagramFacebookPageIds(config.tenantId || tenantId);
+      const repaired = await this.prisma.facebookCskhConfig.findFirst({
+        where: tenantId
+          ? { pageId: conv.pageId, tenantId }
+          : { pageId: conv.pageId },
+      });
+      if (repaired) {
+        messagingOwnerId = cskhGraphMessagingOwnerId(
+          repaired.pageId,
+          repaired.metadata,
+        );
+      }
+    }
+    if (
+      cskhInboxGraphPlatform(config.metadata) === 'instagram' &&
+      messagingOwnerId === config.pageId
+    ) {
+      throw new BadRequestException(
+        'Kênh Instagram chưa gắn Fanpage — vào Cài đặt kênh → Cập nhật kết nối Facebook.',
+      );
     }
 
     let outboundText = trimmed;
@@ -4178,11 +4782,18 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       },
     });
 
-    this.publishMessageRealtime(conv.pageId, conv.id, [pending], false, tenantId, updatedConv);
+    this.publishMessageRealtime(
+      conv.pageId,
+      conv.id,
+      [pending],
+      false,
+      tenantId,
+      updatedConv,
+    );
 
     try {
       const result = await this.graph.sendPageMessage(
-        conv.pageId,
+        messagingOwnerId,
         config.pageAccessToken,
         conv.participantPsid,
         outboundText,
@@ -4195,7 +4806,14 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
             fbMessageId: result.message_id ?? null,
           },
         });
-        this.publishMessageRealtime(conv.pageId, conv.id, [sent], false, tenantId, updatedConv);
+        this.publishMessageRealtime(
+          conv.pageId,
+          conv.id,
+          [sent],
+          false,
+          tenantId,
+          updatedConv,
+        );
         return this.formatMessageRow(sent);
       } catch (linkErr) {
         const code = (linkErr as { code?: string }).code;
@@ -4228,7 +4846,14 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         where: { id: pending.id },
         data: { status: 'failed' },
       });
-      this.publishMessageRealtime(conv.pageId, conv.id, [failed], false, tenantId, updatedConv);
+      this.publishMessageRealtime(
+        conv.pageId,
+        conv.id,
+        [failed],
+        false,
+        tenantId,
+        updatedConv,
+      );
       throw new BadRequestException(this.facebookSendErrorMessage(e));
     }
   }
@@ -4243,13 +4868,22 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const trimmed = text.trim();
     if (!trimmed) throw new BadRequestException('Tin nhắn trống');
 
-    const conv = await findInboxConversationById(this.prisma, conversationId, tenantId);
-    if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
+    const conv = await findInboxConversationById(
+      this.prisma,
+      conversationId,
+      tenantId,
+    );
+    if (!conv)
+      throw new NotFoundException(
+        'Hội thoại không tồn tại hoặc không có quyền',
+      );
 
-    const langInfo = await this.resolveCustomerLang(conv, tenantId).catch(() => ({
-      lang: conv.customerLang || 'vi',
-      langLabel: conv.customerLangLabel || 'Tiếng Việt',
-    }));
+    const langInfo = await this.resolveCustomerLang(conv, tenantId).catch(
+      () => ({
+        lang: conv.customerLang || 'vi',
+        langLabel: conv.customerLangLabel || 'Tiếng Việt',
+      }),
+    );
 
     const target = (targetLang?.trim() || 'vi').toLowerCase() || 'vi';
     const alreadyVi =
@@ -4279,7 +4913,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
     const translated = (tr.translatedText || '').trim() || trimmed;
     const inputIsVi =
-      this.looksLikeVietnamese(trimmed) && !this.looksLikeForeignScript(trimmed);
+      this.looksLikeVietnamese(trimmed) &&
+      !this.looksLikeForeignScript(trimmed);
     const same = translated === trimmed || (target === 'vi' && inputIsVi);
 
     return {
@@ -4294,9 +4929,19 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Phát hiện + lưu ngôn ngữ khách trên conversation (BE DB). */
-  async detectAndPersistCustomerLang(conversationId: string, tenantId?: string) {
-    const conv = await findInboxConversationById(this.prisma, conversationId, tenantId);
-    if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
+  async detectAndPersistCustomerLang(
+    conversationId: string,
+    tenantId?: string,
+  ) {
+    const conv = await findInboxConversationById(
+      this.prisma,
+      conversationId,
+      tenantId,
+    );
+    if (!conv)
+      throw new NotFoundException(
+        'Hội thoại không tồn tại hoặc không có quyền',
+      );
 
     const langInfo = await this.resolveCustomerLang(conv, tenantId, true);
     return {
@@ -4307,9 +4952,19 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Nút Dịch trên header — dịch cả tin khách lẫn tin shop sang tiếng Việt (await). */
-  async translateConversationMessages(conversationId: string, tenantId?: string) {
-    const conv = await findInboxConversationById(this.prisma, conversationId, tenantId);
-    if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
+  async translateConversationMessages(
+    conversationId: string,
+    tenantId?: string,
+  ) {
+    const conv = await findInboxConversationById(
+      this.prisma,
+      conversationId,
+      tenantId,
+    );
+    if (!conv)
+      throw new NotFoundException(
+        'Hội thoại không tồn tại hoặc không có quyền',
+      );
 
     const rows = await this.prisma.cskhInboxMessage.findMany({
       where: {
@@ -4327,7 +4982,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         translatedText: true,
       },
     });
-    const translated = await this.runMessageTranslations(conv, rows.reverse(), tenantId);
+    const translated = await this.runMessageTranslations(
+      conv,
+      rows.reverse(),
+      tenantId,
+    );
     return { translated, total: rows.length };
   }
 
@@ -4349,14 +5008,20 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       where: {
         conversationId: conv.id,
         messageType: 'text',
-        NOT: { text: { in: ['', '[Ảnh]', '[Video]', '[Sticker]', '[attachment]'] } },
+        NOT: {
+          text: { in: ['', '[Ảnh]', '[Video]', '[Sticker]', '[attachment]'] },
+        },
       },
       orderBy: { sentAt: 'asc' },
       take: 120,
       select: { text: true, direction: true },
     });
-    const inbound = rows.filter((m) => m.direction === 'inbound').map((m) => m.text);
-    const samples = (inbound.length >= 3 ? inbound : rows.map((m) => m.text)).filter(Boolean);
+    const inbound = rows
+      .filter((m) => m.direction === 'inbound')
+      .map((m) => m.text);
+    const samples = (
+      inbound.length >= 3 ? inbound : rows.map((m) => m.text)
+    ).filter(Boolean);
     const detected = await this.ai.detectLang(samples);
 
     try {
@@ -4380,23 +5045,28 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private async loadTranslateContext(conversationId: string): Promise<string[]> {
+  private async loadTranslateContext(
+    conversationId: string,
+  ): Promise<string[]> {
     const rows = await this.prisma.cskhInboxMessage.findMany({
       where: {
         conversationId,
         messageType: 'text',
-        NOT: { text: { in: ['', '[Ảnh]', '[Video]', '[Sticker]', '[attachment]'] } },
+        NOT: {
+          text: { in: ['', '[Ảnh]', '[Video]', '[Sticker]', '[attachment]'] },
+        },
       },
       orderBy: { sentAt: 'desc' },
       take: 16,
       select: { text: true, direction: true, senderType: true },
     });
-    return rows
-      .reverse()
-      .map((m) => {
-        const who = m.direction === 'inbound' || m.senderType === 'customer' ? 'Khách' : 'Shop';
-        return `${who}: ${m.text.slice(0, 220)}`;
-      });
+    return rows.reverse().map((m) => {
+      const who =
+        m.direction === 'inbound' || m.senderType === 'customer'
+          ? 'Khách'
+          : 'Shop';
+      return `${who}: ${m.text.slice(0, 220)}`;
+    });
   }
 
   /**
@@ -4428,7 +5098,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   ): Promise<number> {
     const noise = new Set(['[Ảnh]', '[Video]', '[Sticker]', '[attachment]']);
     const need = messages.filter((m) => {
-      if (m.messageType !== 'text' || !m.text?.trim() || noise.has(m.text)) return false;
+      if (m.messageType !== 'text' || !m.text?.trim() || noise.has(m.text))
+        return false;
       const vi = (m.originalText || m.translatedText || '').trim();
       if (this.looksLikeForeignScript(m.text)) {
         return !vi || vi === m.text.trim() || this.looksLikeForeignScript(vi);
@@ -4440,7 +5111,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const prioritized = [...need].reverse().slice(0, 48);
 
     const contextMessages = messages
-      .filter((m) => m.messageType === 'text' && m.text?.trim() && !noise.has(m.text))
+      .filter(
+        (m) => m.messageType === 'text' && m.text?.trim() && !noise.has(m.text),
+      )
       .slice(-16)
       .map((m) => {
         const who = m.direction === 'inbound' ? 'Khách' : 'Shop';
@@ -4451,7 +5124,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const needAi: typeof prioritized = [];
     const instant: CskhInboxMessage[] = [];
     for (const msg of prioritized) {
-      if (this.looksLikeVietnamese(msg.text) && !this.looksLikeForeignScript(msg.text)) {
+      if (
+        this.looksLikeVietnamese(msg.text) &&
+        !this.looksLikeForeignScript(msg.text)
+      ) {
         try {
           const patched = await this.prisma.cskhInboxMessage.update({
             where: { id: msg.id },
@@ -4467,7 +5143,14 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       }
     }
     if (instant.length) {
-      this.publishMessageRealtime(conv.pageId, conv.id, instant, false, tenantId, conv);
+      this.publishMessageRealtime(
+        conv.pageId,
+        conv.id,
+        instant,
+        false,
+        tenantId,
+        conv,
+      );
     }
     if (!needAi.length) return translated;
 
@@ -4507,14 +5190,25 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
             updated.push(patched);
             translated += 1;
           } catch (e) {
-            this.logger.debug(`batch persist skip ${tr.id}: ${(e as Error).message}`);
+            this.logger.debug(
+              `batch persist skip ${tr.id}: ${(e as Error).message}`,
+            );
           }
         }
         if (updated.length) {
-          this.publishMessageRealtime(conv.pageId, conv.id, updated, false, tenantId, conv);
+          this.publishMessageRealtime(
+            conv.pageId,
+            conv.id,
+            updated,
+            false,
+            tenantId,
+            conv,
+          );
         }
       } catch (e) {
-        this.logger.warn(`translate batch chunk failed: ${(e as Error).message}`);
+        this.logger.warn(
+          `translate batch chunk failed: ${(e as Error).message}`,
+        );
       }
     }
     return translated;
@@ -4534,15 +5228,25 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
   /** Broadcast typing indicator event qua SSE. */
   async notifyTyping(conversationId: string, tenantId?: string) {
-    const conv = await findInboxConversationById(this.prisma, conversationId, tenantId);
-    if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
+    const conv = await findInboxConversationById(
+      this.prisma,
+      conversationId,
+      tenantId,
+    );
+    if (!conv)
+      throw new NotFoundException(
+        'Hội thoại không tồn tại hoặc không có quyền',
+      );
 
     const config = await this.prisma.facebookCskhConfig.findFirst({
-      where: tenantId ? { pageId: conv.pageId, tenantId } : { pageId: conv.pageId },
+      where: tenantId
+        ? { pageId: conv.pageId, tenantId }
+        : { pageId: conv.pageId },
     });
     if (config?.pageAccessToken) {
+      const ownerId = cskhGraphMessagingOwnerId(config.pageId, config.metadata);
       void this.graph.sendPageSenderAction(
-        conv.pageId,
+        ownerId,
         config.pageAccessToken,
         conv.participantPsid,
         'typing_on',
@@ -4558,7 +5262,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Đánh dấu đã đọc — chỉ khi đã gán nhãn; nếu chưa gán nhãn thì ghi nhận xem và giữ chờ xử lý. */
-  async markAsRead(conversationId: string, tenantId?: string, viewerUserId?: bigint | number) {
+  async markAsRead(
+    conversationId: string,
+    tenantId?: string,
+    viewerUserId?: bigint | number,
+  ) {
     if (viewerUserId) {
       const viewed = await this.inboxLabels.recordConversationView(
         conversationId,
@@ -4585,20 +5293,31 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    const conv = await findInboxConversationById(this.prisma, conversationId, tenantId);
-    if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
+    const conv = await findInboxConversationById(
+      this.prisma,
+      conversationId,
+      tenantId,
+    );
+    if (!conv)
+      throw new NotFoundException(
+        'Hội thoại không tồn tại hoặc không có quyền',
+      );
 
-    const labels = await this.inboxLabels.getLabelsForConversation(conversationId);
+    const labels =
+      await this.inboxLabels.getLabelsForConversation(conversationId);
     if (labels.length === 0) {
       throw new BadRequestException('Phải gán nhãn trước khi đánh dấu đã đọc');
     }
 
     const config = await this.prisma.facebookCskhConfig.findFirst({
-      where: tenantId ? { pageId: conv.pageId, tenantId } : { pageId: conv.pageId },
+      where: tenantId
+        ? { pageId: conv.pageId, tenantId }
+        : { pageId: conv.pageId },
     });
     if (config?.pageAccessToken) {
+      const ownerId = cskhGraphMessagingOwnerId(config.pageId, config.metadata);
       void this.graph.sendPageSenderAction(
-        conv.pageId,
+        ownerId,
         config.pageAccessToken,
         conv.participantPsid,
         'mark_seen',
@@ -4610,7 +5329,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       data: { unreadCount: 0, awaitingLabel: false },
     });
 
-    const updated = await this.markInboundMessagesRead(conversationId, tenantId);
+    const updated = await this.markInboundMessagesRead(
+      conversationId,
+      tenantId,
+    );
 
     this.realtime.publish({
       type: 'read-receipt',
@@ -4624,8 +5346,15 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   async markAsUnread(conversationId: string, tenantId?: string) {
-    const conv = await findInboxConversationById(this.prisma, conversationId, tenantId);
-    if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
+    const conv = await findInboxConversationById(
+      this.prisma,
+      conversationId,
+      tenantId,
+    );
+    if (!conv)
+      throw new NotFoundException(
+        'Hội thoại không tồn tại hoặc không có quyền',
+      );
 
     const updatedConv = await this.prisma.cskhInboxConversation.update({
       where: { id: conversationId },
@@ -4665,7 +5394,12 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   async syncFromGraph(
     pageId?: string,
     tenantId?: string,
-    options?: { full?: boolean; lightweight?: boolean; force?: boolean; liveHead?: boolean },
+    options?: {
+      full?: boolean;
+      lightweight?: boolean;
+      force?: boolean;
+      liveHead?: boolean;
+    },
   ) {
     const redisOff = !this.redisQueue.isRedisQueueEnabled();
     const force =
@@ -4673,13 +5407,27 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       Boolean(pageId?.trim()) ||
       options?.lightweight === true ||
       options?.liveHead === true;
-    if (!force && !redisOff && (await this.redisQueue.getWebhookQueueDepth()) > 0) {
+    if (
+      !force &&
+      !redisOff &&
+      (await this.redisQueue.getWebhookQueueDepth()) > 0
+    ) {
       this.logger.log('[syncFromGraph] Bỏ qua — webhook đang có event');
-      return { synced: 0, pageCount: 0, okPages: 0, failedPages: [] as Array<{ page: string; error: string }> };
+      return {
+        synced: 0,
+        pageCount: 0,
+        okPages: 0,
+        failedPages: [] as Array<{ page: string; error: string }>,
+      };
     }
     if (this.graphCoordinator.inboxSyncActive) {
       this.logger.log('[syncFromGraph] Bỏ qua — đang sync inbox');
-      return { synced: 0, pageCount: 0, okPages: 0, failedPages: [] as Array<{ page: string; error: string }> };
+      return {
+        synced: 0,
+        pageCount: 0,
+        okPages: 0,
+        failedPages: [] as Array<{ page: string; error: string }>,
+      };
     }
     this.graphCoordinator.beginInboxSync();
     await this.redisQueue.markInboxSyncActive();
@@ -4694,12 +5442,19 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   private async syncFromGraphInner(
     pageId?: string,
     tenantId?: string,
-    options?: { full?: boolean; lightweight?: boolean; force?: boolean; liveHead?: boolean },
+    options?: {
+      full?: boolean;
+      lightweight?: boolean;
+      force?: boolean;
+      liveHead?: boolean;
+    },
   ) {
     const full = options?.full === true;
-    const lightweight = options?.lightweight === true || options?.liveHead === true;
+    const lightweight =
+      options?.lightweight === true || options?.liveHead === true;
     const liveHead = options?.liveHead === true;
-    const force = options?.force === true || Boolean(pageId?.trim()) || lightweight;
+    const force =
+      options?.force === true || Boolean(pageId?.trim()) || lightweight;
     const redisOff = !this.redisQueue.isRedisQueueEnabled();
     const where: any = {};
     if (pageId) where.pageId = pageId;
@@ -4710,7 +5465,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     let okPages = 0;
     const failedPages: Array<{ page: string; error: string }> = [];
     for (const page of pages) {
-      if (!force && !redisOff && (await this.redisQueue.getWebhookQueueDepth()) > 0) {
+      if (
+        !force &&
+        !redisOff &&
+        (await this.redisQueue.getWebhookQueueDepth()) > 0
+      ) {
         this.logger.log('[syncFromGraph] Dừng giữa chừng — nhường webhook');
         break;
       }
@@ -4724,6 +5483,12 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         okPages++;
       } catch (e) {
         const msg = (e as Error).message;
+        if (
+          cskhInboxGraphPlatform(page.metadata) === 'instagram' &&
+          /capability|#3\)/i.test(msg)
+        ) {
+          this.igGraphCapabilityBackoff.set(page.pageId, Date.now() + 180_000);
+        }
         failedPages.push({ page: page.pageName || page.pageId, error: msg });
         this.logger.error(
           `[syncFromGraph${full ? ':full' : ''}] LỖI page ${page.pageName || page.pageId}: ${msg}`,
@@ -4783,7 +5548,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     }
     if (!data.length) return 0;
     // skipDuplicates dựa trên unique fbMessageId → chạy lại an toàn cho tin có fbMessageId.
-    const res = await this.prisma.cskhInboxMessage.createMany({ data, skipDuplicates: true });
+    const res = await this.prisma.cskhInboxMessage.createMany({
+      data,
+      skipDuplicates: true,
+    });
     return res.count;
   }
 
@@ -4850,15 +5618,24 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   async getBackfillStatus(tenantId?: string) {
     const runningJob = await this.findRunningBackfillJob(tenantId);
     if (runningJob) {
-      return this.backfillStatusFromJob(runningJob, { running: true, paused: false });
+      return this.backfillStatusFromJob(runningJob, {
+        running: true,
+        paused: false,
+      });
     }
     const pausedJob = await this.findPausedBackfillJob(tenantId);
     if (pausedJob) {
-      return this.backfillStatusFromJob(pausedJob, { running: false, paused: true });
+      return this.backfillStatusFromJob(pausedJob, {
+        running: false,
+        paused: true,
+      });
     }
     const recentJob = await this.findRecentBackfillJob(tenantId);
     if (recentJob) {
-      return this.backfillStatusFromJob(recentJob, { running: false, paused: false });
+      return this.backfillStatusFromJob(recentJob, {
+        running: false,
+        paused: false,
+      });
     }
     return this.toBackfillResponse();
   }
@@ -4882,13 +5659,17 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
    * Hủy toàn bộ quét đang chạy / đang chờ — dừng ngay, xóa hàng đợi Redis, đánh dấu job cancelled.
    */
   async cancelAllBackfill(tenantId?: string) {
-    const where: { type: string; status: { in: string[] }; tenantId?: string } = {
-      type: 'inbox-backfill',
-      status: { in: ['running', 'paused'] },
-    };
+    const where: { type: string; status: { in: string[] }; tenantId?: string } =
+      {
+        type: 'inbox-backfill',
+        status: { in: ['running', 'paused'] },
+      };
     if (tenantId) where.tenantId = tenantId;
 
-    const jobs = await this.prisma.cskhJobRun.findMany({ where, select: { id: true } });
+    const jobs = await this.prisma.cskhJobRun.findMany({
+      where,
+      select: { id: true },
+    });
 
     this.backfillCancelRequested = true;
 
@@ -4960,7 +5741,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   ) {
     const runningJob = await this.findRunningBackfillJob(tenantId);
     if (runningJob) {
-      return this.backfillStatusFromJob(runningJob, { running: true, paused: false });
+      return this.backfillStatusFromJob(runningJob, {
+        running: true,
+        paused: false,
+      });
     }
     if (this.backfillState.running) return this.toBackfillResponse();
 
@@ -4969,14 +5753,17 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     this.backfillCancelRequested = false;
 
     const dateRaw = options?.date?.trim() ?? '';
-    const requestedScanDate = /^\d{4}-\d{2}-\d{2}$/.test(dateRaw) ? dateRaw : null;
+    const requestedScanDate = /^\d{4}-\d{2}-\d{2}$/.test(dateRaw)
+      ? dateRaw
+      : null;
 
     let completedPageIds: string[] = [];
     let resumeFromJob = false;
     let initialDone = 0;
     let initialAdded = 0;
     let initialOk = 0;
-    let initialErrors: Array<{ page: string; error: string; pageId?: string }> = [];
+    let initialErrors: Array<{ page: string; error: string; pageId?: string }> =
+      [];
     let totalAllPages = 0;
     let scanDate: string | null = requestedScanDate;
 
@@ -4984,7 +5771,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       ? Prisma.sql`AND cfg.tenant_id = ${tenantId}::uuid`
       : Prisma.empty;
 
-    const allPages = await this.prisma.$queryRaw<Array<{ pageId: string; pageName: string | null }>>`
+    const allPages = await this.prisma.$queryRaw<
+      Array<{ pageId: string; pageName: string | null }>
+    >`
       SELECT cfg.page_id AS "pageId", cfg.page_name AS "pageName"
       FROM facebook_cskh_configs cfg
       WHERE cfg.page_access_token IS NOT NULL AND cfg.page_access_token <> ''
@@ -4993,9 +5782,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     `;
     totalAllPages = allPages.length;
 
-    const pausedJob = options?.force ? null : await this.findPausedBackfillJob(tenantId);
+    const pausedJob = options?.force
+      ? null
+      : await this.findPausedBackfillJob(tenantId);
     if (pausedJob) {
-      const parsed = this.jobSummaryToState(pausedJob.summary as Record<string, unknown>);
+      const parsed = this.jobSummaryToState(
+        pausedJob.summary as Record<string, unknown>,
+      );
       completedPageIds = [...parsed.completedPageIds];
       initialDone = parsed.done;
       initialAdded = parsed.addedMessages;
@@ -5011,7 +5804,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     } else {
       if (options?.force) {
         await this.prisma.cskhJobRun.updateMany({
-          where: { type: 'inbox-backfill', status: 'paused', ...(tenantId ? { tenantId } : {}) },
+          where: {
+            type: 'inbox-backfill',
+            status: 'paused',
+            ...(tenantId ? { tenantId } : {}),
+          },
           data: { status: 'cancelled', finishedAt: new Date() },
         });
       }
@@ -5048,9 +5845,14 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       });
     }
 
-    const jobRow = await this.prisma.cskhJobRun.findUnique({ where: { id: jobId } });
+    const jobRow = await this.prisma.cskhJobRun.findUnique({
+      where: { id: jobId },
+    });
     if (jobRow) {
-      return this.backfillStatusFromJob(jobRow, { running: true, paused: false });
+      return this.backfillStatusFromJob(jobRow, {
+        running: true,
+        paused: false,
+      });
     }
 
     return {
@@ -5065,7 +5867,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       errorPages: initialErrors,
       scanDate,
       startedAt: resumeFromJob
-        ? (pausedJob!.startedAt.toISOString())
+        ? pausedJob!.startedAt.toISOString()
         : new Date().toISOString(),
       finishedAt: null,
       jobId,
@@ -5087,27 +5889,41 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         `[backfill] Chạy inline trên API (redis-off, job ${jobId.slice(0, 8)})`,
       );
     }
-    this.logger.log(`[backfill] WORKER bắt đầu job ${jobId.slice(0, 8)} (CSKH_RUN_MODE=${mode})`);
+    this.logger.log(
+      `[backfill] WORKER bắt đầu job ${jobId.slice(0, 8)} (CSKH_RUN_MODE=${mode})`,
+    );
 
-    const job = await this.prisma.cskhJobRun.findUnique({ where: { id: jobId } });
+    const job = await this.prisma.cskhJobRun.findUnique({
+      where: { id: jobId },
+    });
     if (!job || job.type !== 'inbox-backfill') {
-      this.logger.log(`[backfill] worker skip ${jobId.slice(0, 8)} — job không tồn tại`);
+      this.logger.log(
+        `[backfill] worker skip ${jobId.slice(0, 8)} — job không tồn tại`,
+      );
       return;
     }
     if (job.status !== 'running') {
-      this.logger.log(`[backfill] worker skip ${jobId.slice(0, 8)} — status=${job.status}`);
+      this.logger.log(
+        `[backfill] worker skip ${jobId.slice(0, 8)} — status=${job.status}`,
+      );
       return;
     }
     if (this.backfillState.running && this.backfillJobId !== jobId) {
-      this.logger.warn(`[backfill] worker bỏ qua ${jobId.slice(0, 8)} — đang chạy job khác`);
+      this.logger.warn(
+        `[backfill] worker bỏ qua ${jobId.slice(0, 8)} — đang chạy job khác`,
+      );
       return;
     }
     if (this.backfillState.running && this.backfillJobId === jobId) {
-      this.logger.log(`[backfill] worker skip ${jobId.slice(0, 8)} — đã chạy trên process này`);
+      this.logger.log(
+        `[backfill] worker skip ${jobId.slice(0, 8)} — đã chạy trên process này`,
+      );
       return;
     }
 
-    const parsed = this.jobSummaryToState(job.summary as Record<string, unknown>);
+    const parsed = this.jobSummaryToState(
+      job.summary as Record<string, unknown>,
+    );
     const scope = (parsed.scope || 'all') as 'empty' | 'all';
     const tenantId = job.tenantId ?? undefined;
 
@@ -5135,14 +5951,20 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       scanDate: parsed.scanDate,
     };
 
-    const pages = await this.buildBackfillPageList(scope, tenantId, parsed.completedPageIds);
+    const pages = await this.buildBackfillPageList(
+      scope,
+      tenantId,
+      parsed.completedPageIds,
+    );
 
     this.startBackfillPausePoller();
     try {
       await this.runBackfillJob(pages);
     } catch (e) {
       if (await this.isBackfillCancelledNow()) {
-        this.logger.log(`[backfill] job ${jobId.slice(0, 8)} đã hủy — bỏ qua lỗi`);
+        this.logger.log(
+          `[backfill] job ${jobId.slice(0, 8)} đã hủy — bỏ qua lỗi`,
+        );
         return;
       }
       this.logger.error(`[backfill] job lỗi tổng: ${(e as Error).message}`);
@@ -5158,7 +5980,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async runBackfillJob(pages: Array<{ pageId: string; pageName: string | null }>) {
+  private async runBackfillJob(
+    pages: Array<{ pageId: string; pageName: string | null }>,
+  ) {
     const scanDate = this.backfillState.scanDate;
     this.logger.log(
       `[backfill] bắt đầu quét ${pages.length} kênh còn lại — tuần tự từng kênh` +
@@ -5168,18 +5992,24 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     for (const row of pages) {
       if (await this.isBackfillCancelledNow()) {
         await this.finishBackfillCancel();
-        this.logger.log(`[backfill] ĐÃ HỦY tại ${this.backfillState.done}/${this.backfillState.total} kênh`);
+        this.logger.log(
+          `[backfill] ĐÃ HỦY tại ${this.backfillState.done}/${this.backfillState.total} kênh`,
+        );
         return;
       }
       if (await this.isBackfillPauseRequestedNow()) {
         await this.finishBackfillPause();
-        this.logger.log(`[backfill] TẠM DỪNG tại ${this.backfillState.done}/${this.backfillState.total} kênh`);
+        this.logger.log(
+          `[backfill] TẠM DỪNG tại ${this.backfillState.done}/${this.backfillState.total} kênh`,
+        );
         return;
       }
 
       this.backfillState.currentPage = row.pageName || row.pageId;
       this.backfillState.pageConvsDone = 0;
-      await this.persistBackfillJob('running', this.backfillCompletedPageIds, { force: true });
+      await this.persistBackfillJob('running', this.backfillCompletedPageIds, {
+        force: true,
+      });
       this.logger.log(
         `[backfill] (${this.backfillState.done + 1}/${this.backfillState.total}) bắt đầu kênh: ${row.pageName || row.pageId}` +
           (scanDate ? ` · ngày ${scanDate}` : ''),
@@ -5211,12 +6041,16 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           ]);
           if (await this.isBackfillCancelledNow()) {
             await this.finishBackfillCancel();
-            this.logger.log(`[backfill] ĐÃ HỦY giữa kênh ${row.pageName || row.pageId}`);
+            this.logger.log(
+              `[backfill] ĐÃ HỦY giữa kênh ${row.pageName || row.pageId}`,
+            );
             return;
           }
           if (this.backfillPauseRequested) {
             await this.finishBackfillPause();
-            this.logger.log(`[backfill] TẠM DỪNG giữa kênh ${row.pageName || row.pageId} tại ${this.backfillState.done}/${this.backfillState.total}`);
+            this.logger.log(
+              `[backfill] TẠM DỪNG giữa kênh ${row.pageName || row.pageId} tại ${this.backfillState.done}/${this.backfillState.total}`,
+            );
             return;
           }
           this.backfillState.addedMessages += added;
@@ -5238,12 +6072,16 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         });
         this.backfillCompletedPageIds.push(row.pageId);
         pageCompleted = true;
-        this.logger.warn(`[backfill] LỖI page ${row.pageName || row.pageId}: ${(e as Error).message}`);
+        this.logger.warn(
+          `[backfill] LỖI page ${row.pageName || row.pageId}: ${(e as Error).message}`,
+        );
       } finally {
         if (pageCompleted) {
           this.backfillState.done++;
           try {
-            await this.cskh.bumpPageStatsCaches(this.backfillTenantId, { inboundOnly: true });
+            await this.cskh.bumpPageStatsCaches(this.backfillTenantId, {
+              inboundOnly: true,
+            });
             void this.cskh
               .syncPageAdSpendAfterBackfillPage(
                 row.pageId,
@@ -5303,6 +6141,20 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  /** Bổ sung metadata.facebookPageId cho kênh IG (OAuth cũ / DB lệch). */
+  private async ensureInstagramChannelGraphReady(
+    page: FacebookCskhConfig,
+  ): Promise<FacebookCskhConfig> {
+    if (cskhInboxGraphPlatform(page.metadata) !== 'instagram') return page;
+    const ownerId = cskhGraphConversationsOwnerId(page.pageId, page.metadata);
+    if (ownerId !== page.pageId) return page;
+    await this.cskh.repairInstagramFacebookPageIds(page.tenantId || undefined);
+    const refreshed = await this.prisma.facebookCskhConfig.findUnique({
+      where: { pageId: page.pageId },
+    });
+    return refreshed ?? page;
+  }
+
   /** Quét 1 page từ Graph. Tách riêng để cô lập lỗi từng page trong syncFromGraph. */
   private async syncSinglePageFromGraph(
     page: FacebookCskhConfig,
@@ -5315,7 +6167,27 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       liveHead?: boolean;
     },
   ): Promise<number> {
+    page = await this.ensureInstagramChannelGraphReady(page);
     const graphPlatform = cskhInboxGraphPlatform(page.metadata);
+    const graphOwnerId = cskhGraphConversationsOwnerId(
+      page.pageId,
+      page.metadata,
+    );
+    const staffGraphIds = new Set(
+      [page.pageId, graphOwnerId].map((id) => String(id)).filter(Boolean),
+    );
+    if (
+      graphPlatform === 'instagram' &&
+      graphOwnerId === page.pageId &&
+      Date.now() < (this.igGraphCapabilityBackoff.get(page.pageId) ?? 0)
+    ) {
+      return 0;
+    }
+    if (graphPlatform === 'instagram' && graphOwnerId === page.pageId) {
+      throw new Error(
+        'Kênh Instagram chưa gắn Fanpage — Cài đặt kênh → Cập nhật kết nối Facebook',
+      );
+    }
     let synced = 0;
     const backfillMode = options?.backfillMode === true;
     const liveHead = options?.liveHead === true;
@@ -5328,222 +6200,262 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
     const processConv = async (fbConv: FbConversation): Promise<number> => {
       const run = async (): Promise<number> => {
-      if (options?.shouldStop?.()) return 0;
-      if (backfillMode && (await this.isBackfillCancelledNow())) return 0;
-      if (backfillMode && (await this.isBackfillPauseRequestedNow())) return 0;
-      if (!backfillMode && !monitorMode && (await this.redisQueue.shouldDeferInboxSync())) return 0;
-      if (!backfillMode && !monitorMode && this.redisQueue.isRedisQueueEnabled()) {
-        if ((await this.redisQueue.getWebhookQueueDepth()) > 2) return 0;
-      }
-      try {
-        const participants = fbConv.participants?.data ?? [];
-        const customer = participants.find((p) => String(p.id) !== String(page.pageId));
-        if (!customer?.id) return 0;
-
-        const rawMsgs = dateScopedBackfill
-          ? this.graph.filterMessagesByDay(fbConv.messages?.data ?? [], scanDate!)
-          : backfillMode
-            ? await this.graph.fetchAllMessagesFromInline(
-                fbConv.messages?.data,
-                fbConv.messages?.paging?.next,
-                page.pageAccessToken,
-                {
-                  shouldStop: () =>
-                    Boolean(options?.shouldStop?.() || this.backfillPauseRequested),
-                  maxPages: this.backfillMsgMaxPages,
-                },
-              )
-            : monitorMode
-              ? (fbConv.messages?.data ?? [])
-              : await this.graph.fetchMessages(
-                  fbConv.id,
-                  page.pageAccessToken,
-                  full ? 0 : this.msgLimit,
-                );
-        if (dateScopedBackfill && rawMsgs.length === 0) return 0;
-        const customerName = this.graph.resolveCustomerName(
-          fbConv.participants,
-          page.pageId,
-          rawMsgs,
-        );
-        let customerPictureUrl: string | null = null;
-        if (!lightweight && page.pageAccessToken) {
-          const profile = await this.graph.getMessengerUserProfile(
-            String(customer.id),
-            page.pageAccessToken,
-            { platform: graphPlatform },
+        if (options?.shouldStop?.()) return 0;
+        if (backfillMode && (await this.isBackfillCancelledNow())) return 0;
+        if (backfillMode && (await this.isBackfillPauseRequestedNow()))
+          return 0;
+        if (
+          !backfillMode &&
+          !monitorMode &&
+          (await this.redisQueue.shouldDeferInboxSync())
+        )
+          return 0;
+        if (
+          !backfillMode &&
+          !monitorMode &&
+          this.redisQueue.isRedisQueueEnabled()
+        ) {
+          if ((await this.redisQueue.getWebhookQueueDepth()) > 2) return 0;
+        }
+        try {
+          const participants = fbConv.participants?.data ?? [];
+          const customer = participants.find(
+            (p) => !staffGraphIds.has(String(p.id)),
           );
-          customerPictureUrl = profile.pictureUrl;
-        }
+          if (!customer?.id) return 0;
 
-        const oldConv = backfillMode
-          ? null
-          : await this.prisma.cskhInboxConversation.findUnique({
-              where: {
-                pageId_participantPsid: {
-                  pageId: page.pageId,
-                  participantPsid: String(customer.id),
-                },
-              },
-              select: { id: true, unreadCount: true, lastMessageAt: true },
-            });
-
-        if (monitorMode && oldConv?.lastMessageAt && fbConv.updated_time) {
-          const graphAt = new Date(fbConv.updated_time).getTime();
-          const dbAt = oldConv.lastMessageAt.getTime();
-          // Graph không mới hơn DB → bỏ, tránh SSE hàng loạt tin cũ mỗi lần catch-up.
-          if (graphAt > 0 && graphAt <= dbAt + 2_000) return 0;
-        }
-
-        const customerPsid = String(customer.id);
-        const trailingUnread = computeTrailingCustomerUnread(
-          rawMsgs,
-          page.pageId,
-          customerPsid,
-        );
-        const newestNorm = rawMsgs.length
-          ? this.graph.normalizeMessageForInbox(rawMsgs[0], page.pageId, customerPsid)
-          : null;
-        const unreadCount = newestNorm?.sender === 'Staff' ? 0 : trailingUnread;
-        const lastMessagePreview =
-          inboxListPreview({
-            text: newestNorm?.text ?? rawMsgs[0]?.message,
-            messageType: newestNorm?.messageType,
-            attachmentCount: newestNorm?.attachmentUrls?.length ?? (newestNorm?.attachmentUrl ? 1 : 0),
-          }) || newestNorm?.text || rawMsgs[0]?.message?.trim() || null;
-
-        const conv = await this.prisma.cskhInboxConversation.upsert({
-          where: {
-            pageId_participantPsid: {
-              pageId: page.pageId,
-              participantPsid: String(customer.id),
-            },
-          },
-          create: {
-            pageId: page.pageId,
-            pageName: page.pageName,
-            fbConversationId: fbConv.id,
-            participantPsid: String(customer.id),
-            customerName,
-            customerPictureUrl,
-            unreadCount,
-            lastMessage: lastMessagePreview,
-            lastMessageAt: fbConv.updated_time ? new Date(fbConv.updated_time) : new Date(),
-            tenantId: page.tenantId,
-          },
-          update: {
-            pageName: page.pageName ?? undefined,
-            fbConversationId: fbConv.id,
-            customerName,
-            customerPictureUrl: customerPictureUrl ?? undefined,
-            unreadCount,
-            lastMessage: lastMessagePreview ?? undefined,
-            lastMessageAt:
-              fbConv.updated_time &&
-              (!oldConv?.lastMessageAt ||
-                new Date(fbConv.updated_time).getTime() > oldConv.lastMessageAt.getTime() + 1_000)
-                ? new Date(fbConv.updated_time)
-                : undefined,
-            tenantId: page.tenantId ?? undefined,
-          },
-        });
-
-        if (!backfillMode && fbConv.unread_count === 0) {
-          const messageWhere: any = {
-            conversationId: conv.id,
-            direction: 'inbound',
-            status: { notIn: ['read', 'failed'] },
-          };
-          if (page.tenantId) messageWhere.tenantId = page.tenantId;
-          await this.prisma.cskhInboxMessage.updateMany({
-            where: messageWhere,
-            data: { status: 'read' },
-          });
-        }
-
-        const isNewConv = !oldConv;
-
-        if (lightweight) {
-          const added = await this.fastPersistMessages(
-            conv.id,
+          const rawMsgs = dateScopedBackfill
+            ? this.graph.filterMessagesByDay(
+                fbConv.messages?.data ?? [],
+                scanDate!,
+              )
+            : backfillMode
+              ? await this.graph.fetchAllMessagesFromInline(
+                  fbConv.messages?.data,
+                  fbConv.messages?.paging?.next,
+                  page.pageAccessToken,
+                  {
+                    shouldStop: () =>
+                      Boolean(
+                        options?.shouldStop?.() || this.backfillPauseRequested,
+                      ),
+                    maxPages: this.backfillMsgMaxPages,
+                  },
+                )
+              : monitorMode
+                ? (fbConv.messages?.data ?? [])
+                : await this.graph.fetchMessages(
+                    fbConv.id,
+                    page.pageAccessToken,
+                    full ? 0 : this.msgLimit,
+                  );
+          if (dateScopedBackfill && rawMsgs.length === 0) return 0;
+          const customerName = this.graph.resolveCustomerName(
+            fbConv.participants,
             page.pageId,
             rawMsgs,
-            page.tenantId,
+          );
+          let customerPictureUrl: string | null = null;
+          if (!lightweight && page.pageAccessToken) {
+            const profile = await this.graph.getMessengerUserProfile(
+              String(customer.id),
+              page.pageAccessToken,
+              { platform: graphPlatform },
+            );
+            customerPictureUrl = profile.pictureUrl;
+          }
+
+          const oldConv = backfillMode
+            ? null
+            : await this.prisma.cskhInboxConversation.findUnique({
+                where: {
+                  pageId_participantPsid: {
+                    pageId: page.pageId,
+                    participantPsid: String(customer.id),
+                  },
+                },
+                select: { id: true, unreadCount: true, lastMessageAt: true },
+              });
+
+          if (monitorMode && oldConv?.lastMessageAt && fbConv.updated_time) {
+            const graphAt = new Date(fbConv.updated_time).getTime();
+            const dbAt = oldConv.lastMessageAt.getTime();
+            // Graph không mới hơn DB → bỏ, tránh SSE hàng loạt tin cũ mỗi lần catch-up.
+            if (graphAt > 0 && graphAt <= dbAt + 2_000) return 0;
+          }
+
+          const customerPsid = String(customer.id);
+          const trailingUnread = computeTrailingCustomerUnread(
+            rawMsgs,
+            page.pageId,
             customerPsid,
           );
-          if (!backfillMode && (added > 0 || isNewConv)) {
-            const liveCutoff = new Date(Date.now() - 90_000);
-            const liveRows =
-              added > 0
-                ? await this.prisma.cskhInboxMessage.findMany({
-                    where: { conversationId: conv.id, sentAt: { gte: liveCutoff } },
-                    orderBy: { sentAt: 'asc' },
-                    take: 20,
-                  })
-                : [];
-            if (liveRows.length) {
-              const latest = liveRows[liveRows.length - 1];
-              const bumped = await this.prisma.cskhInboxConversation.update({
-                where: { id: conv.id },
-                data: {
-                  lastMessageAt: latest.sentAt,
-                  lastMessage: latest.text || conv.lastMessage,
-                },
-              });
-              this.realtime.publish({
-                type: 'message',
-                pageId: bumped.pageId,
-                conversationId: bumped.id,
-                messages: groupInboxMediaRows(liveRows).map((m) => this.formatMessageRow(m)),
-                conversation: this.formatConversationRow(bumped),
-                tenantId: bumped.tenantId || undefined,
-              });
-            } else if (isNewConv) {
-              this.realtime.publish({
-                type: 'conversation',
-                conversationId: conv.id,
-                pageId: conv.pageId,
-                conversation: this.formatConversationRow(conv),
-                tenantId: conv.tenantId || undefined,
-              });
-            }
+          const newestNorm = rawMsgs.length
+            ? this.graph.normalizeMessageForInbox(
+                rawMsgs[0],
+                page.pageId,
+                customerPsid,
+              )
+            : null;
+          const unreadCount =
+            newestNorm?.sender === 'Staff' ? 0 : trailingUnread;
+          const lastMessagePreview =
+            inboxListPreview({
+              text: newestNorm?.text ?? rawMsgs[0]?.message,
+              messageType: newestNorm?.messageType,
+              attachmentCount:
+                newestNorm?.attachmentUrls?.length ??
+                (newestNorm?.attachmentUrl ? 1 : 0),
+            }) ||
+            newestNorm?.text ||
+            rawMsgs[0]?.message?.trim() ||
+            null;
+
+          const conv = await this.prisma.cskhInboxConversation.upsert({
+            where: {
+              pageId_participantPsid: {
+                pageId: page.pageId,
+                participantPsid: String(customer.id),
+              },
+            },
+            create: {
+              pageId: page.pageId,
+              pageName: page.pageName,
+              fbConversationId: fbConv.id,
+              participantPsid: String(customer.id),
+              customerName,
+              customerPictureUrl,
+              unreadCount,
+              lastMessage: lastMessagePreview,
+              lastMessageAt: fbConv.updated_time
+                ? new Date(fbConv.updated_time)
+                : new Date(),
+              tenantId: page.tenantId,
+            },
+            update: {
+              pageName: page.pageName ?? undefined,
+              fbConversationId: fbConv.id,
+              customerName,
+              customerPictureUrl: customerPictureUrl ?? undefined,
+              unreadCount,
+              lastMessage: lastMessagePreview ?? undefined,
+              lastMessageAt:
+                fbConv.updated_time &&
+                (!oldConv?.lastMessageAt ||
+                  new Date(fbConv.updated_time).getTime() >
+                    oldConv.lastMessageAt.getTime() + 1_000)
+                  ? new Date(fbConv.updated_time)
+                  : undefined,
+              tenantId: page.tenantId ?? undefined,
+            },
+          });
+
+          if (!backfillMode && fbConv.unread_count === 0) {
+            const messageWhere: any = {
+              conversationId: conv.id,
+              direction: 'inbound',
+              status: { notIn: ['read', 'failed'] },
+            };
+            if (page.tenantId) messageWhere.tenantId = page.tenantId;
+            await this.prisma.cskhInboxMessage.updateMany({
+              where: messageWhere,
+              data: { status: 'read' },
+            });
           }
-          return added;
-        }
 
-        await this.reconcileMessageSenders(conv.id, page.pageId, customerPsid, rawMsgs);
+          const isNewConv = !oldConv;
 
-        const ordered = [...rawMsgs].reverse();
-        let lastPreview: string | null = null;
-        let count = 0;
-        for (const msg of ordered) {
-          const saved = await this.persistGraphMessage(
+          if (lightweight) {
+            const added = await this.fastPersistMessages(
+              conv.id,
+              page.pageId,
+              rawMsgs,
+              page.tenantId,
+              customerPsid,
+            );
+            if (!backfillMode && (added > 0 || isNewConv)) {
+              const liveCutoff = new Date(Date.now() - 90_000);
+              const liveRows =
+                added > 0
+                  ? await this.prisma.cskhInboxMessage.findMany({
+                      where: {
+                        conversationId: conv.id,
+                        sentAt: { gte: liveCutoff },
+                      },
+                      orderBy: { sentAt: 'asc' },
+                      take: 20,
+                    })
+                  : [];
+              if (liveRows.length) {
+                const latest = liveRows[liveRows.length - 1];
+                const bumped = await this.prisma.cskhInboxConversation.update({
+                  where: { id: conv.id },
+                  data: {
+                    lastMessageAt: latest.sentAt,
+                    lastMessage: latest.text || conv.lastMessage,
+                  },
+                });
+                this.realtime.publish({
+                  type: 'message',
+                  pageId: bumped.pageId,
+                  conversationId: bumped.id,
+                  messages: groupInboxMediaRows(liveRows).map((m) =>
+                    this.formatMessageRow(m),
+                  ),
+                  conversation: this.formatConversationRow(bumped),
+                  tenantId: bumped.tenantId || undefined,
+                });
+              } else if (isNewConv) {
+                this.realtime.publish({
+                  type: 'conversation',
+                  conversationId: conv.id,
+                  pageId: conv.pageId,
+                  conversation: this.formatConversationRow(conv),
+                  tenantId: conv.tenantId || undefined,
+                });
+              }
+            }
+            return added;
+          }
+
+          await this.reconcileMessageSenders(
             conv.id,
             page.pageId,
-            msg,
-            page.pageAccessToken,
-            page.tenantId || undefined,
             customerPsid,
+            rawMsgs,
           );
-          if (saved) {
-            lastPreview = saved.text;
-            count++;
+
+          const ordered = [...rawMsgs].reverse();
+          let lastPreview: string | null = null;
+          let count = 0;
+          for (const msg of ordered) {
+            const saved = await this.persistGraphMessage(
+              conv.id,
+              page.pageId,
+              msg,
+              page.pageAccessToken,
+              page.tenantId || undefined,
+              customerPsid,
+            );
+            if (saved) {
+              lastPreview = saved.text;
+              count++;
+            }
           }
+          if (lastPreview) {
+            await this.prisma.cskhInboxConversation.update({
+              where: { id: conv.id },
+              data: { lastMessage: lastPreview },
+            });
+          }
+          await this.markAdFromGraphMessages(conv.id, rawMsgs);
+          return count;
+        } catch (e) {
+          this.logger.warn(
+            `[syncFromGraph${full ? ':full' : ''}] bỏ qua hội thoại ${fbConv.id} (page ${page.pageName || page.pageId}): ${(e as Error).message}`,
+          );
+          return 0;
         }
-        if (lastPreview) {
-          await this.prisma.cskhInboxConversation.update({
-            where: { id: conv.id },
-            data: { lastMessage: lastPreview },
-          });
-        }
-        await this.markAdFromGraphMessages(conv.id, rawMsgs);
-        return count;
-      } catch (e) {
-        this.logger.warn(
-          `[syncFromGraph${full ? ':full' : ''}] bỏ qua hội thoại ${fbConv.id} (page ${page.pageName || page.pageId}): ${(e as Error).message}`,
-        );
-        return 0;
-      }
       };
 
       try {
@@ -5560,13 +6472,19 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           : await run();
         if (backfillMode) {
           this.backfillState.pageConvsDone++;
-          await this.persistBackfillJob('running', this.backfillCompletedPageIds);
+          await this.persistBackfillJob(
+            'running',
+            this.backfillCompletedPageIds,
+          );
         }
         return result;
       } catch (e) {
         if (backfillMode) {
           this.backfillState.pageConvsDone++;
-          await this.persistBackfillJob('running', this.backfillCompletedPageIds);
+          await this.persistBackfillJob(
+            'running',
+            this.backfillCompletedPageIds,
+          );
         }
         this.logger.warn(
           `[syncFromGraph${full ? ':full' : ''}] bỏ qua hội thoại ${fbConv.id} (page ${page.pageName || page.pageId}): ${(e as Error).message}`,
@@ -5575,15 +6493,25 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       }
     };
 
-    const runConvBatch = async (batch: FbConversation[]): Promise<'stop' | 'continue'> => {
+    const runConvBatch = async (
+      batch: FbConversation[],
+    ): Promise<'stop' | 'continue'> => {
       if (options?.shouldStop?.()) return 'stop';
       if (backfillMode && (await this.isBackfillCancelledNow())) return 'stop';
-      if (backfillMode && (await this.isBackfillPauseRequestedNow())) return 'stop';
-      if (!backfillMode && !monitorMode && (await this.redisQueue.shouldDeferInboxSync())) return 'stop';
+      if (backfillMode && (await this.isBackfillPauseRequestedNow()))
+        return 'stop';
+      if (
+        !backfillMode &&
+        !monitorMode &&
+        (await this.redisQueue.shouldDeferInboxSync())
+      )
+        return 'stop';
       for (const fbConv of batch) {
         if (options?.shouldStop?.()) return 'stop';
-        if (backfillMode && (await this.isBackfillCancelledNow())) return 'stop';
-        if (backfillMode && (await this.isBackfillPauseRequestedNow())) return 'stop';
+        if (backfillMode && (await this.isBackfillCancelledNow()))
+          return 'stop';
+        if (backfillMode && (await this.isBackfillPauseRequestedNow()))
+          return 'stop';
         synced += await processConv(fbConv);
       }
       return 'continue';
@@ -5591,21 +6519,24 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
     if (backfillMode && full && dateScopedBackfill && scanDate) {
       const convs = await this.graph.fetchConversationsForAuditByDate(
-        page.pageId,
+        graphOwnerId,
         page.pageAccessToken,
         scanDate,
         scanDate,
         this.msgLimit,
         async (_scanned, matched) => {
           this.backfillState.pageConvsDone = matched;
-          await this.persistBackfillJob('running', this.backfillCompletedPageIds);
+          await this.persistBackfillJob(
+            'running',
+            this.backfillCompletedPageIds,
+          );
         },
         6,
         () =>
           Boolean(
             options?.shouldStop?.() ||
-              this.backfillPauseRequested ||
-              this.backfillCancelRequested,
+            this.backfillPauseRequested ||
+            this.backfillCancelRequested,
           ),
         undefined,
         0,
@@ -5633,11 +6564,12 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
     if (backfillMode && full) {
       const total = await this.graph.streamConversationsForBackfill(
-        page.pageId,
+        graphOwnerId,
         page.pageAccessToken,
         this.msgLimit,
         {
-          shouldStop: () => Boolean(options?.shouldStop?.() || this.backfillPauseRequested),
+          shouldStop: () =>
+            Boolean(options?.shouldStop?.() || this.backfillPauseRequested),
           onBatch: async (batch) => {
             const r = await runConvBatch(batch);
             return r === 'stop' ? 'stop' : 'continue';
@@ -5653,7 +6585,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
     const convs = full
       ? await this.graph.fetchAllConversationsForAudit(
-          page.pageId,
+          graphOwnerId,
           page.pageAccessToken,
           0,
           this.msgLimit,
@@ -5662,7 +6594,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           graphPlatform,
         )
       : await this.graph.fetchConversationsForMonitor(
-          page.pageId,
+          graphOwnerId,
           page.pageAccessToken,
           liveHead ? this.catchUpConvLimit : this.syncLimit,
           graphPlatform,
@@ -5676,7 +6608,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     for (const fbConv of convs) {
       if (options?.shouldStop?.()) break;
       if (backfillMode && (await this.isBackfillPauseRequestedNow())) break;
-      if (!backfillMode && !monitorMode && (await this.redisQueue.shouldDeferInboxSync())) {
+      if (
+        !backfillMode &&
+        !monitorMode &&
+        (await this.redisQueue.shouldDeferInboxSync())
+      ) {
         this.logger.log(
           `[syncFromGraph] Dừng quét page ${page.pageName || page.pageId} — nhường inbox realtime`,
         );
@@ -5700,9 +6636,14 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     customerName: string,
     tenantId?: string,
   ) {
-    const participantPsid = this.graph.resolveParticipantPsid(conv.participants, pageId);
+    const participantPsid = this.graph.resolveParticipantPsid(
+      conv.participants,
+      pageId,
+    );
     if (!participantPsid) {
-      this.logger.warn(`[AutoLinkAndSync] Cannot resolve participantPsid for convId=${conv.id}`);
+      this.logger.warn(
+        `[AutoLinkAndSync] Cannot resolve participantPsid for convId=${conv.id}`,
+      );
       return;
     }
 
@@ -5712,9 +6653,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const pageName = page?.pageName ?? null;
     const graphPlatform = cskhInboxGraphPlatform(page?.metadata);
     const profile = pageAccessToken
-      ? await this.graph.getMessengerUserProfile(participantPsid, pageAccessToken, {
-          platform: graphPlatform,
-        })
+      ? await this.graph.getMessengerUserProfile(
+          participantPsid,
+          pageAccessToken,
+          {
+            platform: graphPlatform,
+          },
+        )
       : { name: null, pictureUrl: null };
     const customerPictureUrl = profile.pictureUrl;
     const finalCustomerName = profile.name ?? customerName;
@@ -5729,7 +6674,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         customerName: finalCustomerName,
         customerPictureUrl,
         lastMessage: messages[messages.length - 1]?.message ?? null,
-        lastMessageAt: conv.updated_time ? new Date(conv.updated_time) : new Date(),
+        lastMessageAt: conv.updated_time
+          ? new Date(conv.updated_time)
+          : new Date(),
         tenantId,
       },
       update: {
@@ -5811,7 +6758,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
 
         // Cache in memory cho endpoint GET intent
         const cacheKey = `${inboxConv.id}:${auditId}`;
-        this.intentCache.set(cacheKey, { signature, at: Date.now(), data: payload });
+        this.intentCache.set(cacheKey, {
+          signature,
+          at: Date.now(),
+          data: payload,
+        });
 
         // Cập nhật metadata của bản ghi ChatAudit
         const audit = await this.prisma.chatAudit.findUnique({
@@ -5819,7 +6770,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           select: { metadata: true },
         });
         if (audit) {
-          const currentMeta = (audit.metadata as Record<string, any> | null) ?? {};
+          const currentMeta =
+            (audit.metadata as Record<string, any> | null) ?? {};
           currentMeta.customerIntent = payload;
           await this.prisma.chatAudit.update({
             where: { id: auditId },
@@ -5827,7 +6779,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           });
         }
       } catch (err) {
-        this.logger.warn(`[AutoLinkAndSync] Failed to analyze customer intent: ${(err as Error).message}`);
+        this.logger.warn(
+          `[AutoLinkAndSync] Failed to analyze customer intent: ${(err as Error).message}`,
+        );
       }
     }
   }
@@ -5844,7 +6798,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const audit = await this.prisma.chatAudit.findFirst({
       where: tenantId ? { id: auditId, tenantId } : { id: auditId },
     });
-    if (!audit) throw new NotFoundException('Audit không tồn tại hoặc không có quyền');
+    if (!audit)
+      throw new NotFoundException('Audit không tồn tại hoặc không có quyền');
 
     const meta = (audit.metadata as AuditMeta | null) ?? {};
     const pageId = meta.pageId?.trim();
@@ -5860,14 +6815,21 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     let participantPsid = meta.participantPsid?.trim() || null;
     let fbConversationId = meta.conversationId?.trim() || null;
     let updatedTime: string | undefined;
-    let participants = null as { data?: Array<{ id?: string; name?: string }> } | null | undefined;
+    let participants = null as
+      | { data?: Array<{ id?: string; name?: string }> }
+      | null
+      | undefined;
 
     if (fbConversationId) {
-      const fbConv = await this.graph.fetchConversationById(fbConversationId, page.pageAccessToken);
+      const fbConv = await this.graph.fetchConversationById(
+        fbConversationId,
+        page.pageAccessToken,
+      );
       if (fbConv) {
         participants = fbConv.participants;
         participantPsid =
-          participantPsid || this.graph.resolveParticipantPsid(fbConv.participants, pageId);
+          participantPsid ||
+          this.graph.resolveParticipantPsid(fbConv.participants, pageId);
         updatedTime = fbConv.updated_time;
       }
     }
@@ -5887,18 +6849,30 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     if (existing) return existing;
 
     const rawMsgs = fbConversationId
-      ? await this.graph.fetchMessages(fbConversationId, page.pageAccessToken, this.msgLimit)
+      ? await this.graph.fetchMessages(
+          fbConversationId,
+          page.pageAccessToken,
+          this.msgLimit,
+        )
       : [];
 
     let customerName = audit.customerName;
     if (participants) {
-      customerName = this.graph.resolveCustomerName(participants, pageId, rawMsgs);
+      customerName = this.graph.resolveCustomerName(
+        participants,
+        pageId,
+        rawMsgs,
+      );
     }
 
     let customerPictureUrl: string | null = null;
-    const profile = await this.graph.getMessengerUserProfile(participantPsid, page.pageAccessToken, {
-      platform: cskhInboxGraphPlatform(page.metadata),
-    });
+    const profile = await this.graph.getMessengerUserProfile(
+      participantPsid,
+      page.pageAccessToken,
+      {
+        platform: cskhInboxGraphPlatform(page.metadata),
+      },
+    );
     customerName = profile.name ?? customerName;
     customerPictureUrl = profile.pictureUrl;
 
@@ -5951,9 +6925,19 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     return conv;
   }
 
-  async getLatestAuditForConversation(conversationId: string, tenantId?: string) {
-    const conv = await findInboxConversationById(this.prisma, conversationId, tenantId);
-    if (!conv) throw new NotFoundException('Hội thoại không tồn tại hoặc không có quyền');
+  async getLatestAuditForConversation(
+    conversationId: string,
+    tenantId?: string,
+  ) {
+    const conv = await findInboxConversationById(
+      this.prisma,
+      conversationId,
+      tenantId,
+    );
+    if (!conv)
+      throw new NotFoundException(
+        'Hội thoại không tồn tại hoặc không có quyền',
+      );
 
     type Row = {
       id: string;
@@ -5976,7 +6960,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     `;
     if (conv.fbConversationId) {
       const byFb = rows.find(
-        (r) => (r.metadata as { conversationId?: string } | null)?.conversationId === conv.fbConversationId,
+        (r) =>
+          (r.metadata as { conversationId?: string } | null)?.conversationId ===
+          conv.fbConversationId,
       );
       if (byFb) return byFb;
     }

@@ -256,6 +256,25 @@ export class CskhController {
     return this.cskh.refreshPagesFromOAuth(user.tenantId || undefined);
   }
 
+  /** Sửa kênh IG thiếu Fanpage ID (demo dev / sau migrate metadata). */
+  @Post('oauth/repair-instagram')
+  @UseGuards(JwtAuthGuard)
+  repairInstagram(@CurrentUser() user: User) {
+    return this.cskh.repairInstagramFacebookPageIds(user.tenantId || undefined);
+  }
+
+  @Get('instagram/test-readiness')
+  @UseGuards(JwtAuthGuard)
+  instagramTestReadiness(@CurrentUser() user: User) {
+    return this.cskh.getInstagramTestReadiness(user.tenantId || undefined);
+  }
+
+  @Post('instagram/prepare-test')
+  @UseGuards(JwtAuthGuard)
+  prepareInstagramTest(@CurrentUser() user: User) {
+    return this.cskh.prepareInstagramTest(user.tenantId || undefined);
+  }
+
   /** Sapo Partner OAuth — redirect browser (cài Client lên shop). */
   @Get('sapo/oauth/start')
   sapoOAuthStart(@Res() res: Response) {

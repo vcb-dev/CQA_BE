@@ -70,9 +70,10 @@ jobs:
             ')"
             echo "DIRECT_URL không có secret — dùng bản derive từ DATABASE_URL"
           fi
-          # DB đã có bảng → chỉ đánh dấu migration cũ, không chạy lại SQL
-          node scripts/ensure-migration-baseline.js
-          npx prisma migrate deploy
+          # pg 8.16+ treats sslmode=require as verify-full → SELF_SIGNED_CERT_IN_CHAIN
+          # on Supabase. with-pg-ssl.js adds uselibpqcompat=true for Prisma CLI + pg.
+          node scripts/with-pg-ssl.js node scripts/ensure-migration-baseline.js
+          node scripts/with-pg-ssl.js prisma migrate deploy
 
   build-and-push:
     name: Build & Push Docker Hub

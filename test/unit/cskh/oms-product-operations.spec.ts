@@ -73,7 +73,11 @@ function revenueRow(
 
 function revenueResponse(): OmsRevenueByProductResponse {
   return {
-    report: { id: 'sales-revenue-by-product', name: 'Doanh thu theo SP', columns: [] },
+    report: {
+      id: 'sales-revenue-by-product',
+      name: 'Doanh thu theo SP',
+      columns: [],
+    },
     data: [
       revenueRow('SP 1', 'SKU1', 20, 10, 600_000),
       revenueRow('SP 2', 'SKU2', 5, 3, 150_000),
@@ -103,7 +107,10 @@ function fakeApi(
   return { api: { get } as unknown as OmsApiService, calls };
 }
 
-function paramsFor(calls: RecordedCall[], path: string): Record<string, unknown> {
+function paramsFor(
+  calls: RecordedCall[],
+  path: string,
+): Record<string, unknown> {
   const call = calls.find((c) => c.path === path);
   if (!call) throw new Error(`OMS API chưa được gọi với path ${path}`);
   return call.params;
@@ -196,10 +203,25 @@ describe('OmsProductOperationsService.getDashboard — doanh thu theo sản ph�
     const res = await svc.getDashboard({ month: '2026-09' });
 
     expect(res.topRevenueProducts).toEqual([
-      { name: 'SP 1', sku: 'SKU1', quantity: 20, orderCount: 10, revenue: 600_000 },
-      { name: 'SP 2', sku: 'SKU2', quantity: 5, orderCount: 3, revenue: 150_000 },
+      {
+        name: 'SP 1',
+        sku: 'SKU1',
+        quantity: 20,
+        orderCount: 10,
+        revenue: 600_000,
+      },
+      {
+        name: 'SP 2',
+        sku: 'SKU2',
+        quantity: 5,
+        orderCount: 3,
+        revenue: 150_000,
+      },
     ]);
-    expect(res.revenueSummary).toEqual({ totalRevenue: 750_000, totalProducts: 2 });
+    expect(res.revenueSummary).toEqual({
+      totalRevenue: 750_000,
+      totalProducts: 2,
+    });
   });
 
   it('thiếu summary/total thì tự cộng dồn từ danh sách item', async () => {
@@ -211,7 +233,10 @@ describe('OmsProductOperationsService.getDashboard — doanh thu theo sản ph�
 
     const res = await svc.getDashboard({ month: '2026-09' });
 
-    expect(res.revenueSummary).toEqual({ totalRevenue: 750_000, totalProducts: 2 });
+    expect(res.revenueSummary).toEqual({
+      totalRevenue: 750_000,
+      totalProducts: 2,
+    });
   });
 
   it('OMS lỗi report doanh thu -> dashboard chính vẫn trả, phần doanh thu rỗng', async () => {

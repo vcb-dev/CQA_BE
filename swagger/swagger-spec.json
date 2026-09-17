@@ -17,9 +17,8 @@
             }
           }
         },
-        "summary": "Endpoint gốc — kiểm tra service đang chạy",
         "tags": [
-          "app"
+          "App"
         ]
       }
     },
@@ -32,9 +31,8 @@
             "description": ""
           }
         },
-        "summary": "Healthcheck cho load balancer / Railway (không cần auth)",
         "tags": [
-          "app"
+          "App"
         ]
       }
     },
@@ -81,7 +79,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Đăng ký tài khoản mới bằng email + mật khẩu",
         "tags": [
           "auth"
         ]
@@ -111,7 +108,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Đăng nhập bằng tài khoản + mật khẩu",
         "tags": [
           "auth"
         ]
@@ -119,7 +115,6 @@
     },
     "/api/v1/auth/refresh": {
       "post": {
-        "description": "Dùng refresh token từ cookie để cấp lại access/refresh token mới.",
         "operationId": "AuthController_refreshToken",
         "parameters": [],
         "responses": {
@@ -132,7 +127,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Làm mới access token",
         "tags": [
           "auth"
         ]
@@ -155,7 +149,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Lấy thông tin người dùng đang đăng nhập",
         "tags": [
           "auth"
         ]
@@ -175,7 +168,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Đăng xuất — xoá cookie accessToken/refreshToken",
         "tags": [
           "auth"
         ]
@@ -183,7 +175,6 @@
     },
     "/api/v1/auth/google": {
       "get": {
-        "description": "Không dùng qua Swagger \"Try it out\" — mở trực tiếp trên trình duyệt để redirect sang Google.",
         "operationId": "AuthController_googleAuth",
         "parameters": [],
         "responses": {
@@ -203,7 +194,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Bắt đầu đăng nhập Google OAuth (redirect browser)",
         "tags": [
           "auth"
         ]
@@ -211,7 +201,6 @@
     },
     "/api/v1/auth/google/callback": {
       "get": {
-        "description": "Google gọi endpoint này sau khi người dùng đồng ý đăng nhập; kết quả redirect về FRONTEND_URL.",
         "operationId": "AuthController_googleAuthCallback",
         "parameters": [
           {
@@ -241,7 +230,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Callback nhận code từ Google OAuth (redirect browser)",
         "tags": [
           "auth"
         ]
@@ -261,7 +249,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Danh sách người dùng (chỉ admin/manager)",
         "tags": [
           "users"
         ]
@@ -275,7 +262,6 @@
             "name": "id",
             "required": true,
             "in": "path",
-            "description": "ID người dùng",
             "schema": {
               "type": "string"
             }
@@ -291,7 +277,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Chi tiết một người dùng theo id (chỉ admin)",
         "tags": [
           "users"
         ]
@@ -303,7 +288,6 @@
             "name": "id",
             "required": true,
             "in": "path",
-            "description": "ID người dùng",
             "schema": {
               "type": "string"
             }
@@ -329,7 +313,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Cập nhật thông tin người dùng (chỉ admin)",
         "tags": [
           "users"
         ]
@@ -341,7 +324,6 @@
             "name": "id",
             "required": true,
             "in": "path",
-            "description": "ID người dùng",
             "schema": {
               "type": "string"
             }
@@ -357,7 +339,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Xoá người dùng (chỉ admin)",
         "tags": [
           "users"
         ]
@@ -365,7 +346,6 @@
     },
     "/api/v1/cskh/oauth/start": {
       "get": {
-        "description": "Không dùng qua Swagger \"Try it out\" — mở trực tiếp trên trình duyệt để redirect sang Facebook.",
         "operationId": "CskhController_oauthStart",
         "parameters": [
           {
@@ -395,7 +375,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Bắt đầu OAuth Facebook để kết nối Page (redirect browser)",
         "tags": [
           "cskh"
         ]
@@ -403,7 +382,6 @@
     },
     "/api/v1/cskh/oauth/callback": {
       "get": {
-        "description": "Facebook gọi endpoint này sau khi cấp quyền; kết quả redirect về returnUrl kèm trạng thái kết nối.",
         "operationId": "CskhController_oauthCallback",
         "parameters": [
           {
@@ -449,7 +427,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Callback nhận code OAuth Facebook (redirect browser)",
         "tags": [
           "cskh"
         ]
@@ -501,7 +478,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Danh sách Page Facebook đã kết nối (kèm thống kê theo tháng/ngày)",
         "tags": [
           "cskh"
         ]
@@ -540,7 +516,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Kiểm tra nhanh các tính năng BE đã deploy (feature flags)",
         "tags": [
           "cskh"
         ]
@@ -569,7 +544,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Đồng bộ chi phí quảng cáo (ad spend) cho tất cả Page theo ngày",
         "tags": [
           "cskh"
         ]
@@ -589,7 +563,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Thêm/cập nhật Page thủ công (nhập tay pageId + access token)",
         "tags": [
           "cskh"
         ]
@@ -609,7 +582,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Bật/tắt hàng loạt nhiều Page cùng lúc",
         "tags": [
           "cskh"
         ]
@@ -623,7 +595,6 @@
             "name": "pageId",
             "required": true,
             "in": "path",
-            "description": "ID Page Facebook",
             "schema": {
               "type": "string"
             }
@@ -639,7 +610,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Bật/tắt một Page theo id",
         "tags": [
           "cskh"
         ]
@@ -653,7 +623,6 @@
             "name": "pageId",
             "required": true,
             "in": "path",
-            "description": "ID Page Facebook",
             "schema": {
               "type": "string"
             }
@@ -669,7 +638,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Xoá một Page đã kết nối",
         "tags": [
           "cskh"
         ]
@@ -689,7 +657,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Làm mới danh sách Page từ OAuth Facebook",
         "tags": [
           "cskh"
         ]
@@ -754,7 +721,6 @@
     },
     "/api/v1/cskh/sapo/oauth/start": {
       "get": {
-        "description": "Không dùng qua Swagger \"Try it out\" — mở trực tiếp trên trình duyệt để redirect sang Sapo.",
         "operationId": "CskhController_sapoOAuthStart",
         "parameters": [],
         "responses": {
@@ -767,7 +733,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Bắt đầu Sapo Partner OAuth để cài Client lên shop (redirect browser)",
         "tags": [
           "cskh"
         ]
@@ -775,7 +740,6 @@
     },
     "/api/v1/cskh/sapo/oauth/callback": {
       "get": {
-        "description": "Sapo gọi endpoint này sau khi shop cấp quyền; kết quả trả về access token dạng HTML để copy vào env.",
         "operationId": "CskhController_sapoOAuthCallback",
         "parameters": [
           {
@@ -813,7 +777,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Callback nhận code Sapo OAuth (redirect browser, trả HTML)",
         "tags": [
           "cskh"
         ]
@@ -833,7 +796,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Trạng thái kết nối Sapo (API, sync, catalog...)",
         "tags": [
           "cskh"
         ]
@@ -841,7 +803,6 @@
     },
     "/api/v1/cskh/sapo/sync": {
       "post": {
-        "description": "Chọn resource cần đồng bộ: all | products | customers | orders | collections.",
         "operationId": "CskhController_sapoSync",
         "parameters": [
           {
@@ -870,7 +831,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Đồng bộ dữ liệu Sapo → DB CRM",
         "tags": [
           "cskh"
         ]
@@ -897,7 +857,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Đồng bộ sản phẩm từ Sapo → DB",
         "tags": [
           "cskh"
         ]
@@ -924,7 +883,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Đồng bộ khách hàng từ Sapo → DB",
         "tags": [
           "cskh"
         ]
@@ -951,7 +909,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Đồng bộ đơn hàng từ Sapo → DB",
         "tags": [
           "cskh"
         ]
@@ -978,7 +935,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Đồng bộ danh mục (collections) từ Sapo → DB",
         "tags": [
           "cskh"
         ]
@@ -998,7 +954,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Thống kê tổng quan dữ liệu Sapo đã đồng bộ",
         "tags": [
           "cskh"
         ]
@@ -1043,7 +998,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Danh sách khách hàng Sapo (bảng flatten, có tìm kiếm + phân trang)",
         "tags": [
           "cskh"
         ]
@@ -1112,7 +1066,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Danh sách đơn hàng Sapo (bảng flatten, lọc trạng thái + phân trang)",
         "tags": [
           "cskh"
         ]
@@ -1132,7 +1085,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Danh mục sản phẩm Sapo (đã chuẩn hoá cho FE)",
         "tags": [
           "cskh"
         ]
@@ -1152,7 +1104,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Đồng bộ catalog sản phẩm Sapo → DB",
         "tags": [
           "cskh"
         ]
@@ -1205,7 +1156,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Dashboard phân tích sản phẩm (từ DB catalog + đơn inbox)",
         "tags": [
           "cskh"
         ]
@@ -1217,22 +1167,6 @@
         "parameters": [
           {
             "name": "month",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "week",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "day",
             "required": false,
             "in": "query",
             "schema": {
@@ -1297,7 +1231,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Báo cáo Sản phẩm — Vận hành theo tháng/tuần/ngày (proxy trực tiếp từ OMS)",
         "tags": [
           "cskh"
         ]
@@ -1327,7 +1260,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Danh mục sản phẩm OMS (dùng cho dropdown filter)",
         "tags": [
           "cskh"
         ]
@@ -1347,69 +1279,6 @@
                   "items": {
                     "type": "object"
                   }
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "JWT-auth": []
-          }
-        ],
-        "summary": "Danh sách kho hàng OMS (dùng cho dropdown filter)",
-        "tags": [
-          "cskh"
-        ]
-      }
-    },
-    "/api/v1/cskh/oms/catalog": {
-      "get": {
-        "operationId": "CskhController_getOmsCatalog",
-        "parameters": [
-          {
-            "name": "q",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "page",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "JWT-auth": []
-          }
-        ],
-        "tags": [
-          "cskh"
-        ]
-      }
-    },
-    "/api/v1/cskh/oms/orders": {
-      "post": {
-        "operationId": "CskhController_createOmsOrder",
-        "parameters": [],
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
                 }
               }
             }
@@ -1585,7 +1454,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Danh sách khách đã chốt đơn qua inbox (lọc theo kênh/trạng thái)",
         "tags": [
           "cskh"
         ]
@@ -1605,7 +1473,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Import sản phẩm từ Sapo API vào DB (products / product_variants)",
         "tags": [
           "cskh"
         ]
@@ -1632,7 +1499,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Tạo đơn hàng Sapo từ thông tin chốt đơn trên inbox",
         "tags": [
           "cskh"
         ]
@@ -1659,7 +1525,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Kết quả giám sát (monitor) hội thoại gần nhất",
         "tags": [
           "cskh"
         ]
@@ -1679,7 +1544,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Chạy job giám sát (monitor) hội thoại nền",
         "tags": [
           "cskh"
         ]
@@ -1687,7 +1551,6 @@
     },
     "/api/v1/cskh/audit/run": {
       "post": {
-        "description": "Chạy nền qua Redis queue (fallback chạy inline nếu queue không khả dụng); có thể quét 1 kênh hoặc scanAllChannels.",
         "operationId": "CskhController_runAudit",
         "parameters": [],
         "responses": {
@@ -1707,7 +1570,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Chạy job chấm điểm chất lượng hội thoại (audit) theo khoảng ngày",
         "tags": [
           "cskh"
         ]
@@ -1734,7 +1596,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Tạm dừng job audit đang chạy",
         "tags": [
           "cskh"
         ]
@@ -1754,7 +1615,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Huỷ (các) job audit đang chạy",
         "tags": [
           "cskh"
         ]
@@ -1781,7 +1641,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Thống kê token AI đã dùng cho audit",
         "tags": [
           "cskh"
         ]
@@ -1795,7 +1654,6 @@
             "name": "jobId",
             "required": true,
             "in": "path",
-            "description": "ID job audit",
             "schema": {
               "type": "string"
             }
@@ -1811,7 +1669,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Tiến độ job audit theo jobId",
         "tags": [
           "cskh"
         ]
@@ -1825,7 +1682,6 @@
             "name": "type",
             "required": true,
             "in": "path",
-            "description": "Loại job: monitor hoặc audit",
             "schema": {
               "type": "string"
             }
@@ -1841,7 +1697,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Job đang chạy theo loại (monitor | audit)",
         "tags": [
           "cskh"
         ]
@@ -1855,7 +1710,6 @@
             "name": "id",
             "required": true,
             "in": "path",
-            "description": "ID job",
             "schema": {
               "type": "string"
             }
@@ -1871,7 +1725,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Chi tiết một job theo id",
         "tags": [
           "cskh"
         ]
@@ -1950,7 +1803,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Danh sách kết quả audit (lọc theo page/ngày/job)",
         "tags": [
           "cskh"
         ]
@@ -2002,7 +1854,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Dashboard insight chất lượng CSKH theo khoảng ngày",
         "tags": [
           "cskh"
         ]
@@ -2055,7 +1906,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Thống kê audit theo ngày",
         "tags": [
           "cskh"
         ]
@@ -2092,7 +1942,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "So sánh điểm audit giữa các lần chấm trong ngày",
         "tags": [
           "cskh"
         ]
@@ -2121,7 +1970,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Lịch sử điểm số của một audit",
         "tags": [
           "cskh"
         ]
@@ -2141,7 +1989,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Số dư tài khoản DeepSeek AI",
         "tags": [
           "cskh"
         ]
@@ -2193,13 +2040,11 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Xác thực webhook Meta (verify token) — không cần JWT",
         "tags": [
           "cskh"
         ]
       },
       "post": {
-        "description": "Meta gọi endpoint này; payload được xác thực bằng chữ ký x-hub-signature-256.",
         "operationId": "CskhController_handleWebhook",
         "parameters": [
           {
@@ -2221,7 +2066,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Nhận sự kiện webhook Meta (tin nhắn mới...) — không cần JWT",
         "tags": [
           "cskh"
         ]
@@ -2266,7 +2110,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Thống kê số lượng hội thoại inbox",
         "tags": [
           "cskh"
         ]
@@ -2399,7 +2242,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Danh sách hội thoại inbox (lọc theo kênh/nhãn/trạng thái, phân trang cursor)",
         "tags": [
           "cskh"
         ]
@@ -2419,7 +2261,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Gắn lại tag Ads từ tin nhắn đã lưu (chạy ngay, không chờ cooldown)",
         "tags": [
           "cskh"
         ]
@@ -2449,7 +2290,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Danh sách nhãn (label) hội thoại inbox",
         "tags": [
           "cskh"
         ]
@@ -2463,7 +2303,6 @@
             "name": "id",
             "required": true,
             "in": "path",
-            "description": "ID hội thoại",
             "schema": {
               "type": "string"
             }
@@ -2479,7 +2318,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Lịch sử xem hội thoại",
         "tags": [
           "cskh"
         ]
@@ -2493,7 +2331,6 @@
             "name": "id",
             "required": true,
             "in": "path",
-            "description": "ID hội thoại",
             "schema": {
               "type": "string"
             }
@@ -2502,7 +2339,6 @@
             "name": "labelId",
             "required": true,
             "in": "path",
-            "description": "ID nhãn",
             "schema": {
               "type": "string"
             }
@@ -2528,7 +2364,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Gắn/gỡ một nhãn cho hội thoại",
         "tags": [
           "cskh"
         ]
@@ -2536,7 +2371,6 @@
     },
     "/api/v1/cskh/inbox/stream": {
       "get": {
-        "description": "Server-Sent Events; FE không cần bấm đồng bộ, kèm heartbeat ping mỗi 25s.",
         "operationId": "CskhController_inboxStream",
         "parameters": [],
         "responses": {
@@ -2556,7 +2390,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "SSE realtime — đẩy tin nhắn/hội thoại mới về FE",
         "tags": [
           "cskh"
         ]
@@ -2570,7 +2403,6 @@
             "name": "id",
             "required": true,
             "in": "path",
-            "description": "ID hội thoại",
             "schema": {
               "type": "string"
             }
@@ -2618,7 +2450,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Danh sách tin nhắn của một hội thoại",
         "tags": [
           "cskh"
         ]
@@ -2632,7 +2463,6 @@
             "name": "messageId",
             "required": true,
             "in": "path",
-            "description": "ID tin nhắn",
             "schema": {
               "type": "string"
             }
@@ -2648,7 +2478,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Lấy lại URL media (ảnh/video) của tin nhắn",
         "tags": [
           "cskh"
         ]
@@ -2662,7 +2491,6 @@
             "name": "id",
             "required": true,
             "in": "path",
-            "description": "ID hội thoại",
             "schema": {
               "type": "string"
             }
@@ -2693,7 +2521,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Ý định khách hàng (AI phân tích) trong hội thoại",
         "tags": [
           "cskh"
         ]
@@ -2707,7 +2534,6 @@
             "name": "id",
             "required": true,
             "in": "path",
-            "description": "ID hội thoại",
             "schema": {
               "type": "string"
             }
@@ -2738,7 +2564,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Thông tin quảng cáo dẫn đến hội thoại (ad insight)",
         "tags": [
           "cskh"
         ]
@@ -2752,7 +2577,6 @@
             "name": "id",
             "required": true,
             "in": "path",
-            "description": "ID hội thoại",
             "schema": {
               "type": "string"
             }
@@ -2775,7 +2599,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Gửi tin nhắn trong một hội thoại",
         "tags": [
           "cskh"
         ]
@@ -2789,7 +2612,6 @@
             "name": "id",
             "required": true,
             "in": "path",
-            "description": "ID hội thoại",
             "schema": {
               "type": "string"
             }
@@ -2805,7 +2627,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Xem trước bản dịch tin nhắn trước khi gửi",
         "tags": [
           "cskh"
         ]
@@ -2847,7 +2668,6 @@
             "name": "id",
             "required": true,
             "in": "path",
-            "description": "ID hội thoại",
             "schema": {
               "type": "string"
             }
@@ -2863,7 +2683,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Nhận diện ngôn ngữ khách hàng đang dùng",
         "tags": [
           "cskh"
         ]
@@ -2877,7 +2696,6 @@
             "name": "id",
             "required": true,
             "in": "path",
-            "description": "ID hội thoại",
             "schema": {
               "type": "string"
             }
@@ -2893,7 +2711,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Báo trạng thái đang gõ (typing indicator) cho khách",
         "tags": [
           "cskh"
         ]
@@ -2907,7 +2724,6 @@
             "name": "id",
             "required": true,
             "in": "path",
-            "description": "ID hội thoại",
             "schema": {
               "type": "string"
             }
@@ -2930,7 +2746,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Đánh dấu hội thoại đã đọc",
         "tags": [
           "cskh"
         ]
@@ -2944,7 +2759,6 @@
             "name": "id",
             "required": true,
             "in": "path",
-            "description": "ID hội thoại",
             "schema": {
               "type": "string"
             }
@@ -2960,7 +2774,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Đánh dấu hội thoại chưa đọc",
         "tags": [
           "cskh"
         ]
@@ -2980,7 +2793,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Đồng bộ hội thoại/tin nhắn từ Facebook Graph API",
         "tags": [
           "cskh"
         ]
@@ -2988,7 +2800,6 @@
     },
     "/api/v1/cskh/inbox/backfill": {
       "post": {
-        "description": "Tự bỏ qua kênh đã quét nếu có job paused; scope empty | all.",
         "operationId": "CskhController_startBackfill",
         "parameters": [],
         "responses": {
@@ -3008,7 +2819,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Bắt đầu/tiếp tục \"Quét đầy đủ\" hội thoại chạy nền",
         "tags": [
           "cskh"
         ]
@@ -3026,7 +2836,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Tiến độ \"Quét đầy đủ\" (để FE hiển thị thanh tiến trình)",
         "tags": [
           "cskh"
         ]
@@ -3053,7 +2862,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Tạm dừng \"Quét đầy đủ\" (lưu tiến độ kênh đã xong vào DB)",
         "tags": [
           "cskh"
         ]
@@ -3073,7 +2881,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Huỷ toàn bộ \"Quét đầy đủ\" (dừng ngay, xoá hàng đợi)",
         "tags": [
           "cskh"
         ]
@@ -3093,7 +2900,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Gắn kết quả audit vào hội thoại inbox tương ứng",
         "tags": [
           "cskh"
         ]
@@ -3107,7 +2913,6 @@
             "name": "id",
             "required": true,
             "in": "path",
-            "description": "ID hội thoại",
             "schema": {
               "type": "string"
             }
@@ -3130,7 +2935,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Gợi ý audit gần nhất của hội thoại",
         "tags": [
           "cskh"
         ]
@@ -3150,7 +2954,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Proxy avatar Facebook CDN (public, không cần JWT)",
         "tags": [
           "cskh"
         ]
@@ -3170,7 +2973,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Proxy ảnh/video Facebook CDN (public, không cần JWT)",
         "tags": [
           "cskh"
         ]
@@ -3206,7 +3008,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Avatar của Page (fetch Facebook Graph API + stream, public)",
         "tags": [
           "cskh"
         ]
@@ -3250,7 +3051,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Avatar của khách hàng (fetch Facebook Graph API + stream, public)",
         "tags": [
           "cskh"
         ]
@@ -3277,7 +3077,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Thống kê tổng quan dashboard CSKH",
         "tags": [
           "cskh"
         ]
@@ -3304,7 +3103,6 @@
             "JWT-auth": []
           }
         ],
-        "summary": "Thống kê nặng (heavy) của dashboard CSKH",
         "tags": [
           "cskh"
         ]
@@ -3880,11 +3678,13 @@
           "fullName": {
             "type": "string",
             "maxLength": 100,
+            "example": "Trung Hieu",
             "description": "Họ tên đầy đủ của người dùng"
           },
           "email": {
             "type": "string",
             "format": "email",
+            "example": "user@example.com",
             "description": "Địa chỉ email đăng ký"
           },
           "password": {
@@ -3892,6 +3692,7 @@
             "minLength": 6,
             "maxLength": 50,
             "pattern": "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)",
+            "example": "Password123",
             "description": "Mật khẩu đăng nhập (tối thiểu 6 ký tự, gồm ít nhất 1 chữ hoa, 1 chữ thường và 1 số)"
           }
         },
@@ -3906,11 +3707,13 @@
         "properties": {
           "email": {
             "type": "string",
+            "example": "user1",
             "description": "Email hoặc tài khoản (vd. user1 → user1@cqa.vn)"
           },
           "password": {
             "type": "string",
             "minLength": 6,
+            "example": "Password123",
             "description": "Mật khẩu đăng nhập"
           }
         },
@@ -3922,41 +3725,17 @@
       "UpdateUserDto": {
         "type": "object",
         "properties": {
-          "fullName": {
-            "type": "string",
-            "maxLength": 100,
-            "description": "Họ tên đầy đủ của người dùng"
-          },
-          "email": {
-            "type": "string",
-            "format": "email",
-            "description": "Địa chỉ email đăng nhập"
-          },
-          "password": {
-            "type": "string",
-            "description": "Mật khẩu đăng nhập"
-          },
-          "phoneNumber": {
-            "type": "string",
-            "description": "Số điện thoại"
-          },
-          "avatarUrl": {
-            "type": "string",
-            "description": "URL ảnh đại diện"
-          },
           "role": {
+            "type": "string",
             "enum": [
               "admin",
               "manager",
               "staff",
               "user"
-            ],
-            "type": "string",
-            "description": "Vai trò của người dùng"
+            ]
           },
           "isActive": {
-            "type": "boolean",
-            "description": "Trạng thái kích hoạt tài khoản"
+            "type": "boolean"
           }
         }
       },

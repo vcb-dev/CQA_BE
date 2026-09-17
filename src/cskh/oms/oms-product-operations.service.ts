@@ -98,15 +98,6 @@ const PERIOD_NOUN: Record<ProductOperationsPeriodType, string> = {
   month: 'tháng',
 };
 
-function periodPrevSuffix(type: ProductOperationsPeriodType): string {
-  return `so với ${PERIOD_NOUN[type]} trước`;
-}
-
-function pctCaption(pct: number | undefined, suffix: string): string {
-  if (pct == null || !Number.isFinite(pct)) return suffix;
-  return `${pct >= 0 ? '+' : ''}${pct}% ${suffix}`;
-}
-
 function currentMonthValue(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -164,7 +155,6 @@ function mapReport(
     ...(r.additional_metrics.category_distribution ?? []),
   ].sort((a, b) => b.pct - a.pct)[0];
   const noun = PERIOD_NOUN[period.type];
-  const prevSuffix = periodPrevSuffix(period.type);
 
   return {
     period,
@@ -193,12 +183,6 @@ function mapReport(
       stuckOrders: s.stuck_orders,
     })),
     extraMetrics: [
-      // {
-      //   key: 'revenue',
-      //   label: `Doanh thu theo ${noun}`,
-      //   value: `${Math.round(r.additional_metrics.revenue.value).toLocaleString('vi-VN')}đ`,
-      //   caption: pctCaption(r.additional_metrics.revenue.change_pct, prevSuffix),
-      // },
       {
         key: 'categoryShare',
         label: 'Phân bổ theo danh mục',
@@ -236,7 +220,10 @@ export class OmsProductOperationsService {
   private cache = new Map<string, { at: number; data: FullDashboard }>();
   private revenueCache = new Map<
     string,
-    { at: number; data: { items: TopRevenueProduct[]; summary: RevenueSummary } }
+    {
+      at: number;
+      data: { items: TopRevenueProduct[]; summary: RevenueSummary };
+    }
   >();
 
   constructor(private readonly omsApi: OmsApiService) {}
@@ -311,7 +298,8 @@ export class OmsProductOperationsService {
     const result = {
       items,
       summary: {
-        totalRevenue: raw.summary?.total_price ?? items.reduce((s, p) => s + p.revenue, 0),
+        totalRevenue:
+          raw.summary?.total_price ?? items.reduce((s, p) => s + p.revenue, 0),
         totalProducts: raw.total ?? items.length,
       },
     };

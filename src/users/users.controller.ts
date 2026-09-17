@@ -7,12 +7,7 @@ import {
   Body,
   UseGuards,
 } from '@nestjs/common';
-import {
-  ApiTags,
-  ApiBearerAuth,
-  ApiOperation,
-  ApiParam,
-} from '@nestjs/swagger';
+import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -29,7 +24,6 @@ export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Danh sách người dùng (chỉ admin/manager)' })
   @Roles(UserRole.admin, UserRole.manager)
   async findAll() {
     return {
@@ -39,8 +33,6 @@ export class UsersController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Chi tiết một người dùng theo id (chỉ admin)' })
-  @ApiParam({ name: 'id', description: 'ID người dùng' })
   @Roles(UserRole.admin)
   async findOne(@Param('id') id: string) {
     const user = await this.usersService.findById(id);
@@ -51,8 +43,6 @@ export class UsersController {
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Cập nhật thông tin người dùng (chỉ admin)' })
-  @ApiParam({ name: 'id', description: 'ID người dùng' })
   @Roles(UserRole.admin)
   async update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
     const user = await this.usersService.update(id, updateUserDto);
@@ -64,8 +54,6 @@ export class UsersController {
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Xoá người dùng (chỉ admin)' })
-  @ApiParam({ name: 'id', description: 'ID người dùng' })
   @Roles(UserRole.admin)
   async remove(@Param('id') id: string) {
     await this.usersService.remove(id);

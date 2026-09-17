@@ -49,7 +49,7 @@ import { CustomerAnalyticsService } from './customer-analytics.service';
 import { isSapoApiReady } from './sapo/sapo-api.util';
 import { parseInboxMonthKey } from './inbox/cskh-inbox-month.util';
 import { ConfigService } from '@nestjs/config';
-import { ApiTags, ApiBearerAuth, ApiOperation, ApiParam } from '@nestjs/swagger';
+import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import { JwtService } from '@nestjs/jwt';
 import { UsersService } from '../users/users.service';
@@ -88,10 +88,6 @@ export class CskhController {
 
   /** OAuth — không cần JWT (redirect browser). */
   @Get('oauth/start')
-  @ApiOperation({
-    summary: 'Bắt đầu OAuth Facebook để kết nối Page (redirect browser)',
-    description: 'Không dùng qua Swagger "Try it out" — mở trực tiếp trên trình duyệt để redirect sang Facebook.',
-  })
   async oauthStart(
     @Query('returnUrl') returnUrl: string,
     @Query('token') token: string,
@@ -129,10 +125,6 @@ export class CskhController {
   }
 
   @Get('oauth/callback')
-  @ApiOperation({
-    summary: 'Callback nhận code OAuth Facebook (redirect browser)',
-    description: 'Facebook gọi endpoint này sau khi cấp quyền; kết quả redirect về returnUrl kèm trạng thái kết nối.',
-  })
   async oauthCallback(
     @Query('code') code: string,
     @Query('state') state: string,
@@ -157,7 +149,6 @@ export class CskhController {
   }
 
   @Get('pages')
-  @ApiOperation({ summary: 'Danh sách Page Facebook đã kết nối (kèm thống kê theo tháng/ngày)' })
   @UseGuards(JwtAuthGuard)
   listPages(
     @CurrentUser() user: User,
@@ -192,7 +183,6 @@ export class CskhController {
 
   /** Kiểm tra nhanh BE đã deploy bản có thống kê tin theo tháng chưa. */
   @Get('features')
-  @ApiOperation({ summary: 'Kiểm tra nhanh các tính năng BE đã deploy (feature flags)' })
   @UseGuards(JwtAuthGuard)
   getFeatures() {
     return {
@@ -204,7 +194,6 @@ export class CskhController {
   }
 
   @Post('pages/sync-ad-spend')
-  @ApiOperation({ summary: 'Đồng bộ chi phí quảng cáo (ad spend) cho tất cả Page theo ngày' })
   @UseGuards(JwtAuthGuard)
   syncPagesAdSpend(
     @CurrentUser() user: User,
@@ -219,7 +208,6 @@ export class CskhController {
   }
 
   @Put('pages/manual')
-  @ApiOperation({ summary: 'Thêm/cập nhật Page thủ công (nhập tay pageId + access token)' })
   @UseGuards(JwtAuthGuard)
   saveManualPage(
     @CurrentUser() user: User,
@@ -241,15 +229,12 @@ export class CskhController {
   }
 
   @Patch('pages/bulk-enabled')
-  @ApiOperation({ summary: 'Bật/tắt hàng loạt nhiều Page cùng lúc' })
   @UseGuards(JwtAuthGuard)
   setPagesEnabledBulk(@CurrentUser() user: User, @Body() body: { enabled?: boolean; pageIds?: string[] }) {
     return this.cskh.setPagesEnabledBulk(Boolean(body.enabled), body.pageIds, user.tenantId || undefined);
   }
 
   @Patch('pages/:pageId/enabled')
-  @ApiOperation({ summary: 'Bật/tắt một Page theo id' })
-  @ApiParam({ name: 'pageId', description: 'ID Page Facebook' })
   @UseGuards(JwtAuthGuard)
   setPageEnabled(
     @CurrentUser() user: User,
@@ -260,15 +245,12 @@ export class CskhController {
   }
 
   @Delete('pages/:pageId')
-  @ApiOperation({ summary: 'Xoá một Page đã kết nối' })
-  @ApiParam({ name: 'pageId', description: 'ID Page Facebook' })
   @UseGuards(JwtAuthGuard)
   deletePage(@CurrentUser() user: User, @Param('pageId') pageId: string) {
     return this.cskh.deletePage(pageId, user.tenantId || undefined);
   }
 
   @Post('oauth/refresh')
-  @ApiOperation({ summary: 'Làm mới danh sách Page từ OAuth Facebook' })
   @UseGuards(JwtAuthGuard)
   refreshOAuth(@CurrentUser() user: User) {
     return this.cskh.refreshPagesFromOAuth(user.tenantId || undefined);
@@ -295,20 +277,12 @@ export class CskhController {
 
   /** Sapo Partner OAuth — redirect browser (cài Client lên shop). */
   @Get('sapo/oauth/start')
-  @ApiOperation({
-    summary: 'Bắt đầu Sapo Partner OAuth để cài Client lên shop (redirect browser)',
-    description: 'Không dùng qua Swagger "Try it out" — mở trực tiếp trên trình duyệt để redirect sang Sapo.',
-  })
   sapoOAuthStart(@Res() res: Response) {
     const url = this.sapoOAuth.getOAuthStartUrl();
     return res.redirect(url);
   }
 
   @Get('sapo/oauth/callback')
-  @ApiOperation({
-    summary: 'Callback nhận code Sapo OAuth (redirect browser, trả HTML)',
-    description: 'Sapo gọi endpoint này sau khi shop cấp quyền; kết quả trả về access token dạng HTML để copy vào env.',
-  })
   async sapoOAuthCallback(
     @Query('code') code: string,
     @Query('error') error: string,
@@ -337,7 +311,6 @@ export class CskhController {
   }
 
   @Get('sapo/status')
-  @ApiOperation({ summary: 'Trạng thái kết nối Sapo (API, sync, catalog...)' })
   @UseGuards(JwtAuthGuard)
   async sapoStatus() {
     const catalogSource = this.sapoProducts.catalogSource();
@@ -373,10 +346,6 @@ export class CskhController {
    * body/query resource: all | products | customers | orders | collections
    */
   @Post('sapo/sync')
-  @ApiOperation({
-    summary: 'Đồng bộ dữ liệu Sapo → DB CRM',
-    description: 'Chọn resource cần đồng bộ: all | products | customers | orders | collections.',
-  })
   @UseGuards(JwtAuthGuard)
   async sapoSync(
     @Query('resource') resourceQuery?: string,
@@ -396,7 +365,6 @@ export class CskhController {
   }
 
   @Post('sapo/sync/products')
-  @ApiOperation({ summary: 'Đồng bộ sản phẩm từ Sapo → DB' })
   @UseGuards(JwtAuthGuard)
   async sapoSyncProducts() {
     try {
@@ -407,7 +375,6 @@ export class CskhController {
   }
 
   @Post('sapo/sync/customers')
-  @ApiOperation({ summary: 'Đồng bộ khách hàng từ Sapo → DB' })
   @UseGuards(JwtAuthGuard)
   async sapoSyncCustomers() {
     try {
@@ -418,7 +385,6 @@ export class CskhController {
   }
 
   @Post('sapo/sync/orders')
-  @ApiOperation({ summary: 'Đồng bộ đơn hàng từ Sapo → DB' })
   @UseGuards(JwtAuthGuard)
   async sapoSyncOrders() {
     try {
@@ -429,7 +395,6 @@ export class CskhController {
   }
 
   @Post('sapo/sync/collections')
-  @ApiOperation({ summary: 'Đồng bộ danh mục (collections) từ Sapo → DB' })
   @UseGuards(JwtAuthGuard)
   async sapoSyncCollections() {
     try {
@@ -441,14 +406,12 @@ export class CskhController {
 
   /** Bảng Sapo đã flatten — phục vụ UI */
   @Get('sapo/display/stats')
-  @ApiOperation({ summary: 'Thống kê tổng quan dữ liệu Sapo đã đồng bộ' })
   @UseGuards(JwtAuthGuard)
   sapoDisplayStats() {
     return this.sapoDisplay.stats();
   }
 
   @Get('sapo/display/customers')
-  @ApiOperation({ summary: 'Danh sách khách hàng Sapo (bảng flatten, có tìm kiếm + phân trang)' })
   @UseGuards(JwtAuthGuard)
   sapoDisplayCustomers(
     @Query('q') q?: string,
@@ -463,7 +426,6 @@ export class CskhController {
   }
 
   @Get('sapo/display/orders')
-  @ApiOperation({ summary: 'Danh sách đơn hàng Sapo (bảng flatten, lọc trạng thái + phân trang)' })
   @UseGuards(JwtAuthGuard)
   sapoDisplayOrders(
     @Query('q') q?: string,
@@ -484,7 +446,6 @@ export class CskhController {
   }
 
   @Get('sapo/catalog')
-  @ApiOperation({ summary: 'Danh mục sản phẩm Sapo (đã chuẩn hoá cho FE)' })
   @UseGuards(JwtAuthGuard)
   async sapoCatalog() {
     const items = await this.sapoProducts.getCatalog();
@@ -517,7 +478,6 @@ export class CskhController {
   }
 
   @Post('sapo/catalog/sync')
-  @ApiOperation({ summary: 'Đồng bộ catalog sản phẩm Sapo → DB' })
   @UseGuards(JwtAuthGuard)
   async sapoCatalogSync() {
     return this.sapoProducts.syncCatalogToDb();
@@ -525,7 +485,6 @@ export class CskhController {
 
   /** Dashboard analytics sản phẩm từ DB (catalog + đơn inbox). */
   @Get('products/analytics')
-  @ApiOperation({ summary: 'Dashboard phân tích sản phẩm (từ DB catalog + đơn inbox)' })
   @UseGuards(JwtAuthGuard)
   getProductsAnalytics(
     @Query('q') q?: string,
@@ -543,7 +502,6 @@ export class CskhController {
 
   /** Báo cáo "Sản phẩm — Vận hành theo tháng/tuần/ngày" — proxy trực tiếp từ OMS, không lưu DB. */
   @Get('products/operations')
-  @ApiOperation({ summary: 'Báo cáo Sản phẩm — Vận hành theo tháng/tuần/ngày (proxy trực tiếp từ OMS)' })
   @UseGuards(JwtAuthGuard)
   getProductsOperations(
     @Query('month') month?: string,
@@ -569,7 +527,6 @@ export class CskhController {
 
   /** Danh mục sản phẩm (OMS) — dùng cho dropdown filter tab Sản phẩm. */
   @Get('oms/categories')
-  @ApiOperation({ summary: 'Danh mục sản phẩm OMS (dùng cho dropdown filter)' })
   @UseGuards(JwtAuthGuard)
   getOmsCategories() {
     return this.omsCatalog.getCategories();
@@ -577,7 +534,6 @@ export class CskhController {
 
   /** Kho hàng (OMS) — dùng cho dropdown filter tab Sản phẩm. */
   @Get('oms/locations')
-  @ApiOperation({ summary: 'Danh sách kho hàng OMS (dùng cho dropdown filter)' })
   @UseGuards(JwtAuthGuard)
   getOmsLocations() {
     return this.omsCatalog.getLocations();
@@ -644,7 +600,6 @@ export class CskhController {
 
   /** Danh sách khách đã chốt đơn inbox — filter theo kênh (page) / trạng thái hội thoại. */
   @Get('customers')
-  @ApiOperation({ summary: 'Danh sách khách đã chốt đơn qua inbox (lọc theo kênh/trạng thái)' })
   @UseGuards(JwtAuthGuard)
   listCustomers(
     @CurrentUser() user: User,
@@ -666,14 +621,12 @@ export class CskhController {
 
   /** Import sản phẩm từ Sapo API → bảng products / product_variants. */
   @Post('products/import-from-sapo')
-  @ApiOperation({ summary: 'Import sản phẩm từ Sapo API vào DB (products / product_variants)' })
   @UseGuards(JwtAuthGuard)
   async importProductsFromSapo() {
     return this.sapoProducts.syncCatalogToDb();
   }
 
   @Post('sapo/orders')
-  @ApiOperation({ summary: 'Tạo đơn hàng Sapo từ thông tin chốt đơn trên inbox' })
   @UseGuards(JwtAuthGuard)
   createSapoOrder(
     @Body()
@@ -706,14 +659,12 @@ export class CskhController {
   }
 
   @Get('monitor/latest')
-  @ApiOperation({ summary: 'Kết quả giám sát (monitor) hội thoại gần nhất' })
   @UseGuards(JwtAuthGuard)
   latestMonitor(@CurrentUser() user: User) {
     return this.cskh.getLatestMonitor(user.tenantId || undefined);
   }
 
   @Post('monitor/run')
-  @ApiOperation({ summary: 'Chạy job giám sát (monitor) hội thoại nền' })
   @UseGuards(JwtAuthGuard)
   async runMonitor(@CurrentUser() user: User, @Body() body: { maxConversations?: number }) {
     const running = await this.cskh.findRunningJob('monitor', user.tenantId || undefined);
@@ -726,10 +677,6 @@ export class CskhController {
   }
 
   @Post('audit/run')
-  @ApiOperation({
-    summary: 'Chạy job chấm điểm chất lượng hội thoại (audit) theo khoảng ngày',
-    description: 'Chạy nền qua Redis queue (fallback chạy inline nếu queue không khả dụng); có thể quét 1 kênh hoặc scanAllChannels.',
-  })
   @UseGuards(JwtAuthGuard)
   async runAudit(
     @CurrentUser() user: User,
@@ -799,14 +746,12 @@ export class CskhController {
   }
 
   @Post('audit/pause')
-  @ApiOperation({ summary: 'Tạm dừng job audit đang chạy' })
   @UseGuards(JwtAuthGuard)
   pauseAudit(@CurrentUser() user: User) {
     return this.cskh.requestAuditPause(user.tenantId || undefined);
   }
 
   @Post('audit/cancel')
-  @ApiOperation({ summary: 'Huỷ (các) job audit đang chạy' })
   @UseGuards(JwtAuthGuard)
   async cancelAudit(@CurrentUser() user: User) {
     const n = await this.cskh.cancelRunningJobs('audit', undefined, user.tenantId || undefined);
@@ -814,23 +759,18 @@ export class CskhController {
   }
 
   @Get('audit/token-stats')
-  @ApiOperation({ summary: 'Thống kê token AI đã dùng cho audit' })
   @UseGuards(JwtAuthGuard)
   getAuditTokenStats() {
     return this.cskh.getAuditTokenStats();
   }
 
   @Get('audit/progress/:jobId')
-  @ApiOperation({ summary: 'Tiến độ job audit theo jobId' })
-  @ApiParam({ name: 'jobId', description: 'ID job audit' })
   @UseGuards(JwtAuthGuard)
   getAuditProgress(@CurrentUser() user: User, @Param('jobId') jobId: string) {
     return this.cskh.getAuditProgress(jobId, user.tenantId || undefined);
   }
 
   @Get('jobs/running/:type')
-  @ApiOperation({ summary: 'Job đang chạy theo loại (monitor | audit)' })
-  @ApiParam({ name: 'type', description: 'Loại job: monitor hoặc audit' })
   @UseGuards(JwtAuthGuard)
   getRunningJob(@CurrentUser() user: User, @Param('type') type: string) {
     if (type !== 'monitor' && type !== 'audit') {
@@ -840,15 +780,12 @@ export class CskhController {
   }
 
   @Get('jobs/:id')
-  @ApiOperation({ summary: 'Chi tiết một job theo id' })
-  @ApiParam({ name: 'id', description: 'ID job' })
   @UseGuards(JwtAuthGuard)
   getJob(@CurrentUser() user: User, @Param('id') id: string) {
     return this.cskh.getJob(id, user.tenantId || undefined);
   }
 
   @Get('audits')
-  @ApiOperation({ summary: 'Danh sách kết quả audit (lọc theo page/ngày/job)' })
   @UseGuards(JwtAuthGuard)
   listAudits(
     @CurrentUser() user: User,
@@ -873,7 +810,6 @@ export class CskhController {
   }
 
   @Get('insights')
-  @ApiOperation({ summary: 'Dashboard insight chất lượng CSKH theo khoảng ngày' })
   @UseGuards(JwtAuthGuard)
   getInsights(
     @CurrentUser() user: User,
@@ -892,7 +828,6 @@ export class CskhController {
   }
 
   @Get('audits/day-stats')
-  @ApiOperation({ summary: 'Thống kê audit theo ngày' })
   @UseGuards(JwtAuthGuard)
   getAuditDayStats(
     @CurrentUser() user: User,
@@ -907,7 +842,6 @@ export class CskhController {
   }
 
   @Get('audits/comparison')
-  @ApiOperation({ summary: 'So sánh điểm audit giữa các lần chấm trong ngày' })
   @UseGuards(JwtAuthGuard)
   getAuditComparison(
     @CurrentUser() user: User,
@@ -922,7 +856,6 @@ export class CskhController {
   }
 
   @Get('audits/score-history')
-  @ApiOperation({ summary: 'Lịch sử điểm số của một audit' })
   @UseGuards(JwtAuthGuard)
   getAuditScoreHistory(@CurrentUser() user: User, @Query('auditId') auditId?: string) {
     const id = auditId?.trim();
@@ -931,7 +864,6 @@ export class CskhController {
   }
 
   @Get('ai/balance')
-  @ApiOperation({ summary: 'Số dư tài khoản DeepSeek AI' })
   @UseGuards(JwtAuthGuard)
   getAiBalance() {
     return this.cskh.getDeepSeekBalance();
@@ -939,7 +871,6 @@ export class CskhController {
 
   /** Meta Webhook verify — không JWT. */
   @Get('webhook')
-  @ApiOperation({ summary: 'Xác thực webhook Meta (verify token) — không cần JWT' })
   verifyWebhook(
     @Query('hub.mode') mode: string,
     @Query('hub.verify_token') token: string,
@@ -958,10 +889,6 @@ export class CskhController {
 
   /** Meta Webhook events — không JWT. */
   @Post('webhook')
-  @ApiOperation({
-    summary: 'Nhận sự kiện webhook Meta (tin nhắn mới...) — không cần JWT',
-    description: 'Meta gọi endpoint này; payload được xác thực bằng chữ ký x-hub-signature-256.',
-  })
   async handleWebhook(
     @Req() req: RawBodyRequest<Request>,
     @Headers('x-hub-signature-256') signature: string,
@@ -986,7 +913,6 @@ export class CskhController {
   }
 
   @Get('inbox/conversation-stats')
-  @ApiOperation({ summary: 'Thống kê số lượng hội thoại inbox' })
   @UseGuards(JwtAuthGuard)
   inboxConversationStats(
     @CurrentUser() user: User,
@@ -1005,7 +931,6 @@ export class CskhController {
   }
 
   @Get('inbox/conversations')
-  @ApiOperation({ summary: 'Danh sách hội thoại inbox (lọc theo kênh/nhãn/trạng thái, phân trang cursor)' })
   @UseGuards(JwtAuthGuard)
   listInboxConversations(
     @CurrentUser() user: User,
@@ -1050,31 +975,24 @@ export class CskhController {
 
   /** Gắn lại tag Ads từ tin nhắn đã lưu (Việt/Anh/Thái) — chạy ngay, không chờ cooldown. */
   @Post('inbox/backfill-ad-referrals')
-  @ApiOperation({ summary: 'Gắn lại tag Ads từ tin nhắn đã lưu (chạy ngay, không chờ cooldown)' })
   @UseGuards(JwtAuthGuard)
   backfillAdReferrals(@CurrentUser() user: User) {
     return this.inbox.backfillAdReferralsFromDb(user.tenantId || undefined);
   }
 
   @Get('inbox/labels')
-  @ApiOperation({ summary: 'Danh sách nhãn (label) hội thoại inbox' })
   @UseGuards(JwtAuthGuard)
   listInboxLabels(@CurrentUser() user: User) {
     return this.inboxLabels.listLabels(user.tenantId || undefined);
   }
 
   @Get('inbox/conversations/:id/view-history')
-  @ApiOperation({ summary: 'Lịch sử xem hội thoại' })
-  @ApiParam({ name: 'id', description: 'ID hội thoại' })
   @UseGuards(JwtAuthGuard)
   getInboxViewHistory(@CurrentUser() user: User, @Param('id') id: string) {
     return this.inboxLabels.getViewHistory(id.trim(), user.tenantId || undefined);
   }
 
   @Post('inbox/conversations/:id/labels/:labelId/toggle')
-  @ApiOperation({ summary: 'Gắn/gỡ một nhãn cho hội thoại' })
-  @ApiParam({ name: 'id', description: 'ID hội thoại' })
-  @ApiParam({ name: 'labelId', description: 'ID nhãn' })
   @UseGuards(JwtAuthGuard)
   toggleInboxConversationLabel(
     @CurrentUser() user: User,
@@ -1091,10 +1009,6 @@ export class CskhController {
 
   /** SSE — push realtime khi webhook/send có tin mới (FE không cần bấm đồng bộ). */
   @Sse('inbox/stream')
-  @ApiOperation({
-    summary: 'SSE realtime — đẩy tin nhắn/hội thoại mới về FE',
-    description: 'Server-Sent Events; FE không cần bấm đồng bộ, kèm heartbeat ping mỗi 25s.',
-  })
   @Header('Content-Type', 'text/event-stream')
   @Header('Cache-Control', 'no-cache, no-transform')
   @Header('Connection', 'keep-alive')
@@ -1151,8 +1065,6 @@ export class CskhController {
   }
 
   @Get('inbox/conversations/:id/messages')
-  @ApiOperation({ summary: 'Danh sách tin nhắn của một hội thoại' })
-  @ApiParam({ name: 'id', description: 'ID hội thoại' })
   @UseGuards(JwtAuthGuard)
   getInboxMessages(
     @CurrentUser() user: User,
@@ -1176,16 +1088,12 @@ export class CskhController {
   }
 
   @Post('inbox/messages/:messageId/resolve-media')
-  @ApiOperation({ summary: 'Lấy lại URL media (ảnh/video) của tin nhắn' })
-  @ApiParam({ name: 'messageId', description: 'ID tin nhắn' })
   @UseGuards(JwtAuthGuard)
   resolveInboxMessageMedia(@Param('messageId') messageId: string) {
     return this.inbox.resolveInboxMessageMedia(messageId);
   }
 
   @Get('inbox/conversations/:id/intent')
-  @ApiOperation({ summary: 'Ý định khách hàng (AI phân tích) trong hội thoại' })
-  @ApiParam({ name: 'id', description: 'ID hội thoại' })
   @UseGuards(JwtAuthGuard)
   getInboxCustomerIntent(
     @CurrentUser() user: User,
@@ -1196,8 +1104,6 @@ export class CskhController {
   }
 
   @Get('inbox/conversations/:id/ad-insights')
-  @ApiOperation({ summary: 'Thông tin quảng cáo dẫn đến hội thoại (ad insight)' })
-  @ApiParam({ name: 'id', description: 'ID hội thoại' })
   @UseGuards(JwtAuthGuard)
   getInboxAdInsights(
     @CurrentUser() user: User,
@@ -1209,8 +1115,6 @@ export class CskhController {
   }
 
   @Post('inbox/conversations/:id/send')
-  @ApiOperation({ summary: 'Gửi tin nhắn trong một hội thoại' })
-  @ApiParam({ name: 'id', description: 'ID hội thoại' })
   @UseGuards(JwtAuthGuard)
   sendInboxMessage(
     @CurrentUser() user: User,
@@ -1224,8 +1128,6 @@ export class CskhController {
   }
 
   @Post('inbox/conversations/:id/translate-preview')
-  @ApiOperation({ summary: 'Xem trước bản dịch tin nhắn trước khi gửi' })
-  @ApiParam({ name: 'id', description: 'ID hội thoại' })
   @UseGuards(JwtAuthGuard)
   translateInboxPreview(
     @CurrentUser() user: User,
@@ -1247,39 +1149,30 @@ export class CskhController {
   }
 
   @Post('inbox/conversations/:id/detect-lang')
-  @ApiOperation({ summary: 'Nhận diện ngôn ngữ khách hàng đang dùng' })
-  @ApiParam({ name: 'id', description: 'ID hội thoại' })
   @UseGuards(JwtAuthGuard)
   detectInboxLang(@CurrentUser() user: User, @Param('id') id: string) {
     return this.inbox.detectAndPersistCustomerLang(id, user.tenantId || undefined);
   }
 
   @Post('inbox/conversations/:id/typing')
-  @ApiOperation({ summary: 'Báo trạng thái đang gõ (typing indicator) cho khách' })
-  @ApiParam({ name: 'id', description: 'ID hội thoại' })
   @UseGuards(JwtAuthGuard)
   notifyInboxTyping(@CurrentUser() user: User, @Param('id') id: string) {
     return this.inbox.notifyTyping(id, user.tenantId || undefined);
   }
 
   @Post('inbox/conversations/:id/mark-as-read')
-  @ApiOperation({ summary: 'Đánh dấu hội thoại đã đọc' })
-  @ApiParam({ name: 'id', description: 'ID hội thoại' })
   @UseGuards(JwtAuthGuard)
   markInboxAsRead(@CurrentUser() user: User, @Param('id') id: string) {
     return this.inbox.markAsRead(id, user.tenantId || undefined, user.id);
   }
 
   @Post('inbox/conversations/:id/mark-as-unread')
-  @ApiOperation({ summary: 'Đánh dấu hội thoại chưa đọc' })
-  @ApiParam({ name: 'id', description: 'ID hội thoại' })
   @UseGuards(JwtAuthGuard)
   markInboxAsUnread(@CurrentUser() user: User, @Param('id') id: string) {
     return this.inbox.markAsUnread(id, user.tenantId || undefined);
   }
 
   @Post('inbox/sync')
-  @ApiOperation({ summary: 'Đồng bộ hội thoại/tin nhắn từ Facebook Graph API' })
   @UseGuards(JwtAuthGuard)
   syncInbox(
     @CurrentUser() user: User,
@@ -1304,10 +1197,6 @@ export class CskhController {
 
   /** Bắt đầu / tiếp tục "Quét đầy đủ" chạy nền. Tự bỏ qua kênh đã quét nếu có job paused. */
   @Post('inbox/backfill')
-  @ApiOperation({
-    summary: 'Bắt đầu/tiếp tục "Quét đầy đủ" hội thoại chạy nền',
-    description: 'Tự bỏ qua kênh đã quét nếu có job paused; scope empty | all.',
-  })
   @UseGuards(JwtAuthGuard)
   startBackfill(
     @CurrentUser() user: User,
@@ -1323,7 +1212,6 @@ export class CskhController {
 
   /** Tạm dừng quét — lưu tiến độ kênh đã xong vào DB. */
   @Post('inbox/backfill/pause')
-  @ApiOperation({ summary: 'Tạm dừng "Quét đầy đủ" (lưu tiến độ kênh đã xong vào DB)' })
   @UseGuards(JwtAuthGuard)
   pauseBackfill() {
     return this.inbox.requestBackfillPause();
@@ -1331,7 +1219,6 @@ export class CskhController {
 
   /** Hủy toàn bộ quét — dừng ngay, xóa hàng đợi, không chờ xong kênh. */
   @Post('inbox/backfill/cancel')
-  @ApiOperation({ summary: 'Huỷ toàn bộ "Quét đầy đủ" (dừng ngay, xoá hàng đợi)' })
   @UseGuards(JwtAuthGuard)
   cancelBackfill(@CurrentUser() user: User) {
     return this.inbox.cancelAllBackfill(user.tenantId || undefined);
@@ -1339,22 +1226,18 @@ export class CskhController {
 
   /** Tiến độ "Quét đầy đủ" để FE hiển thị thanh tiến trình. */
   @Get('inbox/backfill')
-  @ApiOperation({ summary: 'Tiến độ "Quét đầy đủ" (để FE hiển thị thanh tiến trình)' })
   @UseGuards(JwtAuthGuard)
   getBackfillStatus(@CurrentUser() user: User) {
     return this.inbox.getBackfillStatus(user.tenantId || undefined);
   }
 
   @Post('inbox/link-audit')
-  @ApiOperation({ summary: 'Gắn kết quả audit vào hội thoại inbox tương ứng' })
   @UseGuards(JwtAuthGuard)
   linkAuditInbox(@CurrentUser() user: User, @Body() body: { auditId?: string }) {
     return this.inbox.linkFromAudit(body.auditId?.trim() ?? '', user.tenantId || undefined);
   }
 
   @Get('inbox/conversations/:id/audit-hint')
-  @ApiOperation({ summary: 'Gợi ý audit gần nhất của hội thoại' })
-  @ApiParam({ name: 'id', description: 'ID hội thoại' })
   @UseGuards(JwtAuthGuard)
   getInboxAuditHint(@CurrentUser() user: User, @Param('id') id: string) {
     return this.inbox.getLatestAuditForConversation(id, user.tenantId || undefined);
@@ -1362,7 +1245,6 @@ export class CskhController {
 
   /** Proxy avatar Facebook CDN — public (img không gửi JWT). */
   @Get('media/avatar')
-  @ApiOperation({ summary: 'Proxy avatar Facebook CDN (public, không cần JWT)' })
   proxyAvatar(@Req() req: Request, @Res() res: Response) {
     const url = parseMediaProxyUrlFromRequest(req.originalUrl || req.url || '', req.query.url);
     return this.cskh.proxyMediaUrl(url, res);
@@ -1370,7 +1252,6 @@ export class CskhController {
 
   /** Proxy ảnh/video Facebook CDN — public. */
   @Get('media/proxy')
-  @ApiOperation({ summary: 'Proxy ảnh/video Facebook CDN (public, không cần JWT)' })
   proxyMedia(@Req() req: Request, @Res() res: Response) {
     const url = parseMediaProxyUrlFromRequest(req.originalUrl || req.url || '', req.query.url);
     return this.cskh.proxyMediaUrl(url, res);
@@ -1378,14 +1259,12 @@ export class CskhController {
 
   /** Avatar Page — fetch Graph + stream (public). */
   @Get('media/page-avatar')
-  @ApiOperation({ summary: 'Avatar của Page (fetch Facebook Graph API + stream, public)' })
   pageAvatar(@Query('pageId') pageId: string, @Res() res: Response) {
     return this.cskh.streamPageAvatar(pageId, res);
   }
 
   /** Avatar khách — fetch Graph + stream (public). */
   @Get('media/customer-avatar')
-  @ApiOperation({ summary: 'Avatar của khách hàng (fetch Facebook Graph API + stream, public)' })
   customerAvatar(
     @Query('pageId') pageId: string,
     @Query('psid') psid: string,
@@ -1395,14 +1274,12 @@ export class CskhController {
   }
 
   @Get('dashboard/stats')
-  @ApiOperation({ summary: 'Thống kê tổng quan dashboard CSKH' })
   @UseGuards(JwtAuthGuard)
   getDashboardStats(@CurrentUser() user: User) {
     return this.cskh.getDashboardStats(user.tenantId || undefined);
   }
 
   @Get('dashboard/heavy-stats')
-  @ApiOperation({ summary: 'Thống kê nặng (heavy) của dashboard CSKH' })
   @UseGuards(JwtAuthGuard)
   getDashboardHeavyStats(@CurrentUser() user: User) {
     return this.cskh.getDashboardHeavyStats(user.tenantId || undefined);

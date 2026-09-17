@@ -2604,6 +2604,41 @@
         ]
       }
     },
+    "/api/v1/cskh/inbox/conversations/{id}/send-media": {
+      "post": {
+        "operationId": "CskhController_sendInboxMedia",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "cskh"
+        ]
+      }
+    },
     "/api/v1/cskh/inbox/conversations/{id}/translate-preview": {
       "post": {
         "operationId": "CskhController_translateInboxPreview",
@@ -3728,10 +3763,10 @@
           "role": {
             "type": "string",
             "enum": [
+              "user",
               "admin",
               "manager",
-              "staff",
-              "user"
+              "staff"
             ]
           },
           "isActive": {

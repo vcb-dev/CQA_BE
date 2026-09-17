@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const { PrismaClient } = require('@prisma/client');
+const { ensurePgSslCompat } = require('./pg-ssl-url');
 
 /** Unbuffered log (macOS redirects buffer console.log). */
 function log(...args) {
@@ -54,6 +55,7 @@ function resolveWritableDatabaseUrl() {
   // Transaction pooler :6543 often comes back read-only for writes.
   url = url.replace(':6543/', ':5432/');
   url = stripPgBouncer(url);
+  url = ensurePgSslCompat(url);
   url = withConnectionLimit(url, 1);
   process.env.DATABASE_URL = url;
   process.env.DIRECT_URL = url;

@@ -185,18 +185,40 @@ export class AiService {
     customerName?: string;
     channel?: string;
     noReply?: boolean;
+    truncated?: boolean;
+    transcriptTrimmed?: boolean;
     metadata?: Record<string, unknown>;
   }) {
     try {
-      this.logger.log(`Sending chat transcript to AI service for audit... noReply=${data.noReply}`);
+      this.logger.log(
+        `Sending chat transcript to AI service for audit... noReply=${data.noReply} ` +
+          `truncated=${data.truncated} trimmed=${data.transcriptTrimmed}`,
+      );
       const response = await this.aiHttp.post(`${this.getAiBaseUrl()}/audit`, {
         transcript: data.aiTranscript ?? data.transcript,
         no_reply: data.noReply || false,
+        truncated: data.truncated || false,
+        transcript_trimmed: data.transcriptTrimmed || false,
         agent_name: data.agentName || null,
         customer_name: data.customerName || null,
       });
 
       const auditResult = response.data;
+
+      if (!auditResult || typeof auditResult !== 'object' || auditResult.error) {
+        const reason = auditResult?.reason || 'invalid_ai_response';
+        const detail = auditResult?.message || 'AI service trả về kết quả không hợp lệ';
+        this.logger.error(
+          `Audit skipped (${reason}) conv=${String(data.metadata?.conversationId ?? '?')}: ${detail}` +
+            (auditResult?.raw_preview ? ` | raw=${String(auditResult.raw_preview).slice(0, 300)}` : ''),
+        );
+        return {
+          error: true,
+          reason,
+          message: 'AI audit failed',
+          detail,
+        };
+      }
 
       type TokenUsage = {
         prompt_tokens?: number;

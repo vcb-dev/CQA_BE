@@ -36,8 +36,38 @@ export function isMetaGraphChannel(metadata: unknown): boolean {
   return cskhChannelPlatform(metadata) !== 'tiktok';
 }
 
-export function cskhInboxGraphPlatform(metadata: unknown): CskhInboxGraphPlatform {
-  return cskhChannelPlatform(metadata) === 'instagram' ? 'instagram' : 'messenger';
+export function cskhInboxGraphPlatform(
+  metadata: unknown,
+): CskhInboxGraphPlatform {
+  return cskhChannelPlatform(metadata) === 'instagram'
+    ? 'instagram'
+    : 'messenger';
+}
+
+/**
+ * Meta Conversations API: IG inbox dùng Facebook Page ID + platform=instagram
+ * (không gọi /{ig-user-id}/conversations — thường trả (#3) capability).
+ */
+export function cskhGraphConversationsOwnerId(
+  pageId: string,
+  metadata: unknown,
+): string {
+  if (cskhInboxGraphPlatform(metadata) !== 'instagram') return pageId;
+  const fb =
+    metadata && typeof metadata === 'object'
+      ? String(
+          (metadata as { facebookPageId?: unknown }).facebookPageId || '',
+        ).trim()
+      : '';
+  return fb || pageId;
+}
+
+/** Gửi tin / typing IG: cùng Page ID như Conversations API. */
+export function cskhGraphMessagingOwnerId(
+  pageId: string,
+  metadata: unknown,
+): string {
+  return cskhGraphConversationsOwnerId(pageId, metadata);
 }
 
 export function getFacebookAppId(): string {
@@ -58,10 +88,11 @@ export function getFacebookAppSecret(): string {
 export function getFacebookOAuthRedirectUri(): string {
   const explicit = process.env.FB_OAUTH_REDIRECT_URI?.trim();
   if (explicit) return explicit;
-  const base = (process.env.PUBLIC_BE_URL || process.env.BE_PUBLIC_URL || 'http://localhost:3003').replace(
-    /\/$/,
-    '',
-  );
+  const base = (
+    process.env.PUBLIC_BE_URL ||
+    process.env.BE_PUBLIC_URL ||
+    'http://localhost:3003'
+  ).replace(/\/$/, '');
   return `${base}/cskh/oauth/callback`;
 }
 
@@ -73,16 +104,26 @@ function oauthStateSecret(): string {
   );
 }
 
-export function signOAuthState(payload: { returnUrl: string; tenantId?: string; nonce: string }): string {
+export function signOAuthState(payload: {
+  returnUrl: string;
+  tenantId?: string;
+  nonce: string;
+}): string {
   const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  const sig = createHmac('sha256', oauthStateSecret()).update(body).digest('base64url');
+  const sig = createHmac('sha256', oauthStateSecret())
+    .update(body)
+    .digest('base64url');
   return `${body}.${sig}`;
 }
 
-export function verifyOAuthState(state: string): { returnUrl: string; tenantId?: string; nonce: string } | null {
+export function verifyOAuthState(
+  state: string,
+): { returnUrl: string; tenantId?: string; nonce: string } | null {
   const [body, sig] = state.split('.');
   if (!body || !sig) return null;
-  const expected = createHmac('sha256', oauthStateSecret()).update(body).digest('base64url');
+  const expected = createHmac('sha256', oauthStateSecret())
+    .update(body)
+    .digest('base64url');
   try {
     if (!timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
     return JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
@@ -91,7 +132,10 @@ export function verifyOAuthState(state: string): { returnUrl: string; tenantId?:
   }
 }
 
-export function buildFacebookOAuthUrl(returnUrl: string, tenantId?: string): string {
+export function buildFacebookOAuthUrl(
+  returnUrl: string,
+  tenantId?: string,
+): string {
   const appId = getFacebookAppId();
   if (!appId) throw new Error('FB_APP_ID chưa cấu hình trên BE');
   const redirectUri = getFacebookOAuthRedirectUri();
@@ -114,37 +158,61 @@ export function getFacebookWebhookVerifyToken(): string {
   return process.env.FB_WEBHOOK_VERIFY_TOKEN?.trim() || 'cskh-webhook-verify';
 }
 
-export function verifyFacebookWebhookSignature(rawBody: Buffer, signatureHeader?: string): boolean {
+export function verifyFacebookWebhookSignature(
+  rawBody: Buffer,
+  signatureHeader?: string,
+): boolean {
   const secret = getFacebookAppSecret();
   if (!secret) {
-    console.error('[Webhook Signature] Verification failed: FB_APP_SECRET is not configured or is empty.');
+    console.error(
+      '[Webhook Signature] Verification failed: FB_APP_SECRET is not configured or is empty.',
+    );
     return false;
   }
   if (!signatureHeader) {
-    console.error('[Webhook Signature] Verification failed: Missing signatureHeader.');
+    console.error(
+      '[Webhook Signature] Verification failed: Missing signatureHeader.',
+    );
     return false;
   }
   if (!signatureHeader.startsWith('sha256=')) {
-    console.error(`[Webhook Signature] Verification failed: Header format is invalid (received: ${signatureHeader}). Expected starts with sha256=`);
+    console.error(
+      `[Webhook Signature] Verification failed: Header format is invalid (received: ${signatureHeader}). Expected starts with sha256=`,
+    );
     return false;
   }
   if (!rawBody) {
-    console.error('[Webhook Signature] Verification failed: rawBody is empty/undefined.');
+    console.error(
+      '[Webhook Signature] Verification failed: rawBody is empty/undefined.',
+    );
     return false;
   }
   const expected = createHmac('sha256', secret).update(rawBody).digest('hex');
   const received = signatureHeader.slice('sha256='.length);
   try {
-    const isMatch = timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(received, 'hex'));
+    const isMatch = timingSafeEqual(
+      Buffer.from(expected, 'hex'),
+      Buffer.from(received, 'hex'),
+    );
     if (!isMatch) {
-      const maskedSecret = secret.length > 6 ? `${secret.slice(0, 3)}...${secret.slice(-3)}` : '***';
-      console.error(`[Webhook Signature] Verification failed: Signature mismatch. Received: ${received}, Expected: ${expected}. Using Secret: ${maskedSecret}, Body length: ${rawBody.length}`);
+      const maskedSecret =
+        secret.length > 6
+          ? `${secret.slice(0, 3)}...${secret.slice(-3)}`
+          : '***';
+      console.error(
+        `[Webhook Signature] Verification failed: Signature mismatch. Received: ${received}, Expected: ${expected}. Using Secret: ${maskedSecret}, Body length: ${rawBody.length}`,
+      );
     } else {
-      console.log(`[Webhook Signature] Verification successful. Body length: ${rawBody.length}`);
+      console.log(
+        `[Webhook Signature] Verification successful. Body length: ${rawBody.length}`,
+      );
     }
     return isMatch;
   } catch (err) {
-    console.error('[Webhook Signature] Verification errored during comparison:', err);
+    console.error(
+      '[Webhook Signature] Verification errored during comparison:',
+      err,
+    );
     return false;
   }
 }

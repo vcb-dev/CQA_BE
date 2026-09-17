@@ -468,7 +468,7 @@ export class RedisQueueService implements OnModuleInit, OnModuleDestroy, OnAppli
           const payload = JSON.parse(raw) as AuditQueuePayload;
           if (!payload?.jobId) continue;
           const jobRow = await this.cskhService.findJobStatus(payload.jobId);
-          if (!jobRow || jobRow.status !== 'running') {
+          if (!jobRow || (jobRow.status !== 'running' && jobRow.status !== 'queued')) {
             this.logger.log(
               `Audit Worker: skip ${payload.jobId.slice(0, 8)} (status=${jobRow?.status ?? 'missing'})`,
             );

@@ -256,6 +256,25 @@ export class CskhController {
     return this.cskh.refreshPagesFromOAuth(user.tenantId || undefined);
   }
 
+  /** Sửa kênh IG thiếu Fanpage ID (demo dev / sau migrate metadata). */
+  @Post('oauth/repair-instagram')
+  @UseGuards(JwtAuthGuard)
+  repairInstagram(@CurrentUser() user: User) {
+    return this.cskh.repairInstagramFacebookPageIds(user.tenantId || undefined);
+  }
+
+  @Get('instagram/test-readiness')
+  @UseGuards(JwtAuthGuard)
+  instagramTestReadiness(@CurrentUser() user: User) {
+    return this.cskh.getInstagramTestReadiness(user.tenantId || undefined);
+  }
+
+  @Post('instagram/prepare-test')
+  @UseGuards(JwtAuthGuard)
+  prepareInstagramTest(@CurrentUser() user: User) {
+    return this.cskh.prepareInstagramTest(user.tenantId || undefined);
+  }
+
   /** Sapo Partner OAuth — redirect browser (cài Client lên shop). */
   @Get('sapo/oauth/start')
   sapoOAuthStart(@Res() res: Response) {
@@ -694,11 +713,11 @@ export class CskhController {
     } else {
       await this.cskh.releaseStaleJobs('audit', 5 * 60 * 1000, user.tenantId || undefined);
     }
-    const running = await this.cskh.findRunningJob('audit', user.tenantId || undefined);
-    if (running) {
-      return { jobId: running.id, status: 'running', alreadyRunning: true };
+    const active = await this.cskh.findActiveJob('audit', user.tenantId || undefined);
+    if (active) {
+      return { jobId: active.id, status: active.status, alreadyRunning: true };
     }
-    const job = await this.cskh.createJob('audit', user.tenantId || undefined);
+    const job = await this.cskh.createJob('audit', user.tenantId || undefined, 'queued');
     const auditOptions = {
       auditDateFrom,
       auditDateTo,
@@ -716,7 +735,7 @@ export class CskhController {
     const workerOnline = await this.redisQueue.isAuditWorkerAlive();
     return {
       jobId: job.id,
-      status: 'running',
+      status: queued ? 'queued' : 'running',
       alreadyRunning: false,
       workerOnline,
     };

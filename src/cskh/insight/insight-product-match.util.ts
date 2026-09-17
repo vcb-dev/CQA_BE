@@ -7,80 +7,34 @@ export type ProductSearchEntry = {
   significantTokens: string[];
 };
 
-const VI_STOPWORDS = new Set([
-  'và',
-  'của',
-  'cho',
-  'với',
-  'là',
-  'có',
-  'không',
-  'em',
-  'anh',
-  'chị',
-  'ạ',
-  'dạ',
-  'shop',
-  'mình',
-  'bạn',
-  'này',
-  'kia',
-  'được',
-  'nhé',
-  'như',
-  'thì',
-  'để',
-  'còn',
-  'gì',
-  'nha',
-  'ok',
-  'ơi',
-  'the',
-  'xin',
-  'chào',
-  'nay',
-  'hôm',
-  'ngày',
-  'mai',
-  'đau',
-  'bị',
-  'bác',
-  'gia',
-  'giá',
-  'minh',
-  'ban',
-  'bán',
-  'mua',
-  'đặt',
-  'hàng',
-  'ship',
-  'giao',
-  'vcb',
-  'vien',
-  'viên',
-  'thuốc',
-  'sp',
-  'san',
-  'sản',
-  'phẩm',
-  'default',
-  'title',
-]);
-
 export function normalizeVi(s: string): string {
   return s
     .toLowerCase()
     .normalize('NFD')
     .replace(/\p{M}/gu, '')
+    .replace(/đ/g, 'd')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
+const VI_STOPWORD_SOURCE = [
+  'và', 'của', 'cho', 'với', 'là', 'có', 'không', 'em', 'anh', 'chị',
+  'ạ', 'dạ', 'shop', 'mình', 'bạn', 'này', 'kia', 'được', 'nhé', 'như',
+  'thì', 'để', 'còn', 'gì', 'nha', 'ok', 'ơi', 'the', 'xin', 'chào',
+  'nay', 'hôm', 'ngày', 'mai', 'đau', 'bị', 'bác', 'giá', 'mua', 'bán',
+  'đặt', 'hàng', 'ship', 'giao', 'vcb', 'viên', 'thuốc', 'sp', 'sản', 'phẩm',
+  'tư', 'vấn', 'rồi', 'vậy', 'nhiều', 'lắm', 'cần', 'muốn', 'hỏi', 'combo',
+  'zalo', 'facebook', 'fb', 'ib', 'ad', 'inbox', 'default', 'title',
+];
+
+export const VI_STOPWORDS = new Set(VI_STOPWORD_SOURCE.map(normalizeVi));
+
+export function viTokens(normalized: string): string[] {
+  return normalized.split(/[^a-z0-9]+/).filter((t) => t.length > 0);
+}
+
 function tokens(s: string): string[] {
-  return normalizeVi(s)
-    .split(/[^a-z0-9à-ỹ]+/i)
-    .map((t) => t.trim())
-    .filter((t) => t.length > 1);
+  return viTokens(normalizeVi(s)).filter((t) => t.length > 1);
 }
 
 function significantTokens(title: string): string[] {
@@ -118,7 +72,11 @@ function isSubsumedTitle(shorter: string, longer: string): boolean {
   return a !== b && b.includes(a);
 }
 
-function titleMatchesText(entry: ProductSearchEntry, normalizedText: string): boolean {
+function titleMatchesText(
+  entry: ProductSearchEntry,
+  normalizedText: string,
+  textTokens: Set<string>,
+): boolean {
   if (!normalizedText || !entry.normalizedTitle) return false;
 
   if (entry.normalizedTitle.length >= 4 && normalizedText.includes(entry.normalizedTitle)) {
@@ -127,11 +85,14 @@ function titleMatchesText(entry: ProductSearchEntry, normalizedText: string): bo
 
   const sig = entry.significantTokens;
   if (sig.length >= 2) {
-    const matched = sig.filter((t) => normalizedText.includes(t));
-    if (matched.length >= 2) return true;
+    let hits = 0;
+    for (const t of sig) {
+      if (textTokens.has(t)) hits += 1;
+      if (hits >= 2) return true;
+    }
   }
 
-  if (sig.length === 1 && sig[0].length >= 5 && normalizedText.includes(sig[0])) {
+  if (sig.length === 1 && sig[0].length >= 5 && textTokens.has(sig[0])) {
     return true;
   }
 
@@ -147,14 +108,16 @@ export function matchProductsInInboundText(
   const normalizedText = normalizeVi(text);
   if (!normalizedText || !index.length) return [];
 
+  const textTokens = new Set(viTokens(normalizedText));
   const matched: string[] = [];
   for (const entry of index) {
-    if (!titleMatchesText(entry, normalizedText)) continue;
-    if (matched.some((m) => isSubsumedTitle(m, entry.title) || isSubsumedTitle(entry.title, m))) {
-      if (matched.some((m) => isSubsumedTitle(m, entry.title))) continue;
-      const subsumedIdx = matched.findIndex((m) => isSubsumedTitle(entry.title, m));
-      if (subsumedIdx >= 0) matched.splice(subsumedIdx, 1);
+    if (!titleMatchesText(entry, normalizedText, textTokens)) continue;
+
+    if (matched.some((m) => isSubsumedTitle(entry.title, m))) continue;
+    for (let i = matched.length - 1; i >= 0; i--) {
+      if (isSubsumedTitle(matched[i], entry.title)) matched.splice(i, 1);
     }
+
     matched.push(entry.title);
     if (matched.length >= limit) break;
   }

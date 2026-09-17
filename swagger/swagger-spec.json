@@ -839,6 +839,63 @@
         ]
       }
     },
+    "/api/v1/cskh/oauth/repair-instagram": {
+      "post": {
+        "operationId": "CskhController_repairInstagram",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "cskh"
+        ]
+      }
+    },
+    "/api/v1/cskh/instagram/test-readiness": {
+      "get": {
+        "operationId": "CskhController_instagramTestReadiness",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "cskh"
+        ]
+      }
+    },
+    "/api/v1/cskh/instagram/prepare-test": {
+      "post": {
+        "operationId": "CskhController_prepareInstagramTest",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "cskh"
+        ]
+      }
+    },
     "/api/v1/cskh/sapo/oauth/start": {
       "get": {
         "operationId": "CskhController_sapoOAuthStart",

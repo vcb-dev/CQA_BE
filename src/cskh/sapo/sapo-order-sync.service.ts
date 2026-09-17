@@ -119,7 +119,7 @@ export class SapoOrderSyncService {
         sapoId: BigInt(sapoId),
         code,
         customerId,
-        branchId: ctx.branchId,
+        warehouseId: ctx.warehouseId,
         source: 'sapo' as const,
         status,
         createdById: ctx.createdById,
@@ -175,7 +175,6 @@ export class SapoOrderSyncService {
           data: {
             orderId,
             variantId,
-            warehouseId: ctx.warehouseId,
             productName: (li.name ?? li.title ?? 'Sapo item').trim() || 'Sapo item',
             sku: (li.sku ?? `SAPO-V-${li.variant_id ?? li.id ?? 0}`).trim() || 'SAPO-UNKNOWN',
             quantity: qty,
@@ -265,19 +264,15 @@ export class SapoOrderSyncService {
   }
 
   private async resolveContext(): Promise<{
-    branchId: bigint;
     createdById: bigint;
     warehouseId: bigint;
     unlinkedProductId: bigint;
   }> {
-    const branch = await this.prisma.branch.findFirst({ orderBy: { id: 'asc' } });
-    if (!branch) throw new Error('Cần ít nhất 1 branch để sync đơn Sapo');
-
     const user = await this.prisma.user.findFirst({ orderBy: { id: 'asc' } });
     if (!user) throw new Error('Cần ít nhất 1 user (created_by) để sync đơn Sapo');
 
     const warehouse = await this.prisma.warehouse.findFirst({
-      where: { isActive: true },
+      where: { status: 'active' },
       orderBy: { id: 'asc' },
     });
     if (!warehouse) throw new Error('Cần ít nhất 1 warehouse để sync dòng đơn Sapo');
@@ -298,7 +293,6 @@ export class SapoOrderSyncService {
     }
 
     return {
-      branchId: branch.id,
       createdById: user.id,
       warehouseId: warehouse.id,
       unlinkedProductId: unlinked.id,

@@ -52,6 +52,10 @@ function deriveDirectUrl(databaseUrl) {
     process.env.DIRECT_URL = deriveDirectUrl(process.env.DATABASE_URL);
   }
 
+  const { ensurePgSslCompat } = require('./lib/pg-ssl-url');
+  process.env.DATABASE_URL = ensurePgSslCompat(process.env.DATABASE_URL);
+  process.env.DIRECT_URL = ensurePgSslCompat(process.env.DIRECT_URL);
+
   const url = process.env.DIRECT_URL;
   const c = new Client({
     connectionString: url,

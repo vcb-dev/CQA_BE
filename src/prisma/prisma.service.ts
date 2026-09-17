@@ -13,6 +13,34 @@ function stripEnvQuotes(value: string): string {
   return trimmed;
 }
 
+function appendQueryParam(url: string, kv: string): string {
+  return url + (url.includes('?') ? '&' : '?') + kv;
+}
+
+/**
+ * node-pg 8.16+ maps sslmode=require → verify-full, then fails with
+ * SELF_SIGNED_CERT_IN_CHAIN on Supabase/AWS pooler. Keep require, restore
+ * historic libpq behavior (encrypt, do not verify CA).
+ * @see https://github.com/brianc/node-postgres/issues/3630
+ */
+function ensurePgSslCompat(url: string): string {
+  if (!url) return url;
+  if (!url.startsWith('postgresql://') && !url.startsWith('postgres://')) return url;
+
+  let out = url;
+  if (!/[?&]sslmode=/i.test(out)) {
+    out = appendQueryParam(out, 'sslmode=require');
+  }
+  const mode = out.match(/[?&]sslmode=([^&]*)/i)?.[1]?.toLowerCase() ?? '';
+  if (
+    (mode === 'require' || mode === 'prefer' || mode === 'verify-ca') &&
+    !/[?&]uselibpqcompat=/i.test(out)
+  ) {
+    out = appendQueryParam(out, 'uselibpqcompat=true');
+  }
+  return out;
+}
+
 /**
  * Supabase transaction pooler (:6543 + pgbouncer) đôi khi trả
  * "cannot execute UPDATE/INSERT in a read-only transaction".
@@ -28,7 +56,7 @@ function preferWritableSessionUrl(url: string): string {
     .replace(/([?&])pgbouncer=true&?/gi, '$1')
     .replace(/[?&]$/, '')
     .replace(/\?&/, '?');
-  return out;
+  return ensurePgSslCompat(out);
 }
 
 /** Railway đôi khi lưu DATABASE_URL kèm quote hoặc để trống — fallback từ DB_* nếu có. */

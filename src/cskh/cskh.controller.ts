@@ -500,11 +500,13 @@ export class CskhController {
     });
   }
 
-  /** Báo cáo "Sản phẩm — Vận hành theo tháng" — proxy trực tiếp từ OMS, không lưu DB. */
+  /** Báo cáo "Sản phẩm — Vận hành theo tháng/tuần/ngày" — proxy trực tiếp từ OMS, không lưu DB. */
   @Get('products/operations')
   @UseGuards(JwtAuthGuard)
   getProductsOperations(
     @Query('month') month?: string,
+    @Query('week') week?: string,
+    @Query('day') day?: string,
     @Query('categoryId') categoryId?: string,
     @Query('locationId') locationId?: string,
     @Query('topLimit') topLimit?: string,
@@ -513,6 +515,8 @@ export class CskhController {
   ) {
     return this.omsProductOperations.getDashboard({
       month,
+      week,
+      day,
       categoryId: categoryId || undefined,
       locationId: locationId || undefined,
       topLimit: topLimit ? Number(topLimit) : undefined,

@@ -57,12 +57,19 @@ import { findInboxConversationById } from './inbox/cskh-inbox-conversation.util'
 import { CskhInboxService } from './inbox/cskh-inbox.service';
 import { RedisQueueService } from './redis/redis-queue.service';
 
+export const CSKH_ACTIVE_JOB_STATUSES = ['queued', 'running'] as const;
+
 /** Page CSKH đang bật — trường dùng trong monitor/audit (tránh phụ thuộc export Prisma model). */
 type EnabledFacebookPage = {
   pageId: string;
   pageName: string | null;
   pageAccessToken: string;
   metadata?: Prisma.JsonValue | null;
+};
+
+type AuditedConversationIndex = {
+  keys: Set<string>;
+  countsByPage: Map<string, number>;
 };
 
 @Injectable()
@@ -100,7 +107,7 @@ export class CskhService implements OnModuleInit {
       (getCskhRunMode() === 'worker' ? 1 : 2),
   );
   private readonly auditMsgLimit = Number(
-    process.env.CSKH_AUDIT_MSG_LIMIT || 100,
+    process.env.CSKH_AUDIT_MSG_LIMIT || 300,
   );
   /** Nguồn hội thoại khi chấm: `database` (inbox DB) hoặc `facebook` (quét Graph API). */
   private readonly auditSource = (
@@ -109,9 +116,8 @@ export class CskhService implements OnModuleInit {
   /** Khi auditSource=database mà DB trống — chỉ fallback API nếu bật explicit. */
   private readonly auditDbFallbackApi =
     process.env.CSKH_AUDIT_DB_FALLBACK_API === 'true';
-  /** Tối đa dòng transcript gửi AI (DB vẫn lưu đủ). */
   private readonly auditAiTranscriptMax = Number(
-    process.env.CSKH_AUDIT_AI_TRANSCRIPT_MAX || 100,
+    process.env.CSKH_AUDIT_AI_TRANSCRIPT_MAX || 120,
   );
   private readonly auditProgressEvery = Math.max(
     1,
@@ -240,9 +246,12 @@ export class CskhService implements OnModuleInit {
   }> {
     const mode = getCskhRunMode();
     let cancelledJobs = 0;
+    const stuckStatuses = isCskhWorkerProcess()
+      ? [...CSKH_ACTIVE_JOB_STATUSES]
+      : ['running'];
     try {
       const n = await this.prisma.cskhJobRun.updateMany({
-        where: { status: 'running' },
+        where: { status: { in: stuckStatuses } },
         data: {
           status: 'failed',
           error: 'Server khởi động lại — vui lòng chạy job mới',
@@ -333,7 +342,7 @@ export class CskhService implements OnModuleInit {
     reason = 'Đã hủy bởi người dùng',
     tenantId?: string,
   ) {
-    const where: any = { type, status: 'running' };
+    const where: any = { type, status: { in: [...CSKH_ACTIVE_JOB_STATUSES] } };
     if (tenantId) where.tenantId = tenantId;
     const running = await this.prisma.cskhJobRun.findMany({
       where,
@@ -367,9 +376,8 @@ export class CskhService implements OnModuleInit {
     return result.count;
   }
 
-  /** Tạm dừng audit — lưu phần đã chấm, worker dừng quét/chấm mới ngay. */
   async requestAuditPause(tenantId?: string) {
-    const job = await this.findRunningJob('audit', tenantId);
+    const job = await this.findActiveJob('audit', tenantId);
     if (!job) {
       return { paused: false, message: 'Không có job audit đang chạy' };
     }
@@ -436,12 +444,12 @@ export class CskhService implements OnModuleInit {
     return this.redisQueue.shouldYieldGraphToInbox();
   }
 
-  private async loadAuditedConversationKeys(
+  private async loadAuditedConversationIndex(
     auditDateFrom: string,
     auditDateTo: string,
     pageIds: string[],
-  ): Promise<Set<string>> {
-    if (!pageIds.length) return new Set();
+  ): Promise<AuditedConversationIndex> {
+    if (!pageIds.length) return { keys: new Set(), countsByPage: new Map() };
 
     type Row = {
       conversationId: string | null;
@@ -470,6 +478,7 @@ export class CskhService implements OnModuleInit {
     `;
 
     const keys = new Set<string>();
+    const psidByConversationKey = new Map<string, string>();
     for (const row of rows) {
       const pageId = row.pageId?.trim();
       if (!pageId) continue;
@@ -477,8 +486,37 @@ export class CskhService implements OnModuleInit {
       const psid = row.participantPsid?.trim();
       if (convId) keys.add(`${pageId}:conv:${convId}`);
       if (psid) keys.add(`${pageId}:psid:${psid}`);
+      if (convId && psid)
+        psidByConversationKey.set(`${pageId}:conv:${convId}`, psid);
     }
-    return keys;
+
+    // Giữ cả hai khóa để nhận diện cuộc đã chấm, nhưng chỉ đếm một lần theo PSID.
+    // Bản ghi cũ chỉ có conversationId dùng PSID từ bản ghi khác của cùng cuộc nếu có.
+    const identitiesByPage = new Map<string, Set<string>>();
+    for (const row of rows) {
+      const pageId = row.pageId?.trim();
+      if (!pageId) continue;
+      const convId = row.conversationId?.trim();
+      const psid =
+        row.participantPsid?.trim() ||
+        (convId
+          ? psidByConversationKey.get(`${pageId}:conv:${convId}`)
+          : undefined);
+      if (!psid && !convId) continue;
+      const identities = identitiesByPage.get(pageId) ?? new Set<string>();
+      identities.add(psid ? `psid:${psid}` : `conv:${convId}`);
+      identitiesByPage.set(pageId, identities);
+    }
+
+    return {
+      keys,
+      countsByPage: new Map(
+        [...identitiesByPage].map(([pageId, identities]) => [
+          pageId,
+          identities.size,
+        ]),
+      ),
+    };
   }
 
   private isConversationAlreadyAudited(
@@ -3362,7 +3400,11 @@ export class CskhService implements OnModuleInit {
     };
   }
 
-  async createJob(type: 'monitor' | 'audit', tenantId?: string) {
+  async createJob(
+    type: 'monitor' | 'audit',
+    tenantId?: string,
+    status: 'running' | 'queued' = 'running',
+  ) {
     const initialSummary =
       type === 'audit'
         ? ({
@@ -3373,35 +3415,71 @@ export class CskhService implements OnModuleInit {
           } as Prisma.InputJsonValue)
         : undefined;
     return this.prisma.cskhJobRun.create({
-      data: { type, status: 'running', summary: initialSummary, tenantId },
+      data: { type, status, summary: initialSummary, tenantId },
     });
   }
 
-  /** Hủy job kẹt (vd. user tắt AI service giữa chừng). */
   async releaseStaleJobs(
     type: 'monitor' | 'audit',
     maxAgeMs = 30 * 60 * 1000,
     tenantId?: string,
-  ) {
-    const cutoff = new Date(Date.now() - maxAgeMs);
-    const where: any = { type, status: 'running', startedAt: { lt: cutoff } };
+    queuedMaxAgeMs = Math.max(maxAgeMs, 60 * 60 * 1000),
+  ): Promise<{ running: number; queued: number }> {
+    const release = async (
+      status: 'running' | 'queued',
+      ageMs: number,
+      error: string,
+    ) => {
+      const where: any = {
+        type,
+        status,
+        startedAt: { lt: new Date(Date.now() - ageMs) },
+      };
+      if (tenantId) {
+        where.tenantId = tenantId;
+      }
+      const stale = await this.prisma.cskhJobRun.findMany({
+        where,
+        select: { id: true },
+      });
+      if (!stale.length) return 0;
+      for (const j of stale) {
+        this.activeJobs.delete(j.id);
+        await this.redisQueue.clearAuditPauseRequested(j.id);
+      }
+      const { count } = await this.prisma.cskhJobRun.updateMany({
+        where,
+        data: { status: 'failed', error, finishedAt: new Date() },
+      });
+      return count;
+    };
+
+    const running = await release(
+      'running',
+      maxAgeMs,
+      'Job quá hạn — đã hủy tự động (có thể do AI service bị tắt)',
+    );
+    const queued = await release(
+      'queued',
+      queuedMaxAgeMs,
+      'Job nằm hàng đợi quá lâu — đã hủy tự động (worker không nhận được job)',
+    );
+    if (running > 0 || queued > 0) {
+      this.logger.warn(
+        `releaseStaleJobs(${type}): hủy ${running} job đang chạy + ${queued} job kẹt hàng đợi`,
+      );
+    }
+    return { running, queued };
+  }
+
+  async findActiveJob(type: 'monitor' | 'audit', tenantId?: string) {
+    const where: any = { type, status: { in: [...CSKH_ACTIVE_JOB_STATUSES] } };
     if (tenantId) {
       where.tenantId = tenantId;
     }
-    const stale = await this.prisma.cskhJobRun.findMany({
+    return this.prisma.cskhJobRun.findFirst({
       where,
-      select: { id: true },
-    });
-    for (const j of stale) {
-      this.activeJobs.delete(j.id);
-    }
-    await this.prisma.cskhJobRun.updateMany({
-      where,
-      data: {
-        status: 'failed',
-        error: 'Job quá hạn — đã hủy tự động (có thể do AI service bị tắt)',
-        finishedAt: new Date(),
-      },
+      orderBy: { startedAt: 'desc' },
     });
   }
 
@@ -3425,9 +3503,9 @@ export class CskhService implements OnModuleInit {
   }
 
   async getRunningJob(type: 'monitor' | 'audit', tenantId?: string) {
-    const running = await this.findRunningJob(type, tenantId);
-    if (!running) return null;
-    return this.getJob(running.id, tenantId);
+    const active = await this.findActiveJob(type, tenantId);
+    if (!active) return null;
+    return this.getJob(active.id, tenantId);
   }
 
   async updateJobProgress(jobId: string, summary: Record<string, unknown>) {
@@ -3495,7 +3573,10 @@ export class CskhService implements OnModuleInit {
       where: { id: jobId },
       select: { status: true, summary: true, error: true },
     });
-    if (!existing || existing.status !== 'running') {
+    if (
+      !existing ||
+      !(CSKH_ACTIVE_JOB_STATUSES as readonly string[]).includes(existing.status)
+    ) {
       this.activeJobs.delete(jobId);
       await this.redisQueue.clearAuditPauseRequested(jobId);
       return existing;
@@ -3845,18 +3926,6 @@ export class CskhService implements OnModuleInit {
     return matched;
   }
 
-  private countAuditedForPage(
-    auditedKeys: Set<string>,
-    pageId: string,
-  ): number {
-    let count = 0;
-    const prefix = `${pageId}:`;
-    for (const key of auditedKeys) {
-      if (key.startsWith(prefix)) count++;
-    }
-    return count;
-  }
-
   /** Chờ inbox realtime nhường Graph — thoát sớm nếu audit bị pause/hủy. */
   private async waitForInboxUnlessAuditStopped(
     jobId: string,
@@ -3887,11 +3956,21 @@ export class CskhService implements OnModuleInit {
       where: { id: jobId },
       select: { status: true, tenantId: true },
     });
-    if (!jobRow || jobRow.status !== 'running') {
+    if (
+      !jobRow ||
+      (jobRow.status !== 'running' && jobRow.status !== 'queued')
+    ) {
       this.logger.log(
         `Audit job ${jobId.slice(0, 8)} bỏ qua — trạng thái=${jobRow?.status ?? 'missing'}`,
       );
       return;
+    }
+    if (jobRow.status === 'queued') {
+      await this.prisma.cskhJobRun.update({
+        where: { id: jobId },
+        data: { status: 'running', startedAt: new Date() },
+      });
+      jobRow.status = 'running';
     }
 
     this.activeJobs.set(jobId, { pauseRequested: false });
@@ -3956,9 +4035,9 @@ export class CskhService implements OnModuleInit {
       };
 
       const pageIds = pages.map((p) => p.pageId);
-      const auditedKeys = force
-        ? new Set<string>()
-        : await this.loadAuditedConversationKeys(
+      const { keys: auditedKeys, countsByPage: auditedCountsByPage } = force
+        ? { keys: new Set<string>(), countsByPage: new Map<string, number>() }
+        : await this.loadAuditedConversationIndex(
             auditDateFrom,
             auditDateTo,
             pageIds,
@@ -3968,10 +4047,8 @@ export class CskhService implements OnModuleInit {
 
       // Một kênh: trừ cuộc đã chấm khỏi cap. Tất cả kênh: cap áp dụng riêng từng page.
       if (!scanAllPages && !force && cap > 0) {
-        const alreadyAuditedCount = this.countAuditedForPage(
-          auditedKeys,
-          pageIdTrimmed!,
-        );
+        const alreadyAuditedCount =
+          auditedCountsByPage.get(pageIdTrimmed!) ?? 0;
         const effectiveCap = Math.max(0, cap - alreadyAuditedCount);
         if (effectiveCap === 0) {
           await this.finishJob(jobId, 'done', {
@@ -4030,7 +4107,7 @@ export class CskhService implements OnModuleInit {
         remainingCap: cap > 0 ? cap : null,
         alreadyAudited: scanAllPages
           ? 0
-          : this.countAuditedForPage(auditedKeys, pageIdTrimmed || ''),
+          : (auditedCountsByPage.get(pageIdTrimmed || '') ?? 0),
         fetched: 0,
         scanned: 0,
         pagesTotal: pages.length,
@@ -4077,6 +4154,7 @@ export class CskhService implements OnModuleInit {
 
       let audited = 0;
       let errors = 0;
+      const errorReasons = new Map<string, number>();
       let processed = 0;
       const scores: number[] = [];
       let totalPromptTokens = 0;
@@ -4099,7 +4177,7 @@ export class CskhService implements OnModuleInit {
           this.auditSource === 'database' &&
           (!conv.messages?.data || conv.messages.data.length === 0)
         ) {
-          const { start, end } = this.graph.vietnamDateRange(
+          const { end } = this.graph.vietnamDateRange(
             auditDateFrom,
             auditDateTo,
           );
@@ -4107,7 +4185,6 @@ export class CskhService implements OnModuleInit {
             where: {
               conversationId: (conv as any).dbConversationId || conv.id,
               sentAt: {
-                gte: start,
                 lte: end,
               },
             },
@@ -4156,11 +4233,15 @@ export class CskhService implements OnModuleInit {
           auditDateTo,
         );
         const dayMessages = rangeMessages;
+        const transcriptMessages = this.graph.filterMessagesUpToRangeEnd(
+          messages,
+          auditDateTo,
+        );
         const activityRange = computeMessageActivityYmdRange(
           rangeMessages.map((m) => ({ created_time: m.created_time })),
         );
         const staffAbsent = !this.graph.hasStaffMessage(
-          rangeMessages,
+          transcriptMessages,
           config.pageId,
         );
         const needsFollowUp = this.graph.needsFollowUpOnDay(
@@ -4169,7 +4250,7 @@ export class CskhService implements OnModuleInit {
         );
         const noReplyForAi = staffAbsent;
         const transcript = this.graph.messagesToTranscript(
-          rangeMessages,
+          transcriptMessages,
           config.pageId,
         );
         const customerName = this.graph.resolveCustomerName(
@@ -4214,6 +4295,8 @@ export class CskhService implements OnModuleInit {
           fullTranscript,
           this.auditAiTranscriptMax,
         );
+        const transcriptTrimmed = aiTranscript.length < fullTranscript.length;
+        const historyCapped = messages.length >= this.auditMsgLimit;
 
         if (await this.shouldStopAuditJob(jobId)) return;
 
@@ -4227,6 +4310,8 @@ export class CskhService implements OnModuleInit {
               ? 'Instagram Direct'
               : 'Facebook Messenger',
           noReply: noReplyForAi,
+          truncated: historyCapped,
+          transcriptTrimmed,
           metadata: {
             jobRunId: jobId,
             conversationId: conv.id,
@@ -4243,7 +4328,13 @@ export class CskhService implements OnModuleInit {
                 }
               : {}),
             auditDayMessageCount: dayMessages.length,
-            transcriptMessageCount: rangeMessages.length,
+            transcriptMessageCount: transcriptMessages.length,
+            historyBeforeRangeCount: Math.max(
+              0,
+              transcriptMessages.length - rangeMessages.length,
+            ),
+            transcriptTrimmed,
+            historyCapped,
             noReply: needsFollowUp || staffAbsent,
             staffAbsent,
             needsFollowUp,
@@ -4261,6 +4352,10 @@ export class CskhService implements OnModuleInit {
           result.error
         ) {
           errors++;
+          const reason = String(
+            (result as { reason?: string }).reason || 'unknown',
+          );
+          errorReasons.set(reason, (errorReasons.get(reason) || 0) + 1);
         } else if (result && 'id' in result) {
           audited++;
           scores.push(Number((result as { score?: number }).score) || 0);
@@ -4352,10 +4447,7 @@ export class CskhService implements OnModuleInit {
               const pageName = config.pageName || config.pageId;
               let effectiveCapForPage = cap;
               if (!force && cap > 0) {
-                const pageAudited = this.countAuditedForPage(
-                  auditedKeys,
-                  config.pageId,
-                );
+                const pageAudited = auditedCountsByPage.get(config.pageId) ?? 0;
                 effectiveCapForPage = Math.max(0, cap - pageAudited);
                 if (effectiveCapForPage === 0) {
                   pagesFetchDone++;
@@ -4585,6 +4677,7 @@ export class CskhService implements OnModuleInit {
       await this.finishJob(jobId, paused ? 'paused' : 'done', {
         audited,
         errors,
+        errorReasons: Object.fromEntries(errorReasons),
         avgScore,
         pageCount: pages.length,
         total: inMemorySummary.fetched,
@@ -4606,6 +4699,14 @@ export class CskhService implements OnModuleInit {
           perAuditAvg: processed > 0 ? Math.round(totalTokens / processed) : 0,
         },
       });
+      if (errors > 0) {
+        const breakdown = [...errorReasons.entries()]
+          .map(([k, v]) => `${k}=${v}`)
+          .join(', ');
+        this.logger.warn(
+          `Audit job ${jobId.slice(0, 8)}: ${errors}/${processed} hội thoại KHÔNG chấm được (${breakdown}) — chưa ghi DB, lần chạy sau sẽ chấm lại`,
+        );
+      }
       if (paused) {
         this.logger.log(
           `Audit job ${jobId.slice(0, 8)}: TẠM DỪNG — đã chấm ${processed}/${inMemorySummary.fetched} hội thoại`,

@@ -18,7 +18,7 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
-import { UserRole } from './entities/user.entity';
+import { UserRole } from '@prisma/client';
 import { toPublicUser } from './user-role.util';
 
 @ApiTags('users')
@@ -30,7 +30,7 @@ export class UsersController {
 
   @Get()
   @ApiOperation({ summary: 'Danh sách người dùng (chỉ admin/manager)' })
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Roles(UserRole.admin, UserRole.manager)
   async findAll() {
     return {
       success: true,
@@ -41,7 +41,7 @@ export class UsersController {
   @Get(':id')
   @ApiOperation({ summary: 'Chi tiết một người dùng theo id (chỉ admin)' })
   @ApiParam({ name: 'id', description: 'ID người dùng' })
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.admin)
   async findOne(@Param('id') id: string) {
     const user = await this.usersService.findById(id);
     return {
@@ -53,7 +53,7 @@ export class UsersController {
   @Patch(':id')
   @ApiOperation({ summary: 'Cập nhật thông tin người dùng (chỉ admin)' })
   @ApiParam({ name: 'id', description: 'ID người dùng' })
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.admin)
   async update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
     const user = await this.usersService.update(id, updateUserDto);
     return {
@@ -66,7 +66,7 @@ export class UsersController {
   @Delete(':id')
   @ApiOperation({ summary: 'Xoá người dùng (chỉ admin)' })
   @ApiParam({ name: 'id', description: 'ID người dùng' })
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.admin)
   async remove(@Param('id') id: string) {
     await this.usersService.remove(id);
     return {

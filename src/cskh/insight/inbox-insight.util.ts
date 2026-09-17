@@ -3,98 +3,12 @@ import {
   type TranscriptLine,
 } from '../audit/audit-analytics.util';
 import type { ProductSearchEntry } from './insight-product-match.util';
-import { matchProductsInInboundText } from './insight-product-match.util';
-
-const VI_STOPWORDS = new Set([
-  'và',
-  'của',
-  'cho',
-  'với',
-  'là',
-  'có',
-  'không',
-  'em',
-  'anh',
-  'chị',
-  'ạ',
-  'dạ',
-  'shop',
-  'mình',
-  'bạn',
-  'này',
-  'kia',
-  'được',
-  'nhé',
-  'như',
-  'thì',
-  'để',
-  'còn',
-  'gì',
-  'nha',
-  'ok',
-  'ơi',
-  'the',
-  'xin',
-  'chào',
-  'nay',
-  'hôm',
-  'ngày',
-  'mai',
-  'đau',
-  'bị',
-  'bác',
-  'gia',
-  'giá',
-  'minh',
-  'ban',
-  'bán',
-  'mua',
-  'đặt',
-  'hàng',
-  'ship',
-  'giao',
-  'vcb',
-  'vien',
-  'viên',
-  'thuốc',
-  'sp',
-  'san',
-  'sản',
-  'phẩm',
-  'cho',
-  'xin',
-  'ad',
-  'ib',
-  'inbox',
-  'zalo',
-  'facebook',
-  'fb',
-  'combo',
-  'tư',
-  'vấn',
-  'tu',
-  'van',
-  'được',
-  'khong',
-  'co',
-  'roi',
-  'rồi',
-  'ạ',
-  'dạ',
-  'vậy',
-  'vay',
-  'nhiều',
-  'nhieu',
-  'lắm',
-  'lam',
-  'cần',
-  'can',
-  'muốn',
-  'muon',
-  'hỏi',
-  'hoi',
-  'ạ',
-]);
+import {
+  VI_STOPWORDS,
+  matchProductsInInboundText,
+  normalizeVi,
+  viTokens,
+} from './insight-product-match.util';
 
 export type InboxInsightConvRow = {
   conversationId: string;
@@ -123,15 +37,9 @@ export function auditDedupeKeyFromMeta(meta: Record<string, unknown> | null): st
 }
 
 export function extractKeywordsFromInboundText(text: string, limit = 8): string[] {
-  const normalized = text
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/\p{M}/gu, '')
-    .replace(/https?:\/\S+/g, ' ');
-  const tokens = normalized.match(/[a-z0-9à-ỹ]{4,}/gi) ?? [];
+  const normalized = normalizeVi(text.replace(/https?:\/\/\S+/g, ' '));
   const freq = new Map<string, number>();
-  for (const raw of tokens) {
-    const t = raw.trim();
+  for (const t of viTokens(normalized)) {
     if (t.length < 4 || VI_STOPWORDS.has(t)) continue;
     freq.set(t, (freq.get(t) ?? 0) + 1);
   }

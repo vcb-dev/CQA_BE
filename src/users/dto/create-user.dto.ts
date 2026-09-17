@@ -7,7 +7,7 @@ import {
   MaxLength,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { UserRole } from '../entities/user.entity';
+import { UserRole } from '@prisma/client';
 
 export class CreateUserDto {
   @ApiProperty({ description: 'Họ tên đầy đủ của người dùng' })

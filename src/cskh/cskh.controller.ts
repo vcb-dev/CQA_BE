@@ -274,6 +274,25 @@ export class CskhController {
     return this.cskh.refreshPagesFromOAuth(user.tenantId || undefined);
   }
 
+  /** Sửa kênh IG thiếu Fanpage ID (demo dev / sau migrate metadata). */
+  @Post('oauth/repair-instagram')
+  @UseGuards(JwtAuthGuard)
+  repairInstagram(@CurrentUser() user: User) {
+    return this.cskh.repairInstagramFacebookPageIds(user.tenantId || undefined);
+  }
+
+  @Get('instagram/test-readiness')
+  @UseGuards(JwtAuthGuard)
+  instagramTestReadiness(@CurrentUser() user: User) {
+    return this.cskh.getInstagramTestReadiness(user.tenantId || undefined);
+  }
+
+  @Post('instagram/prepare-test')
+  @UseGuards(JwtAuthGuard)
+  prepareInstagramTest(@CurrentUser() user: User) {
+    return this.cskh.prepareInstagramTest(user.tenantId || undefined);
+  }
+
   /** Sapo Partner OAuth — redirect browser (cài Client lên shop). */
   @Get('sapo/oauth/start')
   @ApiOperation({
@@ -598,6 +617,9 @@ export class CskhController {
       conversationId?: string;
       platform?: string;
       locationId?: string;
+      adId?: string;
+      adTitle?: string;
+      reportMetaPurchase?: boolean;
       lineItems?: Array<{ variantId?: string; quantity?: number; locationId?: string }>;
     },
   ) {
@@ -609,6 +631,9 @@ export class CskhController {
       conversationId: body.conversationId,
       platform: body.platform,
       locationId: body.locationId,
+      adId: body.adId,
+      adTitle: body.adTitle,
+      reportMetaPurchase: body.reportMetaPurchase,
       lineItems: (body.lineItems ?? []).map((item) => ({
         variantId: String(item.variantId ?? ''),
         quantity: Number(item.quantity ?? 1),

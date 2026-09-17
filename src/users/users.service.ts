@@ -1,10 +1,10 @@
 import { Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { isPrismaBusyError } from '../common/prisma-busy.util';
-import { User } from '@prisma/client';
+import { User, UserRole } from '@prisma/client';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { parseUserId, prismaRolesFromCqaRole, toPublicUser } from './user-role.util';
+import { parseUserId, prismaRolesFromInput, toPublicUser } from './user-role.util';
 
 @Injectable()
 export class UsersService {
@@ -41,7 +41,7 @@ export class UsersService {
         name: fullName,
         passwordHash: password,
         phone: phoneNumber,
-        roles: role ? prismaRolesFromCqaRole(role) : ['sales'],
+        roles: role ? prismaRolesFromInput(role) : [UserRole.user],
       },
     });
   }
@@ -95,7 +95,7 @@ export class UsersService {
         ...(fullName !== undefined ? { name: fullName } : {}),
         ...(password !== undefined ? { passwordHash: password } : {}),
         ...(phoneNumber !== undefined ? { phone: phoneNumber } : {}),
-        ...(role !== undefined ? { roles: prismaRolesFromCqaRole(role) } : {}),
+        ...(role !== undefined ? { roles: prismaRolesFromInput(role) } : {}),
       },
     });
     this.writeCached(userId, updated);

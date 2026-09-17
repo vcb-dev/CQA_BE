@@ -16,6 +16,7 @@ export type ParsedAdReferral = {
   fromAd: boolean;
   adId: string | null;
   adTitle: string | null;
+  adImageUrl: string | null;
   referralSource: string | null;
 };
 
@@ -63,7 +64,7 @@ export function isAdReferralNoiseText(text: string): boolean {
 
 export function parseWebhookReferral(referral: FbWebhookReferral | null | undefined): ParsedAdReferral {
   if (!referral || typeof referral !== 'object') {
-    return { fromAd: false, adId: null, adTitle: null, referralSource: null };
+    return { fromAd: false, adId: null, adTitle: null, adImageUrl: null, referralSource: null };
   }
 
   const source = typeof referral.source === 'string' ? referral.source.trim() : null;
@@ -73,12 +74,18 @@ export function parseWebhookReferral(referral: FbWebhookReferral | null | undefi
     referral.ads_context_data.ad_title.trim()
       ? referral.ads_context_data.ad_title.trim()
       : null;
+  const photo =
+    typeof referral.ads_context_data?.photo_url === 'string' &&
+    referral.ads_context_data.photo_url.trim().startsWith('http')
+      ? referral.ads_context_data.photo_url.trim()
+      : null;
   const fromAd = source === 'ADS' || Boolean(adId);
 
   return {
     fromAd,
     adId,
     adTitle,
+    adImageUrl: photo,
     referralSource: source,
   };
 }
@@ -89,6 +96,7 @@ export function detectAdFromMessageTexts(texts: string[]): ParsedAdReferral {
     fromAd: hit,
     adId: null,
     adTitle: null,
+    adImageUrl: null,
     referralSource: hit ? 'HEURISTIC' : null,
   };
 }

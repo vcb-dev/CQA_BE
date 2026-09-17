@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
+import FormData from 'form-data';
 import { CskhRedisSignalsService } from '../redis/cskh-redis-signals.service';
 import {
   dedupeChatMessages,
@@ -71,6 +72,28 @@ export type TranscriptLine = {
   attachmentUrl?: string | null;
   attachmentUrls?: string[];
 };
+
+export type OutboundAttachmentKind = 'image' | 'video' | 'file';
+
+/**
+ * graphAttachmentType: kiểm tra attachment type của file
+ * @param mime - mime type của file
+ * @param platform - platform của page
+ * @returns attachment type của file
+ */
+export function graphAttachmentType(
+  mime: string,
+  platform: CskhInboxGraphPlatform,
+): OutboundAttachmentKind {
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/')) return 'video';
+  if (platform === 'instagram') {
+    throw new Error(
+      'Instagram Direct chưa hỗ trợ gửi file tài liệu — chỉ ảnh/video.',
+    );
+  }
+  return 'file';
+}
 
 @Injectable()
 export class FacebookGraphService {
@@ -1679,5 +1702,60 @@ export class FacebookGraphService {
       );
       return null;
     });
+  }
+
+  /**
+   * Gửi file trong một request multipart tới /messages (Meta khuyến nghị).
+   * Tránh /message_attachments — hay lỗi "Unsupported request - method type: post" (đặc biệt IG).
+   */
+  async sendPageMessageWithFile(
+    pageId: string,
+    token: string,
+    recipientPsid: string,
+    file: { buffer: Buffer; mimeType: string; filename: string },
+    attachmentType: OutboundAttachmentKind,
+    _platform: CskhInboxGraphPlatform = 'messenger',
+  ): Promise<{ message_id?: string; recipient_id?: string }> {
+    const form = new FormData();
+    // recipient: khách hàng
+    form.append('recipient', JSON.stringify({ id: recipientPsid }));
+    form.append('messaging_type', 'RESPONSE');
+    form.append(
+      'message',
+      JSON.stringify({
+        attachment: {
+          type: attachmentType,
+          payload: {},
+        },
+      }),
+    );
+    form.append('filedata', file.buffer, {
+      filename: file.filename,
+      contentType: file.mimeType,
+    });
+
+    const url = `${GRAPH_BASE}/${pageId}/messages`;
+    try {
+      const res = await axios.post<{
+        message_id?: string;
+        recipient_id?: string;
+      }>(url, form, {
+        params: { access_token: token },
+        headers: form.getHeaders(),
+        timeout: 120_000,
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
+      });
+      return res.data;
+    } catch (e: unknown) {
+      const err = e as {
+        response?: { data?: { error?: { message?: string } } };
+        message?: string;
+      };
+      const fbErr = err.response?.data?.error;
+      throw new Error(
+        fbErr?.message || err.message || 'Graph multipart send failed',
+      );
+    }
   }
 }

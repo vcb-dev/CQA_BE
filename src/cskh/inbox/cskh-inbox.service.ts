@@ -26,6 +26,7 @@ import {
 import { CskhService } from '../cskh.service';
 import {
   FacebookGraphService,
+  graphAttachmentType,
   type FbConversation,
   type FbMessage,
 } from '../facebook/facebook-graph.service';
@@ -866,8 +867,16 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     if (/permission|not authorized|#200|pages_messaging/i.test(msg)) {
       return 'Page/IG chưa đủ quyền nhắn tin. Kiểm tra pages_messaging hoặc instagram_manage_messages.';
     }
-    if (/invalid user|does not exist|#100/i.test(msg)) {
+    if (
+      /invalid user|does not exist/i.test(msg) ||
+      (/#100/i.test(msg) &&
+        /recipient|user id|psid|cannot be found/i.test(msg) &&
+        !/must be a valid|parameter|json/i.test(msg))
+    ) {
       return 'PSID khách không hợp lệ hoặc hội thoại mất liên kết Facebook.';
+    }
+    if (/must be a valid JSON|invalid attachment|filedata/i.test(msg)) {
+      return `Facebook từ chối file đính kèm: ${msg.trim()}`;
     }
     return msg.trim() || 'Gửi tin Facebook thất bại';
   }
@@ -2164,13 +2173,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         throw e;
       }
     });
-    this.conversationStatsInflight.set(cacheKey, job);
-    void job.finally(() => {
-      if (this.conversationStatsInflight.get(cacheKey) === job) {
+    const tracked = job.finally(() => {
+      if (this.conversationStatsInflight.get(cacheKey) === tracked) {
         this.conversationStatsInflight.delete(cacheKey);
       }
     });
-    return job;
+    this.conversationStatsInflight.set(cacheKey, tracked);
+    return tracked;
   }
 
   private enqueueConversationStatsCount<T>(fn: () => Promise<T>): Promise<T> {
@@ -2443,13 +2452,17 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       },
       listCacheKey,
     );
+    const tracked = !opts?.cursor
+      ? load.finally(() => {
+          if (this.conversationListInflight.get(listCacheKey) === tracked) {
+            this.conversationListInflight.delete(listCacheKey);
+          }
+        })
+      : load;
     if (!opts?.cursor) {
-      this.conversationListInflight.set(listCacheKey, load);
-      void load.finally(() =>
-        this.conversationListInflight.delete(listCacheKey),
-      );
+      this.conversationListInflight.set(listCacheKey, tracked);
     }
-    return load;
+    return tracked;
   }
 
   private async loadConversationListPage(
@@ -2954,7 +2967,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       let synced = 0;
       for (const page of pages) {
         if (!page.pageAccessToken) continue;
-        if (Date.now() < (this.igGraphCapabilityBackoff.get(page.pageId) ?? 0)) {
+        if (
+          Date.now() < (this.igGraphCapabilityBackoff.get(page.pageId) ?? 0)
+        ) {
           continue;
         }
         try {
@@ -2967,7 +2982,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
             cskhInboxGraphPlatform(page.metadata) === 'instagram' &&
             /capability|#3\)/i.test(msg)
           ) {
-            this.igGraphCapabilityBackoff.set(page.pageId, Date.now() + 180_000);
+            this.igGraphCapabilityBackoff.set(
+              page.pageId,
+              Date.now() + 180_000,
+            );
           }
           this.logger.warn(
             `[catch-up] Lỗi page ${page.pageName || page.pageId}: ${msg}`,
@@ -4635,77 +4653,42 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       trimmed,
       tenantId,
       options,
-    );
-    this.inflightSends.set(lockKey, run);
-    void run.finally(() => {
+    ).finally(() => {
       setTimeout(() => {
         if (this.inflightSends.get(lockKey) === run)
           this.inflightSends.delete(lockKey);
       }, 2500);
     });
+    this.inflightSends.set(lockKey, run);
     return run;
   }
 
+  // assertOutboundInboxUpload: kiểm tra file upload có hợp lệ không
+  private static readonly INBOX_OUTBOUND_MEDIA_MAX_BYTES = 25 * 1024 * 1024;
+  private assertOutboundInboxUpload(file: Express.Multer.File): void {
+    if (!file.buffer?.length) {
+      throw new BadRequestException('File rỗng');
+    }
+    if (file.size > CskhInboxService.INBOX_OUTBOUND_MEDIA_MAX_BYTES) {
+      throw new BadRequestException('File quá lớn (tối đa 25MB)');
+    }
+    const mime = file.mimetype || 'application/octet-stream';
+    if (!/^image\/|^video\/|^application\/pdf$/i.test(mime)) {
+      throw new BadRequestException(
+        'Định dạng không hỗ trợ — dùng ảnh, video hoặc PDF (Messenger).',
+      );
+    }
+  }
+
+  // sendMessageUnlocked: gửi tin nhắn không bị lock
   private async sendMessageUnlocked(
     conversationId: string,
     trimmed: string,
     tenantId?: string,
     options?: { autoTranslate?: boolean; originalText?: string },
   ) {
-    const conv = await findInboxConversationById(
-      this.prisma,
-      conversationId,
-      tenantId,
-    );
-    if (!conv)
-      throw new NotFoundException(
-        'Hội thoại không tồn tại hoặc không có quyền',
-      );
-
-    if (!conv.participantPsid?.trim()) {
-      throw new BadRequestException(
-        'Thiếu PSID khách — không gửi được tin Messenger. Mở lại hội thoại để đồng bộ từ Facebook.',
-      );
-    }
-
-    const config = await this.prisma.facebookCskhConfig.findFirst({
-      where: tenantId
-        ? { pageId: conv.pageId, tenantId }
-        : { pageId: conv.pageId },
-    });
-    if (!config?.pageAccessToken) {
-      throw new BadRequestException('Page chưa có access token');
-    }
-
-    let messagingOwnerId = cskhGraphMessagingOwnerId(
-      config.pageId,
-      config.metadata,
-    );
-    if (
-      cskhInboxGraphPlatform(config.metadata) === 'instagram' &&
-      messagingOwnerId === config.pageId
-    ) {
-      await this.cskh.repairInstagramFacebookPageIds(config.tenantId || tenantId);
-      const repaired = await this.prisma.facebookCskhConfig.findFirst({
-        where: tenantId
-          ? { pageId: conv.pageId, tenantId }
-          : { pageId: conv.pageId },
-      });
-      if (repaired) {
-        messagingOwnerId = cskhGraphMessagingOwnerId(
-          repaired.pageId,
-          repaired.metadata,
-        );
-      }
-    }
-    if (
-      cskhInboxGraphPlatform(config.metadata) === 'instagram' &&
-      messagingOwnerId === config.pageId
-    ) {
-      throw new BadRequestException(
-        'Kênh Instagram chưa gắn Fanpage — vào Cài đặt kênh → Cập nhật kết nối Facebook.',
-      );
-    }
+    const { conv, config, messagingOwnerId } =
+      await this.resolveOutboundMessagingContext(conversationId, tenantId);
 
     let outboundText = trimmed;
     let originalText: string | null = null;
@@ -6970,5 +6953,225 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       return rows.find((r) => r.customerName === conv.customerName) ?? null;
     }
     return null;
+  }
+
+  // resolveOutboundMessagingContext: resolve context cho gửi tin nhắn media
+  private async resolveOutboundMessagingContext(
+    conversationId: string,
+    tenantId?: string,
+  ): Promise<{
+    conv: NonNullable<Awaited<ReturnType<typeof findInboxConversationById>>>;
+    config: FacebookCskhConfig;
+    messagingOwnerId: string;
+  }> {
+    // findInboxConversationById: tìm inbox conversation bằng ID trong database
+    const conv = await findInboxConversationById(
+      this.prisma,
+      conversationId,
+      tenantId,
+    );
+    if (!conv) {
+      throw new NotFoundException(
+        'Hội thoại không tồn tại hoặc không có quyền',
+      );
+    }
+    if (!conv.participantPsid?.trim()) {
+      throw new BadRequestException(
+        'Thiếu PSID khách — không gửi được tin Messenger. Mở lại hội thoại để đồng bộ từ Facebook.',
+      );
+    }
+
+    // findFacebookCskhConfigByPageId: tìm config kết nối Facebook cho page
+    const config = await this.prisma.facebookCskhConfig.findFirst({
+      where: tenantId
+        ? { pageId: conv.pageId, tenantId }
+        : { pageId: conv.pageId },
+    });
+    if (!config?.pageAccessToken) {
+      throw new BadRequestException('Page chưa có access token');
+    }
+    // cskhGraphMessagingOwnerId: tính owner_id cho gửi tin nhắn Facebook
+    let messagingOwnerId = cskhGraphMessagingOwnerId(
+      config.pageId,
+      config.metadata,
+    );
+    if (
+      cskhInboxGraphPlatform(config.metadata) === 'instagram' &&
+      messagingOwnerId === config.pageId
+    ) {
+      // repairInstagramFacebookPageIds: sửa lỗi kết nối Instagram Facebook
+      await this.cskh.repairInstagramFacebookPageIds(
+        config.tenantId || tenantId,
+      );
+      // repairInstagramFacebookPageIds: tìm config kết nối Facebook cho page sau khi sửa lỗi
+      const repaired = await this.prisma.facebookCskhConfig.findFirst({
+        where: tenantId
+          ? { pageId: conv.pageId, tenantId }
+          : { pageId: conv.pageId },
+      });
+      if (repaired) {
+        // cskhGraphMessagingOwnerId: tính owner_id cho gửi tin nhắn Facebook sau khi sửa lỗi
+        messagingOwnerId = cskhGraphMessagingOwnerId(
+          repaired.pageId,
+          repaired.metadata,
+        );
+      }
+    }
+    if (
+      cskhInboxGraphPlatform(config.metadata) === 'instagram' &&
+      messagingOwnerId === config.pageId
+    ) {
+      throw new BadRequestException(
+        'Kênh Instagram chưa gắn Fanpage — vào Cài đặt kênh → Cập nhật kết nối Facebook.',
+      );
+    }
+    // conv: cuộc hội thoại
+    // config: config của page
+    // messagingOwnerId: owner_id của page
+    return { conv, config, messagingOwnerId };
+  }
+  // sendMessageMedia: gửi tin nhắn media
+  async sendMessageMedia(
+    conversationId: string,
+    tenantId?: string,
+    file?: Express.Multer.File,
+    text?: string,
+  ) {
+    // trimmedText: lấy text từ param và trim whitespace
+    const trimmedText = (text ?? '').trim();
+    // hasFile: kiểm tra file có tồn tại không
+    const hasFile = Boolean(file?.buffer?.length);
+    if (!hasFile && !trimmedText) {
+      throw new BadRequestException('Cần nội dung text hoặc file');
+    }
+    if (!hasFile) {
+      return this.sendMessage(conversationId, trimmedText, tenantId, {
+        autoTranslate: false,
+      });
+    }
+
+    this.assertOutboundInboxUpload(file!);
+
+    // resolveOutboundMessagingContext: resolve context cho gửi tin nhắn media
+    // lấy ra được conv, config, messagingOwnerId
+    const ctx = await this.resolveOutboundMessagingContext(
+      conversationId,
+      tenantId,
+    );
+    // platform là kiểm tra platform của page
+    // platform là nền tảng áp dụng cho gửi tin nhắn media
+    const platform = cskhInboxGraphPlatform(ctx.config.metadata);
+    if (trimmedText) {
+      await this.sendMessage(conversationId, trimmedText, tenantId, {
+        autoTranslate: false,
+      });
+    }
+    // mime là kiểm tra mime type của file
+    const mime = file!.mimetype || 'application/octet-stream';
+    // attachmentType là kiểm tra attachment type của file
+    let attachmentType: ReturnType<typeof graphAttachmentType>;
+    try {
+      attachmentType = graphAttachmentType(mime, platform);
+    } catch (e) {
+      throw new BadRequestException(
+        (e as Error).message || 'Instagram Direct chưa hỗ trợ loại file này.',
+      );
+    }
+    // pageToken là access token của page
+    const pageToken = ctx.config.pageAccessToken;
+    if (!pageToken) {
+      throw new BadRequestException('Page chưa có access token');
+    }
+    // recipientPsid là PSID của khách hàng
+    const recipientPsid = ctx.conv.participantPsid?.trim();
+    if (!recipientPsid) {
+      throw new BadRequestException(
+        'Thiếu PSID khách — không gửi được tin. Mở lại hội thoại để đồng bộ.',
+      );
+    }
+    const displayText =
+      attachmentType === 'image'
+        ? '[Ảnh]'
+        : attachmentType === 'video'
+          ? '[Video]'
+          : '[File]';
+    // pending là tạo message mới trong database
+    const pending = await this.prisma.cskhInboxMessage.create({
+      data: {
+        conversationId: ctx.conv.id,
+        direction: 'outbound',
+        senderType: 'staff',
+        text: displayText,
+        messageType: attachmentType === 'file' ? 'file' : attachmentType,
+        attachmentUrl: null, // webhook/sync có thể fill sau
+        status: 'pending',
+        tenantId,
+      },
+    });
+    // updatedConv là cập nhật conversation trong database
+    const updatedConv = await this.prisma.cskhInboxConversation.update({
+      where: { id: ctx.conv.id },
+      data: {
+        lastMessage: displayText,
+        lastMessageAt: new Date(),
+        unreadCount: 0,
+        awaitingLabel: false,
+      },
+    });
+    // publishMessageRealtime: publish message realtime
+    this.publishMessageRealtime(
+      ctx.conv.pageId,
+      ctx.conv.id,
+      [pending],
+      false,
+      tenantId,
+      updatedConv,
+    );
+    try {
+      const result = await this.graph.sendPageMessageWithFile(
+        ctx.messagingOwnerId,
+        pageToken,
+        recipientPsid,
+        {
+          buffer: file!.buffer,
+          mimeType: mime,
+          filename: file!.originalname || 'upload',
+        },
+        attachmentType,
+        platform,
+      );
+      // updateMessageStatus: cập nhật status của message trong database
+      const sent = await this.prisma.cskhInboxMessage.update({
+        where: { id: pending.id },
+        data: { status: 'sent', fbMessageId: result.message_id ?? null },
+      });
+      // publishMessageRealtime: publish message realtime
+      this.publishMessageRealtime(
+        ctx.conv.pageId,
+        ctx.conv.id,
+        [sent],
+        false,
+        tenantId,
+        updatedConv,
+      );
+      // formatMessageRow: format message row
+      return this.formatMessageRow(sent);
+    } catch (e) {
+      // updateMessageStatus: cập nhật status của message trong database
+      const failed = await this.prisma.cskhInboxMessage.update({
+        where: { id: pending.id },
+        data: { status: 'failed' },
+      });
+      // publishMessageRealtime: publish message realtime
+      this.publishMessageRealtime(
+        ctx.conv.pageId,
+        ctx.conv.id,
+        [failed],
+        false,
+        tenantId,
+        updatedConv,
+      );
+      throw new BadRequestException(this.facebookSendErrorMessage(e));
+    }
   }
 }

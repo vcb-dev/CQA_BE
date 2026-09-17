@@ -11,7 +11,7 @@ import {
   primaryRoleFromPrisma,
   prismaRolesFromInput,
 } from '../users/user-role.util';
-import { RBAC_CATALOG, RBAC_CATALOG_BY_CODE } from './rbac.catalog';
+import { RBAC_CATALOG, RBAC_CATALOG_BY_CODE } from './dto/rbac.catalog';
 import { CreateUserDto } from './dto/create-user.dto';
 import {
   ListUsersQueryDto,

@@ -8,7 +8,7 @@ import {
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
-import { RBAC_ROLE_CODES } from '../rbac.catalog';
+import { RBAC_ROLE_CODES } from './rbac.catalog';
 
 export class CreateUserDto {
   @ApiProperty({ example: 'nhanvien@vienchibao.com' })

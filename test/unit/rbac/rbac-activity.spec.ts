@@ -1,6 +1,6 @@
 import { of } from 'rxjs';
-import { RbacActivityService } from '../../../src/rbac/rbac-activity.service';
-import { RbacActivityInterceptor } from '../../../src/rbac/rbac-activity.interceptor';
+import { RbacActivityService } from '../../../src/rbac/activity/rbac-activity.service';
+import { RbacActivityInterceptor } from '../../../src/rbac/activity/rbac-activity.interceptor';
 
 describe('RbacActivityService', () => {
   const makePrisma = () => {

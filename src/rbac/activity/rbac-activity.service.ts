@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from '../../prisma/prisma.service';
 
 const FLUSH_INTERVAL_MS = 30_000; // gom ghi DB theo lô mỗi 30 giây
 

@@ -2,7 +2,7 @@ import {
   RBAC_CATALOG,
   RBAC_CATALOG_BY_CODE,
   RBAC_ROLE_CODES,
-} from '../../../src/rbac/rbac.catalog';
+} from '../../../src/rbac/dto/rbac.catalog';
 
 describe('rbac.catalog', () => {
   it('RBAC_ROLE_CODES đúng 4 vai trò theo thứ tự enum UserRole', () => {

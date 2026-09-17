@@ -2,7 +2,7 @@ import { Type } from 'class-transformer';
 import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
-import { RBAC_ROLE_CODES } from '../rbac.catalog';
+import { RBAC_ROLE_CODES } from './rbac.catalog';
 
 export const RBAC_USERS_DEFAULT_PAGE_SIZE = 20;
 export const RBAC_USERS_MAX_PAGE_SIZE = 100;

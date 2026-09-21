@@ -1,0 +1,29 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cqa-postgres-local
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: cqa_local_dev
+      POSTGRES_DB: cqa_crm
+    volumes:
+      - cqa_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d cqa_crm']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: cqa-redis-local
+    ports:
+      - '6379:6379'
+    volumes:
+      - cqa_redis_data:/data
+
+volumes:
+  cqa_pg_data:
+  cqa_redis_data:

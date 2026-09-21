@@ -1,60 +1,69 @@
+import type { RawBodyRequest } from '@nestjs/common';
 import {
+  BadRequestException,
+  Body,
   Controller,
+  Delete,
   Get,
+  Header,
+  Headers,
+  Logger,
+  MessageEvent,
+  Param,
+  Patch,
   Post,
   Put,
-  Patch,
-  Delete,
-  Body,
-  Param,
   Query,
-  Res,
   Req,
-  Headers,
-  UseGuards,
-  BadRequestException,
-  UnauthorizedException,
+  Res,
   Sse,
-  MessageEvent,
-  Header,
-  Logger,
+  UnauthorizedException,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import type { Response, Request } from 'express';
-import type { RawBodyRequest } from '@nestjs/common';
-import { merge, interval, map, filter, Observable, tap, finalize } from 'rxjs';
-import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
+import type { User } from '@prisma/client';
+import type { Request, Response } from 'express';
+import { memoryStorage } from 'multer';
+import { filter, finalize, interval, map, merge, Observable, tap } from 'rxjs';
 import { COOKIE_ACCESS, LEGACY_COOKIE_ACCESS } from '../auth/cookie.constants';
-import { CskhService } from './cskh.service';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { UsersService } from '../users/users.service';
+import { CskhInstagramCommentsService } from './comment/cskh-instagram-comments.service';
 import { CskhInsightService } from './cskh-insight.service';
-import { CskhInboxService } from './inbox/cskh-inbox.service';
+import { CskhService } from './cskh.service';
+import { CustomerAnalyticsService } from './customer-analytics.service';
+import { ReplyIgCommentDto } from './dto/reply-ig-comment.dto';
+import { parseMediaProxyUrlFromRequest } from './facebook/facebook-message.util';
+import { verifyFacebookWebhookSignature } from './facebook/facebook-oauth.util';
 import { CskhInboxLabelsService } from './inbox/cskh-inbox-labels.service';
+import { parseInboxMonthKey } from './inbox/cskh-inbox-month.util';
 import {
   CskhInboxRealtimeService,
   type InboxRealtimePayload,
 } from './inbox/cskh-inbox-realtime.service';
+import { CskhInboxService } from './inbox/cskh-inbox.service';
 import { inboxRtLog, inboxRtWarn } from './inbox/inbox-realtime-debug.util';
-import { RedisQueueService } from './redis/redis-queue.service';
-import { verifyFacebookWebhookSignature } from './facebook/facebook-oauth.util';
-import { parseMediaProxyUrlFromRequest } from './facebook/facebook-message.util';
-import { SapoOAuthService } from './sapo/sapo-oauth.service';
-import { SapoProductService } from './sapo/sapo-product.service';
-import { SapoOrderService } from './sapo/sapo-order.service';
-import { SapoFullSyncService, type SapoSyncResource } from './sapo/sapo-full-sync.service';
-import { SapoDisplayService } from './sapo/sapo-display.service';
-import { ProductAnalyticsService } from './product-analytics.service';
 import { OmsCatalogService } from './oms/oms-catalog.service';
-import { OmsProductOperationsService } from './oms/oms-product-operations.service';
 import { OmsOrderService } from './oms/oms-order.service';
-import { CustomerAnalyticsService } from './customer-analytics.service';
+import { OmsProductOperationsService } from './oms/oms-product-operations.service';
+import { ProductAnalyticsService } from './product-analytics.service';
+import { RedisQueueService } from './redis/redis-queue.service';
 import { isSapoApiReady } from './sapo/sapo-api.util';
-import { parseInboxMonthKey } from './inbox/cskh-inbox-month.util';
-import { ConfigService } from '@nestjs/config';
-import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
-import { SkipThrottle } from '@nestjs/throttler';
-import { JwtService } from '@nestjs/jwt';
-import { UsersService } from '../users/users.service';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
-import type { User } from '@prisma/client';
+import { SapoDisplayService } from './sapo/sapo-display.service';
+import {
+  SapoFullSyncService,
+  type SapoSyncResource,
+} from './sapo/sapo-full-sync.service';
+import { SapoOAuthService } from './sapo/sapo-oauth.service';
+import { SapoOrderService } from './sapo/sapo-order.service';
+import { SapoProductService } from './sapo/sapo-product.service';
 
 @ApiTags('cskh')
 @ApiBearerAuth('JWT-auth')
@@ -83,8 +92,8 @@ export class CskhController {
     private readonly jwtService: JwtService,
     private readonly usersService: UsersService,
     private readonly configService: ConfigService,
+    private readonly igComments: CskhInstagramCommentsService,
   ) {}
-
 
   /** OAuth — không cần JWT (redirect browser). */
   @Get('oauth/start')
@@ -106,9 +115,7 @@ export class CskhController {
       token,
       req.cookies?.[COOKIE_ACCESS] as string | undefined,
       req.cookies?.[LEGACY_COOKIE_ACCESS] as string | undefined,
-    ].filter(
-      (v): v is string => typeof v === 'string' && v.length > 0,
-    );
+    ].filter((v): v is string => typeof v === 'string' && v.length > 0);
     const secret = this.configService.get<string>('jwt.secret');
     for (const authToken of candidates) {
       try {
@@ -134,7 +141,9 @@ export class CskhController {
   ) {
     if (error) {
       const msg = encodeURIComponent(errorDescription || error);
-      return res.redirect(`${this.cskh.defaultOAuthReturnUrl()}&oauth_error=${msg}`);
+      return res.redirect(
+        `${this.cskh.defaultOAuthReturnUrl()}&oauth_error=${msg}`,
+      );
     }
     try {
       const result = await this.cskh.handleOAuthCallback(code, state);
@@ -143,8 +152,12 @@ export class CskhController {
       const fbParam = result.syncing ? 'syncing' : String(result.pageCount);
       return res.redirect(`${base}${sep}fb_connected=${fbParam}`);
     } catch (e) {
-      const msg = encodeURIComponent(e instanceof Error ? e.message : 'OAuth failed');
-      return res.redirect(`${this.cskh.defaultOAuthReturnUrl()}&oauth_error=${msg}`);
+      const msg = encodeURIComponent(
+        e instanceof Error ? e.message : 'OAuth failed',
+      );
+      return res.redirect(
+        `${this.cskh.defaultOAuthReturnUrl()}&oauth_error=${msg}`,
+      );
     }
   }
 
@@ -195,16 +208,16 @@ export class CskhController {
 
   @Post('pages/sync-ad-spend')
   @UseGuards(JwtAuthGuard)
-  syncPagesAdSpend(
-    @CurrentUser() user: User,
-    @Query('date') date?: string,
-  ) {
+  syncPagesAdSpend(@CurrentUser() user: User, @Query('date') date?: string) {
     const dateTrimmed = date?.trim();
     const statDate =
       dateTrimmed && /^\d{4}-\d{2}-\d{2}$/.test(dateTrimmed)
         ? dateTrimmed
         : this.cskh.vietnamCalendarDate(0);
-    return this.cskh.syncAllPagesAdSpend([statDate], user.tenantId || undefined);
+    return this.cskh.syncAllPagesAdSpend(
+      [statDate],
+      user.tenantId || undefined,
+    );
   }
 
   @Put('pages/manual')
@@ -230,8 +243,15 @@ export class CskhController {
 
   @Patch('pages/bulk-enabled')
   @UseGuards(JwtAuthGuard)
-  setPagesEnabledBulk(@CurrentUser() user: User, @Body() body: { enabled?: boolean; pageIds?: string[] }) {
-    return this.cskh.setPagesEnabledBulk(Boolean(body.enabled), body.pageIds, user.tenantId || undefined);
+  setPagesEnabledBulk(
+    @CurrentUser() user: User,
+    @Body() body: { enabled?: boolean; pageIds?: string[] },
+  ) {
+    return this.cskh.setPagesEnabledBulk(
+      Boolean(body.enabled),
+      body.pageIds,
+      user.tenantId || undefined,
+    );
   }
 
   @Patch('pages/:pageId/enabled')
@@ -241,7 +261,11 @@ export class CskhController {
     @Param('pageId') pageId: string,
     @Body() body: { enabled?: boolean },
   ) {
-    return this.cskh.setPageEnabled(pageId, Boolean(body.enabled), user.tenantId || undefined);
+    return this.cskh.setPageEnabled(
+      pageId,
+      Boolean(body.enabled),
+      user.tenantId || undefined,
+    );
   }
 
   @Delete('pages/:pageId')
@@ -333,7 +357,8 @@ export class CskhController {
       variantCount,
       mode: apiReady ? 'api+db' : 'db_only',
       resources: {
-        products: 'products / product_variants / product_images / inventory_levels',
+        products:
+          'products / product_variants / product_images / inventory_levels',
         customers: 'customers',
         orders: 'orders / order_items',
         collections: 'categories',
@@ -352,7 +377,13 @@ export class CskhController {
     @Body() body?: { resource?: string },
   ) {
     const raw = (body?.resource ?? resourceQuery ?? 'all').trim().toLowerCase();
-    const allowed: SapoSyncResource[] = ['all', 'products', 'customers', 'orders', 'collections'];
+    const allowed: SapoSyncResource[] = [
+      'all',
+      'products',
+      'customers',
+      'orders',
+      'collections',
+    ];
     if (!allowed.includes(raw as SapoSyncResource)) {
       throw new BadRequestException(`resource phải là: ${allowed.join(', ')}`);
     }
@@ -370,7 +401,9 @@ export class CskhController {
     try {
       return await this.sapoFullSync.sync('products');
     } catch (e) {
-      throw new BadRequestException(e instanceof Error ? e.message : 'Sapo sync products failed');
+      throw new BadRequestException(
+        e instanceof Error ? e.message : 'Sapo sync products failed',
+      );
     }
   }
 
@@ -380,7 +413,9 @@ export class CskhController {
     try {
       return await this.sapoFullSync.sync('customers');
     } catch (e) {
-      throw new BadRequestException(e instanceof Error ? e.message : 'Sapo sync customers failed');
+      throw new BadRequestException(
+        e instanceof Error ? e.message : 'Sapo sync customers failed',
+      );
     }
   }
 
@@ -390,7 +425,9 @@ export class CskhController {
     try {
       return await this.sapoFullSync.sync('orders');
     } catch (e) {
-      throw new BadRequestException(e instanceof Error ? e.message : 'Sapo sync orders failed');
+      throw new BadRequestException(
+        e instanceof Error ? e.message : 'Sapo sync orders failed',
+      );
     }
   }
 
@@ -400,7 +437,9 @@ export class CskhController {
     try {
       return await this.sapoFullSync.sync('collections');
     } catch (e) {
-      throw new BadRequestException(e instanceof Error ? e.message : 'Sapo sync collections failed');
+      throw new BadRequestException(
+        e instanceof Error ? e.message : 'Sapo sync collections failed',
+      );
     }
   }
 
@@ -453,7 +492,9 @@ export class CskhController {
       source: this.sapoProducts.catalogSource(),
       items: items.map((v) => {
         const variantTitle =
-          v.variantTitle && !/^default/i.test(v.variantTitle) ? v.variantTitle : '';
+          v.variantTitle && !/^default/i.test(v.variantTitle)
+            ? v.variantTitle
+            : '';
         // Tên SP sạch; size/màu tách riêng ở variantTitle để FE gắn nhãn Size/Màu.
         const name = v.productTitle;
         const price = parseFloat(v.price) || 0;
@@ -572,7 +613,11 @@ export class CskhController {
       adId?: string;
       adTitle?: string;
       reportMetaPurchase?: boolean;
-      lineItems?: Array<{ variantId?: string; quantity?: number; locationId?: string }>;
+      lineItems?: Array<{
+        variantId?: string;
+        quantity?: number;
+        locationId?: string;
+      }>;
     },
   ) {
     return this.omsOrders.createOrder({
@@ -662,12 +707,21 @@ export class CskhController {
 
   @Post('monitor/run')
   @UseGuards(JwtAuthGuard)
-  async runMonitor(@CurrentUser() user: User, @Body() body: { maxConversations?: number }) {
-    const running = await this.cskh.findRunningJob('monitor', user.tenantId || undefined);
+  async runMonitor(
+    @CurrentUser() user: User,
+    @Body() body: { maxConversations?: number },
+  ) {
+    const running = await this.cskh.findRunningJob(
+      'monitor',
+      user.tenantId || undefined,
+    );
     if (running) {
       return { jobId: running.id, status: 'running', alreadyRunning: true };
     }
-    const job = await this.cskh.createJob('monitor', user.tenantId || undefined);
+    const job = await this.cskh.createJob(
+      'monitor',
+      user.tenantId || undefined,
+    );
     void this.cskh.runMonitorJob(job.id, body.maxConversations);
     return { jobId: job.id, status: 'running', alreadyRunning: false };
   }
@@ -689,7 +743,12 @@ export class CskhController {
     },
   ) {
     const auditDateFrom = (body.auditDateFrom || body.auditDate || '').trim();
-    const auditDateTo = (body.auditDateTo || body.auditDateFrom || body.auditDate || '').trim();
+    const auditDateTo = (
+      body.auditDateTo ||
+      body.auditDateFrom ||
+      body.auditDate ||
+      ''
+    ).trim();
     if (!auditDateFrom || !/^\d{4}-\d{2}-\d{2}$/.test(auditDateFrom)) {
       throw new BadRequestException('Bắt buộc chọn ngày bắt đầu (YYYY-MM-DD)');
     }
@@ -697,7 +756,9 @@ export class CskhController {
       throw new BadRequestException('Bắt buộc chọn ngày kết thúc (YYYY-MM-DD)');
     }
     if (auditDateFrom > auditDateTo) {
-      throw new BadRequestException('Ngày bắt đầu phải trước hoặc bằng ngày kết thúc');
+      throw new BadRequestException(
+        'Ngày bắt đầu phải trước hoặc bằng ngày kết thúc',
+      );
     }
     const pageId = body.pageId?.trim() || undefined;
     const scanAllChannels = Boolean(body.scanAllChannels) || !pageId;
@@ -709,15 +770,30 @@ export class CskhController {
         ? Math.min(5000, Math.floor(body.maxConversations))
         : undefined;
     if (body.force) {
-      await this.cskh.cancelRunningJobs('audit', undefined, user.tenantId || undefined);
+      await this.cskh.cancelRunningJobs(
+        'audit',
+        undefined,
+        user.tenantId || undefined,
+      );
     } else {
-      await this.cskh.releaseStaleJobs('audit', 5 * 60 * 1000, user.tenantId || undefined);
+      await this.cskh.releaseStaleJobs(
+        'audit',
+        5 * 60 * 1000,
+        user.tenantId || undefined,
+      );
     }
-    const active = await this.cskh.findActiveJob('audit', user.tenantId || undefined);
+    const active = await this.cskh.findActiveJob(
+      'audit',
+      user.tenantId || undefined,
+    );
     if (active) {
       return { jobId: active.id, status: active.status, alreadyRunning: true };
     }
-    const job = await this.cskh.createJob('audit', user.tenantId || undefined, 'queued');
+    const job = await this.cskh.createJob(
+      'audit',
+      user.tenantId || undefined,
+      'queued',
+    );
     const auditOptions = {
       auditDateFrom,
       auditDateTo,
@@ -725,7 +801,10 @@ export class CskhController {
       force: Boolean(body.force),
       pageId: scanAllChannels ? undefined : pageId,
     };
-    const queued = await this.redisQueue.enqueueAuditJob({ jobId: job.id, options: auditOptions });
+    const queued = await this.redisQueue.enqueueAuditJob({
+      jobId: job.id,
+      options: auditOptions,
+    });
     if (!queued) {
       this.logger.warn(
         `[audit] Redis queue unavailable — chạy inline trên API (job ${job.id.slice(0, 8)})`,
@@ -750,7 +829,11 @@ export class CskhController {
   @Post('audit/cancel')
   @UseGuards(JwtAuthGuard)
   async cancelAudit(@CurrentUser() user: User) {
-    const n = await this.cskh.cancelRunningJobs('audit', undefined, user.tenantId || undefined);
+    const n = await this.cskh.cancelRunningJobs(
+      'audit',
+      undefined,
+      user.tenantId || undefined,
+    );
     return { cancelled: n };
   }
 
@@ -814,7 +897,8 @@ export class CskhController {
     @Query('pageId') pageId?: string,
   ) {
     const from = auditDateFrom?.trim();
-    if (!from) throw new BadRequestException('Bắt buộc auditDateFrom (YYYY-MM-DD)');
+    if (!from)
+      throw new BadRequestException('Bắt buộc auditDateFrom (YYYY-MM-DD)');
     return this.insights.getDashboard({
       auditDateFrom: from,
       auditDateTo: auditDateTo?.trim(),
@@ -833,8 +917,16 @@ export class CskhController {
     @Query('pageId') pageId?: string,
   ) {
     const from = (auditDateFrom || auditDate)?.trim();
-    if (!from) throw new BadRequestException('Bắt buộc auditDateFrom hoặc auditDate (YYYY-MM-DD)');
-    return this.cskh.getAuditDayStats(from, auditDateTo?.trim(), pageId?.trim(), user.tenantId || undefined);
+    if (!from)
+      throw new BadRequestException(
+        'Bắt buộc auditDateFrom hoặc auditDate (YYYY-MM-DD)',
+      );
+    return this.cskh.getAuditDayStats(
+      from,
+      auditDateTo?.trim(),
+      pageId?.trim(),
+      user.tenantId || undefined,
+    );
   }
 
   @Get('audits/comparison')
@@ -848,12 +940,19 @@ export class CskhController {
     const id = auditId?.trim();
     if (!day) throw new BadRequestException('Bắt buộc auditDate (YYYY-MM-DD)');
     if (!id) throw new BadRequestException('Bắt buộc auditId');
-    return this.cskh.getAuditComparisonStats(day, id, user.tenantId || undefined);
+    return this.cskh.getAuditComparisonStats(
+      day,
+      id,
+      user.tenantId || undefined,
+    );
   }
 
   @Get('audits/score-history')
   @UseGuards(JwtAuthGuard)
-  getAuditScoreHistory(@CurrentUser() user: User, @Query('auditId') auditId?: string) {
+  getAuditScoreHistory(
+    @CurrentUser() user: User,
+    @Query('auditId') auditId?: string,
+  ) {
     const id = auditId?.trim();
     if (!id) throw new BadRequestException('Bắt buộc auditId');
     return this.cskh.getAuditScoreHistory(id, user.tenantId || undefined);
@@ -872,13 +971,19 @@ export class CskhController {
     @Query('hub.verify_token') token: string,
     @Query('hub.challenge') challenge: string,
   ) {
-    console.log(`[Webhook GET] Received verification request: mode=${mode}, token=${token}, challenge=${challenge}`);
+    console.log(
+      `[Webhook GET] Received verification request: mode=${mode}, token=${token}, challenge=${challenge}`,
+    );
     try {
       const result = this.inbox.verifyWebhookToken(mode, token, challenge);
-      console.log(`[Webhook GET] Verification successful. Returning challenge: ${result}`);
+      console.log(
+        `[Webhook GET] Verification successful. Returning challenge: ${result}`,
+      );
       return result;
     } catch (e) {
-      console.error(`[Webhook GET] Verification failed: ${(e as Error).message}`);
+      console.error(
+        `[Webhook GET] Verification failed: ${(e as Error).message}`,
+      );
       throw e;
     }
   }
@@ -890,20 +995,34 @@ export class CskhController {
     @Headers('x-hub-signature-256') signature: string,
   ) {
     const raw = req.rawBody;
-    console.log(`[Webhook POST] Received event from Meta. Signature header: ${signature}, Raw body length: ${raw ? raw.length : 0}`);
-    
+    console.log(
+      `[Webhook POST] Received event from Meta. Signature header: ${signature}, Raw body length: ${raw ? raw.length : 0}`,
+    );
+
     if (!raw || !verifyFacebookWebhookSignature(raw, signature)) {
-      console.warn(`[Webhook POST] Rejecting request due to signature verification failure.`);
+      console.warn(
+        `[Webhook POST] Rejecting request due to signature verification failure.`,
+      );
       throw new UnauthorizedException('Invalid webhook signature');
     }
-    
+
     try {
-      console.log(`[Webhook POST] Processing payload: ${JSON.stringify(req.body).slice(0, 1000)}`);
+      console.log(
+        `[Webhook POST] Processing payload: ${JSON.stringify(req.body).slice(0, 1000)}`,
+      );
       const result = await this.inbox.handleWebhookPayload(req.body);
-      console.log(`[Webhook POST] Payload processed successfully: ${JSON.stringify(result)}`);
+      void this.igComments.processWebhookPayload(req.body).catch((e) => {
+        console.error(`[Webhook POST] IG comments: ${(e as Error).message}`);
+      });
+      console.log(
+        `[Webhook POST] Payload processed successfully: ${JSON.stringify(result)}`,
+      );
       return result;
     } catch (e) {
-      console.error(`[Webhook POST] Error processing webhook payload: ${(e as Error).message}`, e);
+      console.error(
+        `[Webhook POST] Error processing webhook payload: ${(e as Error).message}`,
+        e,
+      );
       throw e;
     }
   }
@@ -952,11 +1071,16 @@ export class CskhController {
       fromAdOnly: fromAdOnly === '1' || fromAdOnly === 'true',
       unreadOnly: unreadOnly === '1' || unreadOnly === 'true',
       organicOnly: organicOnly === '1' || organicOnly === 'true',
-      limit: Number.isFinite(parsedLimit) && parsedLimit! > 0 ? parsedLimit : undefined,
+      limit:
+        Number.isFinite(parsedLimit) && parsedLimit! > 0
+          ? parsedLimit
+          : undefined,
       cursor: cursor?.trim() || undefined,
       search: search?.trim() || undefined,
       sinceDays:
-        Number.isFinite(parsedSinceDays) && parsedSinceDays! > 0 ? parsedSinceDays : undefined,
+        Number.isFinite(parsedSinceDays) && parsedSinceDays! > 0
+          ? parsedSinceDays
+          : undefined,
       month: this.parseInboxMonthQuery(month),
       labelId: labelId?.trim() || undefined,
       unlabeledOnly: unlabeledOnly === '1' || unlabeledOnly === 'true',
@@ -964,9 +1088,17 @@ export class CskhController {
       platform: graphPlatform,
     };
     if (legacy === '1' || legacy === 'true') {
-      return this.inbox.listConversationsLegacy(pageId?.trim(), user.tenantId || undefined, opts);
+      return this.inbox.listConversationsLegacy(
+        pageId?.trim(),
+        user.tenantId || undefined,
+        opts,
+      );
     }
-    return this.inbox.listConversations(pageId?.trim(), user.tenantId || undefined, opts);
+    return this.inbox.listConversations(
+      pageId?.trim(),
+      user.tenantId || undefined,
+      opts,
+    );
   }
 
   /** Gắn lại tag Ads từ tin nhắn đã lưu (Việt/Anh/Thái) — chạy ngay, không chờ cooldown. */
@@ -985,7 +1117,10 @@ export class CskhController {
   @Get('inbox/conversations/:id/view-history')
   @UseGuards(JwtAuthGuard)
   getInboxViewHistory(@CurrentUser() user: User, @Param('id') id: string) {
-    return this.inboxLabels.getViewHistory(id.trim(), user.tenantId || undefined);
+    return this.inboxLabels.getViewHistory(
+      id.trim(),
+      user.tenantId || undefined,
+    );
   }
 
   @Post('inbox/conversations/:id/labels/:labelId/toggle')
@@ -1041,7 +1176,9 @@ export class CskhController {
         const payload = event.data as InboxRealtimePayload;
         const lastMsg = payload.messages?.[payload.messages.length - 1];
         const messageLagMs =
-          lastMsg?.sentAt != null ? Date.now() - new Date(lastMsg.sentAt).getTime() : undefined;
+          lastMsg?.sentAt != null
+            ? Date.now() - new Date(lastMsg.sentAt).getTime()
+            : undefined;
         inboxRtLog('SSE out → browser', {
           userId,
           type: payload.type,
@@ -1096,7 +1233,11 @@ export class CskhController {
     @Param('id') id: string,
     @Query('auditId') auditId?: string,
   ) {
-    return this.inbox.getCustomerIntent(id.trim(), auditId?.trim(), user.tenantId || undefined);
+    return this.inbox.getCustomerIntent(
+      id.trim(),
+      auditId?.trim(),
+      user.tenantId || undefined,
+    );
   }
 
   @Get('inbox/conversations/:id/ad-insights')
@@ -1107,7 +1248,11 @@ export class CskhController {
     @Query('refresh') refresh?: string,
   ) {
     const bypassCache = refresh === 'true';
-    return this.cskh.getConversationAdInsights(id.trim(), user.tenantId || undefined, bypassCache);
+    return this.cskh.getConversationAdInsights(
+      id.trim(),
+      user.tenantId || undefined,
+      bypassCache,
+    );
   }
 
   @Post('inbox/conversations/:id/send')
@@ -1115,12 +1260,45 @@ export class CskhController {
   sendInboxMessage(
     @CurrentUser() user: User,
     @Param('id') id: string,
-    @Body() body: { text?: string; autoTranslate?: boolean; originalText?: string },
+    @Body()
+    body: { text?: string; autoTranslate?: boolean; originalText?: string },
   ) {
-    return this.inbox.sendMessage(id, body.text ?? '', user.tenantId || undefined, {
-      autoTranslate: Boolean(body.autoTranslate),
-      originalText: body.originalText,
-    });
+    return this.inbox.sendMessage(
+      id,
+      body.text ?? '',
+      user.tenantId || undefined,
+      {
+        autoTranslate: Boolean(body.autoTranslate),
+        originalText: body.originalText,
+      },
+    );
+  }
+
+  // Gửi tin nhắn với media (hình ảnh, video, audio)
+  @Post('inbox/conversations/:id/send-media')
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 25 * 1024 * 1024 },
+    }),
+  )
+  sendInboxMedia(
+    @CurrentUser() user: User,
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Body() body: { text?: string },
+  ) {
+    const text = body.text?.trim() ?? '';
+    if (!file?.buffer?.length && !text) {
+      throw new BadRequestException('Cần file hoặc nội dung text');
+    }
+    return this.inbox.sendMessageMedia(
+      id.trim(),
+      user.tenantId || undefined,
+      file,
+      text || undefined,
+    );
   }
 
   @Post('inbox/conversations/:id/translate-preview')
@@ -1140,14 +1318,23 @@ export class CskhController {
 
   @Post('inbox/conversations/:id/translate')
   @UseGuards(JwtAuthGuard)
-  translateInboxConversation(@CurrentUser() user: User, @Param('id') id: string) {
-    return this.inbox.translateConversationMessages(id, user.tenantId || undefined);
+  translateInboxConversation(
+    @CurrentUser() user: User,
+    @Param('id') id: string,
+  ) {
+    return this.inbox.translateConversationMessages(
+      id,
+      user.tenantId || undefined,
+    );
   }
 
   @Post('inbox/conversations/:id/detect-lang')
   @UseGuards(JwtAuthGuard)
   detectInboxLang(@CurrentUser() user: User, @Param('id') id: string) {
-    return this.inbox.detectAndPersistCustomerLang(id, user.tenantId || undefined);
+    return this.inbox.detectAndPersistCustomerLang(
+      id,
+      user.tenantId || undefined,
+    );
   }
 
   @Post('inbox/conversations/:id/typing')
@@ -1176,11 +1363,17 @@ export class CskhController {
   ) {
     const pageId = body.pageId?.trim();
     const tenantId = user.tenantId || undefined;
-    const options = { full: body.full === true, lightweight: body.full !== true, force: true };
+    const options = {
+      full: body.full === true,
+      lightweight: body.full !== true,
+      force: true,
+    };
 
     // Quét nhiều kênh — chạy nền, không block HTTP (tránh treo web)
     if (!pageId) {
-      void this.inbox.syncFromGraph(undefined, tenantId, options).catch(() => undefined);
+      void this.inbox
+        .syncFromGraph(undefined, tenantId, options)
+        .catch(() => undefined);
       return {
         started: true,
         syncing: true,
@@ -1229,27 +1422,42 @@ export class CskhController {
 
   @Post('inbox/link-audit')
   @UseGuards(JwtAuthGuard)
-  linkAuditInbox(@CurrentUser() user: User, @Body() body: { auditId?: string }) {
-    return this.inbox.linkFromAudit(body.auditId?.trim() ?? '', user.tenantId || undefined);
+  linkAuditInbox(
+    @CurrentUser() user: User,
+    @Body() body: { auditId?: string },
+  ) {
+    return this.inbox.linkFromAudit(
+      body.auditId?.trim() ?? '',
+      user.tenantId || undefined,
+    );
   }
 
   @Get('inbox/conversations/:id/audit-hint')
   @UseGuards(JwtAuthGuard)
   getInboxAuditHint(@CurrentUser() user: User, @Param('id') id: string) {
-    return this.inbox.getLatestAuditForConversation(id, user.tenantId || undefined);
+    return this.inbox.getLatestAuditForConversation(
+      id,
+      user.tenantId || undefined,
+    );
   }
 
   /** Proxy avatar Facebook CDN — public (img không gửi JWT). */
   @Get('media/avatar')
   proxyAvatar(@Req() req: Request, @Res() res: Response) {
-    const url = parseMediaProxyUrlFromRequest(req.originalUrl || req.url || '', req.query.url);
+    const url = parseMediaProxyUrlFromRequest(
+      req.originalUrl || req.url || '',
+      req.query.url,
+    );
     return this.cskh.proxyMediaUrl(url, res);
   }
 
   /** Proxy ảnh/video Facebook CDN — public. */
   @Get('media/proxy')
   proxyMedia(@Req() req: Request, @Res() res: Response) {
-    const url = parseMediaProxyUrlFromRequest(req.originalUrl || req.url || '', req.query.url);
+    const url = parseMediaProxyUrlFromRequest(
+      req.originalUrl || req.url || '',
+      req.query.url,
+    );
     return this.cskh.proxyMediaUrl(url, res);
   }
 
@@ -1281,10 +1489,97 @@ export class CskhController {
     return this.cskh.getDashboardHeavyStats(user.tenantId || undefined);
   }
 
+  /** Instagram media list — không JWT. */
+  @Get('instagram/comments/media')
+  @UseGuards(JwtAuthGuard)
+  listIgCommentMedia(
+    @CurrentUser() user: User,
+    @Query('pageId') pageId: string,
+    @Query('sync') sync?: string,
+  ) {
+    if (!pageId?.trim()) throw new BadRequestException('pageId bắt buộc');
+    return this.igComments.listMedia(
+      pageId.trim(),
+      user.tenantId || undefined,
+      sync === '1' || sync === 'true',
+    );
+  }
+
+  /** Instagram comments list — không JWT. */
+  @Get('instagram/comments')
+  @UseGuards(JwtAuthGuard)
+  listIgComments(
+    @CurrentUser() user: User,
+    @Query('pageId') pageId: string,
+    @Query('mediaId') mediaId: string,
+  ) {
+    if (!pageId?.trim() || !mediaId?.trim()) {
+      throw new BadRequestException('pageId và mediaId bắt buộc');
+    }
+    return this.igComments.listComments(
+      pageId.trim(),
+      mediaId.trim(),
+      user.tenantId || undefined,
+    );
+  }
+
+  /** Instagram comments sync — không JWT. */
+  @Post('instagram/comments/sync')
+  @UseGuards(JwtAuthGuard)
+  syncIgComments(
+    @CurrentUser() user: User,
+    @Query('pageId') pageId: string,
+    @Query('mediaId') mediaId: string,
+  ) {
+    if (!pageId?.trim() || !mediaId?.trim()) {
+      throw new BadRequestException('pageId và mediaId bắt buộc');
+    }
+    return this.igComments.syncComments(
+      pageId.trim(),
+      mediaId.trim(),
+      user.tenantId || undefined,
+    );
+  }
+
+  /** Instagram comments reply — không JWT. */
+  @Post('instagram/comments/:igCommentId/reply')
+  @UseGuards(JwtAuthGuard)
+  replyIgComment(
+    @CurrentUser() user: User,
+    @Param('igCommentId') igCommentId: string,
+    @Query('pageId') pageId: string,
+    @Body() dto: ReplyIgCommentDto,
+  ) {
+    if (!pageId?.trim()) throw new BadRequestException('pageId bắt buộc');
+    return this.igComments.reply(
+      pageId.trim(),
+      igCommentId.trim(),
+      dto.message,
+      user.tenantId || undefined,
+    );
+  }
+
+  /** Instagram comments hide — không JWT. */
+  @Post('instagram/comments/:igCommentId/hide')
+  @UseGuards(JwtAuthGuard)
+  hideIgComment(
+    @CurrentUser() user: User,
+    @Param('igCommentId') igCommentId: string,
+    @Query('pageId') pageId: string,
+  ) {
+    if (!pageId?.trim()) throw new BadRequestException('pageId bắt buộc');
+    return this.igComments.hide(
+      pageId.trim(),
+      igCommentId.trim(),
+      user.tenantId || undefined,
+    );
+  }
+
   private parseInboxPlatformQuery(
     raw?: string,
   ): 'instagram' | 'messenger' | 'tiktok' | undefined {
-    if (raw === 'instagram' || raw === 'messenger' || raw === 'tiktok') return raw;
+    if (raw === 'instagram' || raw === 'messenger' || raw === 'tiktok')
+      return raw;
     return undefined;
   }
 

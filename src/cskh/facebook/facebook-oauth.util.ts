@@ -13,9 +13,11 @@ export const FB_OAUTH_SCOPES = [
   'pages_messaging',
   'pages_manage_metadata',
   'pages_read_engagement',
-  'pages_events',
+  // Tạm bỏ 'pages_events': App chưa được Meta duyệt quyền này
+  // 'pages_events',
   'instagram_basic',
   'instagram_manage_messages',
+  'instagram_manage_comments',
   'ads_read',
 ].join(',');
 
@@ -150,6 +152,7 @@ export function buildFacebookOAuthUrl(
     state,
     scope: FB_OAUTH_SCOPES,
     response_type: 'code',
+    auth_type: 'rerequest',
   });
   return `https://www.facebook.com/${GRAPH_VERSION}/dialog/oauth?${params.toString()}`;
 }
@@ -216,5 +219,15 @@ export function verifyFacebookWebhookSignature(
     return false;
   }
 }
+
+/** IG webhook — field Instagram Graph chấp nhận (không dùng field Page/Messenger). */
+export const IG_WEBHOOK_SUBSCRIBED_FIELDS = [
+  'messages',
+  'messaging_postbacks',
+  'messaging_optins',
+  'messaging_referral',
+  'messaging_seen',
+  'comments',
+].join(',');
 
 export { GRAPH_BASE, GRAPH_VERSION };

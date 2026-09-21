@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
+import FormData from 'form-data';
 import { CskhRedisSignalsService } from '../redis/cskh-redis-signals.service';
 import {
   dedupeChatMessages,
@@ -71,6 +72,28 @@ export type TranscriptLine = {
   attachmentUrl?: string | null;
   attachmentUrls?: string[];
 };
+
+export type OutboundAttachmentKind = 'image' | 'video' | 'file';
+
+/**
+ * graphAttachmentType: kiểm tra attachment type của file
+ * @param mime - mime type của file
+ * @param platform - platform của page
+ * @returns attachment type của file
+ */
+export function graphAttachmentType(
+  mime: string,
+  platform: CskhInboxGraphPlatform,
+): OutboundAttachmentKind {
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/')) return 'video';
+  if (platform === 'instagram') {
+    throw new Error(
+      'Instagram Direct chưa hỗ trợ gửi file tài liệu — chỉ ảnh/video.',
+    );
+  }
+  return 'file';
+}
 
 @Injectable()
 export class FacebookGraphService {
@@ -1679,5 +1702,232 @@ export class FacebookGraphService {
       );
       return null;
     });
+  }
+
+  /**
+   * Gửi file trong một request multipart tới /messages (Meta khuyến nghị).
+   * Tránh /message_attachments — hay lỗi "Unsupported request - method type: post" (đặc biệt IG).
+   */
+  async sendPageMessageWithFile(
+    pageId: string,
+    token: string,
+    recipientPsid: string,
+    file: { buffer: Buffer; mimeType: string; filename: string },
+    attachmentType: OutboundAttachmentKind,
+    _platform: CskhInboxGraphPlatform = 'messenger',
+  ): Promise<{ message_id?: string; recipient_id?: string }> {
+    const form = new FormData();
+    // recipient: khách hàng
+    form.append('recipient', JSON.stringify({ id: recipientPsid }));
+    form.append('messaging_type', 'RESPONSE');
+    form.append(
+      'message',
+      JSON.stringify({
+        attachment: {
+          type: attachmentType,
+          payload: {},
+        },
+      }),
+    );
+    form.append('filedata', file.buffer, {
+      filename: file.filename,
+      contentType: file.mimeType,
+    });
+
+    const url = `${GRAPH_BASE}/${pageId}/messages`;
+    try {
+      const res = await axios.post<{
+        message_id?: string;
+        recipient_id?: string;
+      }>(url, form, {
+        params: { access_token: token },
+        headers: form.getHeaders(),
+        timeout: 120_000,
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
+      });
+      return res.data;
+    } catch (e: unknown) {
+      const err = e as {
+        response?: { data?: { error?: { message?: string } } };
+        message?: string;
+      };
+      const fbErr = err.response?.data?.error;
+      throw new Error(
+        fbErr?.message || err.message || 'Graph multipart send failed',
+      );
+    }
+  }
+
+  /** Lấy danh sách bài đăng (posts/reels) trên kênh IG của User. */
+  async fetchInstagramMedia(
+    igUserId: string,
+    token: string,
+    limit = 25,
+  ): Promise<
+    Array<{
+      id: string;
+      caption?: string;
+      media_type?: string;
+      permalink?: string;
+      timestamp?: string;
+      thumbnail_url?: string;
+    }>
+  > {
+    // gọi API của graph API của Instagram
+    const data = await this.graphRequest<{
+      data?: Array<{
+        id: string;
+        caption?: string;
+        media_type?: string;
+        permalink?: string;
+        timestamp?: string;
+        thumbnail_url?: string;
+      }>;
+    }>(`/${igUserId}/media`, token, {
+      fields: 'id,caption,media_type,permalink,timestamp,thumbnail_url',
+      limit,
+    });
+    return data.data ?? [];
+  }
+
+  /** Một bài IG — dùng khi webhook comment tạo stub chưa có caption/ảnh. */
+  async fetchInstagramMediaById(
+    igMediaId: string,
+    token: string,
+  ): Promise<{
+    id: string;
+    caption?: string;
+    media_type?: string;
+    permalink?: string;
+    timestamp?: string;
+    thumbnail_url?: string;
+    media_url?: string;
+  } | null> {
+    try {
+      const data = await this.graphRequest<{
+        id?: string;
+        caption?: string;
+        media_type?: string;
+        permalink?: string;
+        timestamp?: string;
+        thumbnail_url?: string;
+        media_url?: string;
+      }>(`/${igMediaId}`, token, {
+        fields:
+          'id,caption,media_type,permalink,timestamp,thumbnail_url,media_url',
+      });
+      if (!data?.id) return null;
+      return {
+        id: data.id,
+        caption: data.caption,
+        media_type: data.media_type,
+        permalink: data.permalink,
+        timestamp: data.timestamp,
+        thumbnail_url: data.thumbnail_url,
+        media_url: data.media_url,
+      };
+    } catch (e) {
+      this.logger.warn(
+        `fetchInstagramMediaById ${igMediaId}: ${(e as Error).message}`,
+      );
+      return null;
+    }
+  }
+
+  /** Lấy danh sách bình luận (và reply) trên một bài đăng IG. */
+  async fetchInstagramMediaComments(
+    mediaId: string,
+    token: string,
+    limit = 50,
+  ): Promise<
+    Array<{
+      id: string;
+      text?: string;
+      username?: string;
+      timestamp?: string;
+      from?: { id?: string; username?: string };
+      replies?: {
+        data?: Array<{
+          id: string;
+          text?: string;
+          timestamp?: string;
+          from?: { id?: string; username?: string };
+        }>;
+      };
+    }>
+  > {
+    // gọi API của graph API của Instagram
+    const data = await this.graphRequest<{
+      data?: Array<{
+        id: string;
+        text?: string;
+        username?: string;
+        timestamp?: string;
+        from?: { id?: string; username?: string };
+        replies?: {
+          data?: Array<{
+            id: string;
+            text?: string;
+            timestamp?: string;
+            from?: { id?: string; username?: string };
+          }>;
+        };
+      }>;
+    }>(`/${mediaId}/comments`, token, {
+      fields: 'id,text,username,timestamp,from,replies{id,text,timestamp,from}',
+      limit,
+    });
+    return data.data ?? [];
+  }
+
+  /** Trả lời bình luận IG — POST /{ig-comment-id}/replies (Facebook Login + Page token). */
+  async replyInstagramComment(
+    commentId: string,
+    token: string,
+    message: string,
+  ): Promise<{ id?: string }> {
+    const url = `${GRAPH_BASE}/${commentId}/replies`;
+    try {
+      const res = await axios.post<{ id?: string }>(url, null, {
+        params: { message, access_token: token },
+        timeout: 60_000,
+      });
+      return res.data;
+    } catch (e: unknown) {
+      const err = e as {
+        response?: {
+          data?: { error?: { message?: string; code?: number } };
+        };
+        message?: string;
+      };
+      const fbErr = err.response?.data?.error;
+      throw new Error(fbErr?.message || err.message || 'Graph API POST error');
+    }
+  }
+
+  /** Ẩn một bình luận IG. */
+  async hideInstagramComment(
+    commentId: string,
+    token: string,
+    hide = true,
+  ): Promise<{ success?: boolean }> {
+    const url = `${GRAPH_BASE}/${commentId}`;
+    try {
+      const res = await axios.post<{ success?: boolean }>(url, null, {
+        params: { hide: hide ? 'true' : 'false', access_token: token },
+        timeout: 60_000,
+      });
+      return res.data;
+    } catch (e: unknown) {
+      const err = e as {
+        response?: {
+          data?: { error?: { message?: string; code?: number } };
+        };
+        message?: string;
+      };
+      const fbErr = err.response?.data?.error;
+      throw new Error(fbErr?.message || err.message || 'Graph API POST error');
+    }
   }
 }

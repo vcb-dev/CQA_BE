@@ -60,16 +60,25 @@ export class CskhCronService {
 
       this.logger.log(`Found ${connectedPages.length} connected pages to audit.`);
 
+      await this.cskh.releaseStaleJobs(
+        'audit',
+        6 * 60 * 60 * 1000, // job đang chạy: quá 6 tiếng coi như treo
+        undefined,
+        2 * 60 * 60 * 1000, // job còn nằm hàng đợi: quá 2 tiếng coi như mất payload
+      );
+
+      const activeJob = await this.cskh.findActiveJob('audit');
+      if (activeJob) {
+        this.logger.log(
+          `Detected another active audit job (${activeJob.id}, status=${activeJob.status}). Skipping nightly cron.`,
+        );
+        return;
+      }
+
       let enqueued = 0;
       for (const page of connectedPages) {
-        const activeJob = await this.cskh.findRunningJob('audit');
-        if (activeJob) {
-          this.logger.log(`Detected another running audit job (${activeJob.id}). Aborting nightly cron loop.`);
-          break;
-        }
-
         try {
-          const job = await this.cskh.createJob('audit', page.tenantId || undefined);
+          const job = await this.cskh.createJob('audit', page.tenantId || undefined, 'queued');
           const auditOpts = {
             auditDateFrom,
             auditDateTo,
@@ -82,9 +91,16 @@ export class CskhCronService {
             options: auditOpts,
           });
           if (!queued) {
+            await this.cskh.finishJob(
+              job.id,
+              'failed',
+              undefined,
+              'Redis queue không khả dụng — không xếp hàng được audit đêm',
+            );
             this.logger.warn(
               `[cron] Redis queue off — bỏ audit page=${page.pageId} (không chạy inline trên API)`,
             );
+            continue;
           }
           enqueued++;
           this.logger.log(

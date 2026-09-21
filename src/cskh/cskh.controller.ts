@@ -782,14 +782,18 @@ export class CskhController {
         user.tenantId || undefined,
       );
     }
-    const running = await this.cskh.findRunningJob(
+    const active = await this.cskh.findActiveJob(
       'audit',
       user.tenantId || undefined,
     );
-    if (running) {
-      return { jobId: running.id, status: 'running', alreadyRunning: true };
+    if (active) {
+      return { jobId: active.id, status: active.status, alreadyRunning: true };
     }
-    const job = await this.cskh.createJob('audit', user.tenantId || undefined);
+    const job = await this.cskh.createJob(
+      'audit',
+      user.tenantId || undefined,
+      'queued',
+    );
     const auditOptions = {
       auditDateFrom,
       auditDateTo,
@@ -810,7 +814,7 @@ export class CskhController {
     const workerOnline = await this.redisQueue.isAuditWorkerAlive();
     return {
       jobId: job.id,
-      status: 'running',
+      status: queued ? 'queued' : 'running',
       alreadyRunning: false,
       workerOnline,
     };

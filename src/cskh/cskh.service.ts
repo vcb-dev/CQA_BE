@@ -38,6 +38,7 @@ import {
 import { isAllowedFacebookMediaUrl } from './facebook/facebook-message.util';
 import {
   GRAPH_BASE,
+  IG_WEBHOOK_SUBSCRIBED_FIELDS,
   buildFacebookOAuthUrl,
   cskhChannelPlatform,
   cskhGraphConversationsOwnerId,
@@ -1696,7 +1697,10 @@ export class CskhService implements OnModuleInit {
         this.logger.warn(`getConversationAdInsights ${conversationId}: ${msg}`);
         const creative = await this.ads
           .fetchAdCreativePreview(effectiveAdId, session.userAccessToken)
-          .catch(() => ({ adName: null as string | null, adImageUrl: null as string | null }));
+          .catch(() => ({
+            adName: null as string | null,
+            adImageUrl: null as string | null,
+          }));
         return {
           ...empty(reason),
           adId: effectiveAdId,
@@ -5398,8 +5402,8 @@ export class CskhService implements OnModuleInit {
     // url là đường dẫn đến API của Instagram để subscribe kênh Instagram.
     const url = `${GRAPH_BASE}/${igUserId}/subscribed_apps`;
     // fields là danh sách các trường mà ta muốn subscribe.
-    const fields =
-      'messages,message_echoes,messaging_postbacks,messaging_optins,message_deliveries,message_reads,messaging_referrals';
+    const fields = IG_WEBHOOK_SUBSCRIBED_FIELDS;
+
     try {
       // Gửi request đến API của Instagram để subscribe kênh Instagram.
       const res = await axios.post(url, null, {

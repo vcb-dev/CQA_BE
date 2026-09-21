@@ -35,9 +35,11 @@ import { COOKIE_ACCESS, LEGACY_COOKIE_ACCESS } from '../auth/cookie.constants';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { UsersService } from '../users/users.service';
+import { CskhInstagramCommentsService } from './comment/cskh-instagram-comments.service';
 import { CskhInsightService } from './cskh-insight.service';
 import { CskhService } from './cskh.service';
 import { CustomerAnalyticsService } from './customer-analytics.service';
+import { ReplyIgCommentDto } from './dto/reply-ig-comment.dto';
 import { parseMediaProxyUrlFromRequest } from './facebook/facebook-message.util';
 import { verifyFacebookWebhookSignature } from './facebook/facebook-oauth.util';
 import { CskhInboxLabelsService } from './inbox/cskh-inbox-labels.service';
@@ -90,6 +92,7 @@ export class CskhController {
     private readonly jwtService: JwtService,
     private readonly usersService: UsersService,
     private readonly configService: ConfigService,
+    private readonly igComments: CskhInstagramCommentsService,
   ) {}
 
   /** OAuth — không cần JWT (redirect browser). */
@@ -1004,6 +1007,9 @@ export class CskhController {
         `[Webhook POST] Processing payload: ${JSON.stringify(req.body).slice(0, 1000)}`,
       );
       const result = await this.inbox.handleWebhookPayload(req.body);
+      void this.igComments.processWebhookPayload(req.body).catch((e) => {
+        console.error(`[Webhook POST] IG comments: ${(e as Error).message}`);
+      });
       console.log(
         `[Webhook POST] Payload processed successfully: ${JSON.stringify(result)}`,
       );
@@ -1477,6 +1483,92 @@ export class CskhController {
   @UseGuards(JwtAuthGuard)
   getDashboardHeavyStats(@CurrentUser() user: User) {
     return this.cskh.getDashboardHeavyStats(user.tenantId || undefined);
+  }
+
+  /** Instagram media list — không JWT. */
+  @Get('instagram/comments/media')
+  @UseGuards(JwtAuthGuard)
+  listIgCommentMedia(
+    @CurrentUser() user: User,
+    @Query('pageId') pageId: string,
+    @Query('sync') sync?: string,
+  ) {
+    if (!pageId?.trim()) throw new BadRequestException('pageId bắt buộc');
+    return this.igComments.listMedia(
+      pageId.trim(),
+      user.tenantId || undefined,
+      sync === '1' || sync === 'true',
+    );
+  }
+
+  /** Instagram comments list — không JWT. */
+  @Get('instagram/comments')
+  @UseGuards(JwtAuthGuard)
+  listIgComments(
+    @CurrentUser() user: User,
+    @Query('pageId') pageId: string,
+    @Query('mediaId') mediaId: string,
+  ) {
+    if (!pageId?.trim() || !mediaId?.trim()) {
+      throw new BadRequestException('pageId và mediaId bắt buộc');
+    }
+    return this.igComments.listComments(
+      pageId.trim(),
+      mediaId.trim(),
+      user.tenantId || undefined,
+    );
+  }
+
+  /** Instagram comments sync — không JWT. */
+  @Post('instagram/comments/sync')
+  @UseGuards(JwtAuthGuard)
+  syncIgComments(
+    @CurrentUser() user: User,
+    @Query('pageId') pageId: string,
+    @Query('mediaId') mediaId: string,
+  ) {
+    if (!pageId?.trim() || !mediaId?.trim()) {
+      throw new BadRequestException('pageId và mediaId bắt buộc');
+    }
+    return this.igComments.syncComments(
+      pageId.trim(),
+      mediaId.trim(),
+      user.tenantId || undefined,
+    );
+  }
+
+  /** Instagram comments reply — không JWT. */
+  @Post('instagram/comments/:igCommentId/reply')
+  @UseGuards(JwtAuthGuard)
+  replyIgComment(
+    @CurrentUser() user: User,
+    @Param('igCommentId') igCommentId: string,
+    @Query('pageId') pageId: string,
+    @Body() dto: ReplyIgCommentDto,
+  ) {
+    if (!pageId?.trim()) throw new BadRequestException('pageId bắt buộc');
+    return this.igComments.reply(
+      pageId.trim(),
+      igCommentId.trim(),
+      dto.message,
+      user.tenantId || undefined,
+    );
+  }
+
+  /** Instagram comments hide — không JWT. */
+  @Post('instagram/comments/:igCommentId/hide')
+  @UseGuards(JwtAuthGuard)
+  hideIgComment(
+    @CurrentUser() user: User,
+    @Param('igCommentId') igCommentId: string,
+    @Query('pageId') pageId: string,
+  ) {
+    if (!pageId?.trim()) throw new BadRequestException('pageId bắt buộc');
+    return this.igComments.hide(
+      pageId.trim(),
+      igCommentId.trim(),
+      user.tenantId || undefined,
+    );
   }
 
   private parseInboxPlatformQuery(

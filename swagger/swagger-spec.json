@@ -3143,6 +3143,196 @@
         ]
       }
     },
+    "/api/v1/cskh/instagram/comments/media": {
+      "get": {
+        "operationId": "CskhController_listIgCommentMedia",
+        "parameters": [
+          {
+            "name": "pageId",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sync",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "cskh"
+        ]
+      }
+    },
+    "/api/v1/cskh/instagram/comments": {
+      "get": {
+        "operationId": "CskhController_listIgComments",
+        "parameters": [
+          {
+            "name": "pageId",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "mediaId",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "cskh"
+        ]
+      }
+    },
+    "/api/v1/cskh/instagram/comments/sync": {
+      "post": {
+        "operationId": "CskhController_syncIgComments",
+        "parameters": [
+          {
+            "name": "pageId",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "mediaId",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "cskh"
+        ]
+      }
+    },
+    "/api/v1/cskh/instagram/comments/{igCommentId}/reply": {
+      "post": {
+        "operationId": "CskhController_replyIgComment",
+        "parameters": [
+          {
+            "name": "igCommentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pageId",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplyIgCommentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "cskh"
+        ]
+      }
+    },
+    "/api/v1/cskh/instagram/comments/{igCommentId}/hide": {
+      "post": {
+        "operationId": "CskhController_hideIgComment",
+        "parameters": [
+          {
+            "name": "igCommentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pageId",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "cskh"
+        ]
+      }
+    },
     "/api/v1/ai/audit-chat": {
       "post": {
         "operationId": "AiController_auditChat",
@@ -3773,6 +3963,19 @@
             "type": "boolean"
           }
         }
+      },
+      "ReplyIgCommentDto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2200
+          }
+        },
+        "required": [
+          "message"
+        ]
       },
       "AssistantHistoryItemDto": {
         "type": "object",

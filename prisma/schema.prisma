@@ -81,6 +81,9 @@ model Tenant {
   pancakePageConfigs  PancakePageConfig[]
   pancakeLeads        PancakeLead[]
 
+  igMedia              CskhIgMedia[]
+  igComments           CskhIgComment[]
+
   @@map("tenants")
 }
 
@@ -565,6 +568,52 @@ model CskhPageMessageTotals {
 
   @@index([refreshedAt])
   @@map("cskh_page_message_totals")
+}
+
+/// Bài đăng Instagram (post/reel) trên kênh CSKH — dùng cho màn Bình luận IG.
+model CskhIgMedia {
+  id            String   @id @default(uuid()) @db.Uuid
+  pageId        String   @map("page_id")
+  igMediaId     String   @map("ig_media_id") @db.VarChar(64)
+  mediaType     String?  @map("media_type") @db.VarChar(32)
+  caption       String?  @db.Text
+  permalink     String?  @db.Text
+  thumbnailUrl  String?  @map("thumbnail_url") @db.Text
+  lastCommentAt DateTime? @map("last_comment_at") @db.Timestamptz(6)
+  tenantId      String?  @map("tenant_id") @db.Uuid
+  tenant        Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  comments      CskhIgComment[]
+
+  @@unique([pageId, igMediaId])
+  @@index([tenantId, lastCommentAt(sort: Desc)])
+  @@index([pageId, lastCommentAt(sort: Desc)])
+  @@map("cskh_ig_media")
+}
+
+/// Bình luận (và reply) trên một bài — sync từ webhook + Graph API.
+model CskhIgComment {
+  id              String   @id @default(uuid()) @db.Uuid
+  pageId          String   @map("page_id")
+  igMediaId       String   @map("ig_media_id") @db.VarChar(64)
+  igCommentId     String   @unique @map("ig_comment_id") @db.VarChar(64)
+  parentIgCommentId String? @map("parent_ig_comment_id") @db.VarChar(64)
+  text            String   @db.Text
+  authorUsername  String?  @map("author_username") @db.VarChar(255)
+  authorIgId      String?  @map("author_ig_id") @db.VarChar(64)
+  direction       String   @default("inbound") @db.VarChar(16)
+  hidden          Boolean  @default(false)
+  commentedAt     DateTime @map("commented_at") @db.Timestamptz(6)
+  tenantId        String?  @map("tenant_id") @db.Uuid
+  tenant          Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  media           CskhIgMedia? @relation(fields: [pageId, igMediaId], references: [pageId, igMediaId], onDelete: Cascade)
+
+  @@index([pageId, igMediaId, commentedAt(sort: Desc)])
+  @@index([tenantId, commentedAt(sort: Desc)])
+  @@map("cskh_ig_comments")
 }
 
 // --- Sapo mirror (đầy đủ cột để hiển thị UI / báo cáo) ---

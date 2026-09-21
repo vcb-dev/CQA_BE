@@ -1,7 +1,13 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  MessageEvent,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { MessageEvent } from '@nestjs/common';
 import type Redis from 'ioredis';
+import { Observable, Subject } from 'rxjs';
 import {
   isRedisCircuitOpen,
   isRedisQuotaError,
@@ -13,7 +19,6 @@ import {
   isRedisDisabledByEnv,
   resolveRedisConnectionConfig,
 } from '../redis/cskh-redis-client';
-import { Observable, Subject } from 'rxjs';
 import { inboxRtLog, inboxRtWarn } from './inbox-realtime-debug.util';
 
 export type InboxMessagePayload = {
@@ -105,13 +110,24 @@ export type CustomerIntentPayload = {
 };
 
 export type InboxRealtimePayload = {
-  type: 'conversation' | 'message' | 'intent' | 'typing' | 'read-receipt' | 'ping';
+  type:
+    | 'conversation'
+    | 'message'
+    | 'intent'
+    | 'typing'
+    | 'read-receipt'
+    | 'ping'
+    | 'ig-comment';
   pageId?: string;
   conversationId?: string;
   messages?: InboxMessagePayload[];
   conversation?: Partial<InboxConversationPayload> & { id: string };
   intent?: CustomerIntentPayload;
   tenantId?: string;
+  /** IG comment SSE — inbound mới thì FE badge/toast; outbound (shop reply) chỉ refresh. */
+  direction?: 'inbound' | 'outbound';
+  text?: string;
+  authorUsername?: string;
 };
 
 const REALTIME_CHANNEL = 'cskh:inbox:realtime';

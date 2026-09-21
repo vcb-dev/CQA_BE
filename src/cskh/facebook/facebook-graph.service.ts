@@ -1758,4 +1758,176 @@ export class FacebookGraphService {
       );
     }
   }
+
+  /** Lấy danh sách bài đăng (posts/reels) trên kênh IG của User. */
+  async fetchInstagramMedia(
+    igUserId: string,
+    token: string,
+    limit = 25,
+  ): Promise<
+    Array<{
+      id: string;
+      caption?: string;
+      media_type?: string;
+      permalink?: string;
+      timestamp?: string;
+      thumbnail_url?: string;
+    }>
+  > {
+    // gọi API của graph API của Instagram
+    const data = await this.graphRequest<{
+      data?: Array<{
+        id: string;
+        caption?: string;
+        media_type?: string;
+        permalink?: string;
+        timestamp?: string;
+        thumbnail_url?: string;
+      }>;
+    }>(`/${igUserId}/media`, token, {
+      fields: 'id,caption,media_type,permalink,timestamp,thumbnail_url',
+      limit,
+    });
+    return data.data ?? [];
+  }
+
+  /** Một bài IG — dùng khi webhook comment tạo stub chưa có caption/ảnh. */
+  async fetchInstagramMediaById(
+    igMediaId: string,
+    token: string,
+  ): Promise<{
+    id: string;
+    caption?: string;
+    media_type?: string;
+    permalink?: string;
+    timestamp?: string;
+    thumbnail_url?: string;
+    media_url?: string;
+  } | null> {
+    try {
+      const data = await this.graphRequest<{
+        id?: string;
+        caption?: string;
+        media_type?: string;
+        permalink?: string;
+        timestamp?: string;
+        thumbnail_url?: string;
+        media_url?: string;
+      }>(`/${igMediaId}`, token, {
+        fields:
+          'id,caption,media_type,permalink,timestamp,thumbnail_url,media_url',
+      });
+      if (!data?.id) return null;
+      return {
+        id: data.id,
+        caption: data.caption,
+        media_type: data.media_type,
+        permalink: data.permalink,
+        timestamp: data.timestamp,
+        thumbnail_url: data.thumbnail_url,
+        media_url: data.media_url,
+      };
+    } catch (e) {
+      this.logger.warn(
+        `fetchInstagramMediaById ${igMediaId}: ${(e as Error).message}`,
+      );
+      return null;
+    }
+  }
+
+  /** Lấy danh sách bình luận (và reply) trên một bài đăng IG. */
+  async fetchInstagramMediaComments(
+    mediaId: string,
+    token: string,
+    limit = 50,
+  ): Promise<
+    Array<{
+      id: string;
+      text?: string;
+      username?: string;
+      timestamp?: string;
+      from?: { id?: string; username?: string };
+      replies?: {
+        data?: Array<{
+          id: string;
+          text?: string;
+          timestamp?: string;
+          from?: { id?: string; username?: string };
+        }>;
+      };
+    }>
+  > {
+    // gọi API của graph API của Instagram
+    const data = await this.graphRequest<{
+      data?: Array<{
+        id: string;
+        text?: string;
+        username?: string;
+        timestamp?: string;
+        from?: { id?: string; username?: string };
+        replies?: {
+          data?: Array<{
+            id: string;
+            text?: string;
+            timestamp?: string;
+            from?: { id?: string; username?: string };
+          }>;
+        };
+      }>;
+    }>(`/${mediaId}/comments`, token, {
+      fields: 'id,text,username,timestamp,from,replies{id,text,timestamp,from}',
+      limit,
+    });
+    return data.data ?? [];
+  }
+
+  /** Trả lời bình luận IG — POST /{ig-comment-id}/replies (Facebook Login + Page token). */
+  async replyInstagramComment(
+    commentId: string,
+    token: string,
+    message: string,
+  ): Promise<{ id?: string }> {
+    const url = `${GRAPH_BASE}/${commentId}/replies`;
+    try {
+      const res = await axios.post<{ id?: string }>(url, null, {
+        params: { message, access_token: token },
+        timeout: 60_000,
+      });
+      return res.data;
+    } catch (e: unknown) {
+      const err = e as {
+        response?: {
+          data?: { error?: { message?: string; code?: number } };
+        };
+        message?: string;
+      };
+      const fbErr = err.response?.data?.error;
+      throw new Error(fbErr?.message || err.message || 'Graph API POST error');
+    }
+  }
+
+  /** Ẩn một bình luận IG. */
+  async hideInstagramComment(
+    commentId: string,
+    token: string,
+    hide = true,
+  ): Promise<{ success?: boolean }> {
+    const url = `${GRAPH_BASE}/${commentId}`;
+    try {
+      const res = await axios.post<{ success?: boolean }>(url, null, {
+        params: { hide: hide ? 'true' : 'false', access_token: token },
+        timeout: 60_000,
+      });
+      return res.data;
+    } catch (e: unknown) {
+      const err = e as {
+        response?: {
+          data?: { error?: { message?: string; code?: number } };
+        };
+        message?: string;
+      };
+      const fbErr = err.response?.data?.error;
+      throw new Error(fbErr?.message || err.message || 'Graph API POST error');
+    }
+  }
 }

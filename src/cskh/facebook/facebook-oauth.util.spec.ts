@@ -1,6 +1,7 @@
 import {
   cskhGraphConversationsOwnerId,
   cskhGraphMessagingOwnerId,
+  IG_WEBHOOK_SUBSCRIBED_FIELDS,
 } from './facebook-oauth.util';
 
 describe('cskhGraphConversationsOwnerId', () => {
@@ -24,5 +25,16 @@ describe('cskhGraphConversationsOwnerId', () => {
     expect(cskhGraphMessagingOwnerId('222', meta)).toBe(
       cskhGraphConversationsOwnerId('222', meta),
     );
+  });
+});
+
+describe('IG_WEBHOOK_SUBSCRIBED_FIELDS', () => {
+  it('subscribes comments with IG-only field names', () => {
+    const fields = IG_WEBHOOK_SUBSCRIBED_FIELDS.split(',');
+    expect(fields).toEqual(expect.arrayContaining(['comments', 'messages']));
+    expect(fields).not.toContain('message_echoes');
+    expect(fields).not.toContain('message_deliveries');
+    expect(fields).not.toContain('message_reads');
+    expect(fields).not.toContain('messaging_referrals');
   });
 });

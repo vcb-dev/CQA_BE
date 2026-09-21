@@ -1,37 +1,38 @@
 import { Module, forwardRef } from '@nestjs/common';
-import { CskhController } from './cskh.controller';
-import { CskhService } from './cskh.service';
-import { CskhInsightService } from './cskh-insight.service';
-import { CskhInboxService } from './inbox/cskh-inbox.service';
-import { CskhInboxLabelsService } from './inbox/cskh-inbox-labels.service';
-import { CskhInboxRealtimeService } from './inbox/cskh-inbox-realtime.service';
-import { FacebookGraphService } from './facebook/facebook-graph.service';
-import { FacebookAdsService } from './facebook/facebook-ads.service';
-import { SapoProductService } from './sapo/sapo-product.service';
-import { SapoProductImportService } from './sapo/sapo-product-import.service';
-import { SapoOAuthService } from './sapo/sapo-oauth.service';
-import { SapoCatalogDbService } from './sapo/sapo-catalog-db.service';
-import { SapoOrderService } from './sapo/sapo-order.service';
-import { SapoFullSyncService } from './sapo/sapo-full-sync.service';
-import { SapoCustomerSyncService } from './sapo/sapo-customer-sync.service';
-import { SapoOrderSyncService } from './sapo/sapo-order-sync.service';
-import { SapoCollectionSyncService } from './sapo/sapo-collection-sync.service';
-import { SapoDisplayService } from './sapo/sapo-display.service';
-import { ProductAnalyticsService } from './product-analytics.service';
-import { OmsApiService } from './oms/oms-api.service';
-import { OmsCatalogService } from './oms/oms-catalog.service';
-import { OmsProductOperationsService } from './oms/oms-product-operations.service';
-import { OmsOrderService } from './oms/oms-order.service';
-import { MetaConversionsService } from './facebook/meta-conversions.service';
-import { CustomerAnalyticsService } from './customer-analytics.service';
-import { CskhCronService } from './cskh-cron.service';
-import { GraphApiCoordinatorService } from './facebook/graph-api-coordinator.service';
-import { CskhRedisSignalsService } from './redis/cskh-redis-signals.service';
-import { RedisQueueService } from './redis/redis-queue.service';
 import { AiModule } from '../ai/ai.module';
 import { AuthModule } from '../auth/auth.module';
-import { UsersModule } from '../users/users.module';
 import { PancakeModule } from '../pancake/pancake.module';
+import { UsersModule } from '../users/users.module';
+import { CskhInstagramCommentsService } from './comment/cskh-instagram-comments.service';
+import { CskhCronService } from './cskh-cron.service';
+import { CskhInsightService } from './cskh-insight.service';
+import { CskhController } from './cskh.controller';
+import { CskhService } from './cskh.service';
+import { CustomerAnalyticsService } from './customer-analytics.service';
+import { FacebookAdsService } from './facebook/facebook-ads.service';
+import { FacebookGraphService } from './facebook/facebook-graph.service';
+import { GraphApiCoordinatorService } from './facebook/graph-api-coordinator.service';
+import { MetaConversionsService } from './facebook/meta-conversions.service';
+import { CskhInboxLabelsService } from './inbox/cskh-inbox-labels.service';
+import { CskhInboxRealtimeService } from './inbox/cskh-inbox-realtime.service';
+import { CskhInboxService } from './inbox/cskh-inbox.service';
+import { OmsApiService } from './oms/oms-api.service';
+import { OmsCatalogService } from './oms/oms-catalog.service';
+import { OmsOrderService } from './oms/oms-order.service';
+import { OmsProductOperationsService } from './oms/oms-product-operations.service';
+import { ProductAnalyticsService } from './product-analytics.service';
+import { CskhRedisSignalsService } from './redis/cskh-redis-signals.service';
+import { RedisQueueService } from './redis/redis-queue.service';
+import { SapoCatalogDbService } from './sapo/sapo-catalog-db.service';
+import { SapoCollectionSyncService } from './sapo/sapo-collection-sync.service';
+import { SapoCustomerSyncService } from './sapo/sapo-customer-sync.service';
+import { SapoDisplayService } from './sapo/sapo-display.service';
+import { SapoFullSyncService } from './sapo/sapo-full-sync.service';
+import { SapoOAuthService } from './sapo/sapo-oauth.service';
+import { SapoOrderSyncService } from './sapo/sapo-order-sync.service';
+import { SapoOrderService } from './sapo/sapo-order.service';
+import { SapoProductImportService } from './sapo/sapo-product-import.service';
+import { SapoProductService } from './sapo/sapo-product.service';
 
 @Module({
   imports: [AiModule, AuthModule, UsersModule, forwardRef(() => PancakeModule)],
@@ -65,6 +66,7 @@ import { PancakeModule } from '../pancake/pancake.module';
     CustomerAnalyticsService,
     CskhCronService,
     RedisQueueService,
+    CskhInstagramCommentsService,
   ],
   exports: [CskhService, CskhInboxService, RedisQueueService],
 })

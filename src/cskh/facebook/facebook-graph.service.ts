@@ -1759,66 +1759,6 @@ export class FacebookGraphService {
     }
   }
 
-  /** Upload trước, gửi sau — dùng khi cần attachment_id tái sử dụng. */
-  async uploadPageMessageAttachment(
-    pageId: string,
-    token: string,
-    file: { buffer: Buffer; mimeType: string; filename: string },
-    attachmentType: OutboundAttachmentKind,
-  ): Promise<string> {
-    const form = new FormData();
-    form.append(
-      'message',
-      JSON.stringify({
-        attachment: {
-          type: attachmentType,
-          payload: { is_reusable: true },
-        },
-      }),
-    );
-    form.append('filedata', file.buffer, {
-      filename: file.filename,
-      contentType: file.mimeType,
-    });
-
-    // upload attachment tới /me/message_attachments
-    const url = `${GRAPH_BASE}/me/message_attachments`;
-    const res = await axios.post<{ attachment_id?: string }>(url, form, {
-      params: { access_token: token },
-      headers: form.getHeaders(),
-      timeout: 120_000,
-      maxBodyLength: Infinity,
-      maxContentLength: Infinity,
-    });
-    const id = res.data?.attachment_id;
-    if (!id) throw new Error('Graph không trả attachment_id');
-    return id;
-  }
-
-  /** Gửi tin nhắn Messenger với attachment từ Page tới khách. */
-  async sendPageAttachmentMessage(
-    pageId: string,
-    token: string,
-    recipientPsid: string,
-    attachmentType: OutboundAttachmentKind,
-    attachmentId: string,
-  ) {
-    return this.graphPost<{ message_id?: string }>(
-      `/${pageId}/messages`,
-      token,
-      {
-        recipient: { id: recipientPsid },
-        messaging_type: 'RESPONSE',
-        message: {
-          attachment: {
-            type: attachmentType,
-            payload: { attachment_id: attachmentId },
-          },
-        },
-      },
-    );
-  }
-
   /** Lấy danh sách bài đăng (posts/reels) trên kênh IG của User. */
   async fetchInstagramMedia(
     igUserId: string,

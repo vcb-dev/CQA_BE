@@ -2125,9 +2125,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     tenantId?: string,
     platform?: 'messenger' | 'instagram' | 'tiktok',
     month?: string,
+    pageIds?: string[],
   ) {
     const window = this.resolveInboxTimeWindow({ month });
-    const cacheKey = `${tenantId ?? '__all__'}:${pageId ?? '__all__'}:${platform ?? 'all'}:${window.month?.key ?? `d${window.sinceDays ?? ''}`}`;
+    const pageIdsKey = pageIds?.length ? [...pageIds].sort().join(',') : '';
+    const cacheKey = `${tenantId ?? '__all__'}:${pageId ?? '__all__'}:${pageIdsKey}:${platform ?? 'all'}:${window.month?.key ?? `d${window.sinceDays ?? ''}`}`;
     const cached = this.conversationStatsCache.get(cacheKey);
     if (cached && Date.now() - cached.at < this.conversationStatsTtlMs) {
       return cached.data;
@@ -2154,6 +2156,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           tenantId,
           platform,
           month,
+          pageIds,
         );
         this.conversationStatsCache.set(cacheKey, {
           at: Date.now(),
@@ -2191,10 +2194,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     tenantId?: string,
     platform?: 'messenger' | 'instagram' | 'tiktok',
     month?: string,
+    explicitPageIds?: string[],
   ) {
     let pageIds: string[] | undefined;
     if (pageId) {
       pageIds = undefined;
+    } else if (explicitPageIds?.length) {
+      pageIds = explicitPageIds;
     } else if (platform) {
       pageIds = await this.pageIdsForGraphPlatform(platform, tenantId);
       if (!pageIds.length) return { total: 0, fromAd: 0, unread: 0, normal: 0 };
@@ -2393,6 +2399,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       unlabeledOnly?: boolean;
       includeLabels?: boolean;
       platform?: 'messenger' | 'instagram' | 'tiktok';
+      pageIds?: string[];
     },
   ): Promise<{
     items: CskhInboxConversation[];
@@ -2415,6 +2422,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       opts?.labelId ?? '',
       opts?.unlabeledOnly ? 'ul' : '',
       window.month?.key ?? `d${window.sinceDays ?? ''}`,
+      (opts?.pageIds ?? []).slice().sort().join(','),
       opts?.cursor ?? '',
     ].join('|');
     if (!opts?.cursor) {
@@ -2477,6 +2485,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           unlabeledOnly?: boolean;
           includeLabels?: boolean;
           platform?: 'messenger' | 'instagram' | 'tiktok';
+          pageIds?: string[];
         }
       | undefined,
     listCacheKey: string,
@@ -2486,7 +2495,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     hasMore: boolean;
   }> {
     let platformPageIds: string[] | undefined;
-    if (!pageId && opts?.platform) {
+    if (!pageId && opts?.pageIds?.length) {
+      platformPageIds = opts.pageIds;
+    } else if (!pageId && opts?.platform) {
       platformPageIds = await this.pageIdsForGraphPlatform(
         opts.platform,
         tenantId,

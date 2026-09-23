@@ -268,6 +268,17 @@ export class CskhController {
     );
   }
 
+  /** Gắn nhãn quản lý (team/người quản lý/khu vực) — nhập tay ở Cài đặt, không liên kết bảng User/Team. */
+  @Patch('pages/:pageId/info')
+  @UseGuards(JwtAuthGuard)
+  setPageInfo(
+    @CurrentUser() user: User,
+    @Param('pageId') pageId: string,
+    @Body() body: { team?: string | null; managerName?: string | null; region?: string | null },
+  ) {
+    return this.cskh.setPageInfo(pageId, body, user.tenantId || undefined);
+  }
+
   @Delete('pages/:pageId')
   @UseGuards(JwtAuthGuard)
   deletePage(@CurrentUser() user: User, @Param('pageId') pageId: string) {

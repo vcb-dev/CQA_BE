@@ -1032,6 +1032,7 @@ export class CskhController {
   inboxConversationStats(
     @CurrentUser() user: User,
     @Query('pageId') pageId?: string,
+    @Query('pageIds') pageIds?: string | string[],
     @Query('platform') platform?: string,
     @Query('month') month?: string,
   ) {
@@ -1042,6 +1043,7 @@ export class CskhController {
       user.tenantId || undefined,
       graphPlatform,
       monthKey,
+      this.parsePageIdsQuery(pageIds),
     );
   }
 
@@ -1050,6 +1052,7 @@ export class CskhController {
   listInboxConversations(
     @CurrentUser() user: User,
     @Query('pageId') pageId?: string,
+    @Query('pageIds') pageIds?: string | string[],
     @Query('fromAdOnly') fromAdOnly?: string,
     @Query('unreadOnly') unreadOnly?: string,
     @Query('organicOnly') organicOnly?: string,
@@ -1086,6 +1089,7 @@ export class CskhController {
       unlabeledOnly: unlabeledOnly === '1' || unlabeledOnly === 'true',
       includeLabels: includeLabels === '1' || includeLabels === 'true',
       platform: graphPlatform,
+      pageIds: this.parsePageIdsQuery(pageIds),
     };
     if (legacy === '1' || legacy === 'true') {
       return this.inbox.listConversationsLegacy(
@@ -1573,6 +1577,20 @@ export class CskhController {
       igCommentId.trim(),
       user.tenantId || undefined,
     );
+  }
+
+  private parsePageIdsQuery(raw?: string | string[]): string[] | undefined {
+    const parts = Array.isArray(raw) ? raw : raw ? [raw] : [];
+    const ids = [
+      ...new Set(
+        parts
+          .flatMap((part) => part.split(','))
+          .map((id) => id.trim())
+          .filter(Boolean),
+      ),
+    ];
+    if (!ids.length) return undefined;
+    return ids.slice(0, 200);
   }
 
   private parseInboxPlatformQuery(

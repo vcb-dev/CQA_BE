@@ -1360,29 +1360,24 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       await this.applyReferralFromWebhook(pageId, event, referral);
     }
 
-    // Handle typing indicator from Facebook Webhook
-    const senderAction = (event as any).sender_action;
+    // Typing từ khách (Facebook webhook). Bỏ qua khi chính Page đang gõ.
+    const senderAction = (event as { sender_action?: string }).sender_action;
     if (senderAction) {
+      if (senderAction !== 'typing_on') return;
       const senderPsid = String(event.sender?.id || '');
-      const recipientPsid = String(event.recipient?.id || '');
-      if (senderPsid) {
-        const isFromPage = senderPsid === pageId;
-        const customerPsid = isFromPage ? recipientPsid : senderPsid;
-        if (customerPsid && customerPsid !== pageId) {
-          const conv = await this.prisma.cskhInboxConversation.findUnique({
-            where: {
-              pageId_participantPsid: { pageId, participantPsid: customerPsid },
-            },
-          });
-          if (conv) {
-            this.realtime.publish({
-              type: 'typing',
-              conversationId: conv.id,
-              pageId,
-              tenantId: conv.tenantId || undefined,
-            });
-          }
-        }
+      if (!senderPsid || senderPsid === pageId) return;
+      const conv = await this.prisma.cskhInboxConversation.findUnique({
+        where: {
+          pageId_participantPsid: { pageId, participantPsid: senderPsid },
+        },
+      });
+      if (conv) {
+        this.realtime.publish({
+          type: 'typing',
+          conversationId: conv.id,
+          pageId,
+          tenantId: conv.tenantId || undefined,
+        });
       }
       return;
     }
@@ -5209,7 +5204,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     return /[\u0E00-\u0E7F\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/.test(text);
   }
 
-  /** Broadcast typing indicator event qua SSE. */
+  /** Báo khách (Graph typing_on). Không SSE về inbox — tránh shop thấy chính mình như khách đang nhập. */
   async notifyTyping(conversationId: string, tenantId?: string) {
     const conv = await findInboxConversationById(
       this.prisma,
@@ -5235,13 +5230,6 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         'typing_on',
       );
     }
-
-    this.realtime.publish({
-      type: 'typing',
-      conversationId,
-      pageId: conv.pageId,
-      tenantId: conv.tenantId || undefined,
-    });
   }
 
   /** Đánh dấu đã đọc — chỉ khi đã gán nhãn; nếu chưa gán nhãn thì ghi nhận xem và giữ chờ xử lý. */

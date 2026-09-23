@@ -168,6 +168,16 @@ export class CskhController {
     @Query('month') month?: string,
     @Query('date') date?: string,
     @Query('lite') lite?: string,
+    @Query('search') search?: string,
+    @Query('platform') platform?: string,
+    @Query('status') status?: string,
+    @Query('team') team?: string,
+    @Query('manager') manager?: string,
+    @Query('region') region?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortDir') sortDir?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
     const monthTrimmed = month?.trim();
     const dateTrimmed = date?.trim();
@@ -180,10 +190,59 @@ export class CskhController {
     if (monthTrimmed && dateTrimmed) {
       throw new BadRequestException('Chỉ dùng một trong hai: month hoặc date');
     }
+    if (status !== undefined && status !== 'on' && status !== 'off') {
+      throw new BadRequestException('status phải là on hoặc off');
+    }
+    const SORTABLE_KEYS = [
+      'name',
+      'team',
+      'manager',
+      'region',
+      'msgs',
+      'newInbound',
+      'unread',
+      'adSpend',
+      'costPerConv',
+    ] as const;
+    if (
+      sortBy !== undefined &&
+      !SORTABLE_KEYS.includes(sortBy as (typeof SORTABLE_KEYS)[number])
+    ) {
+      throw new BadRequestException(`sortBy phải là một trong: ${SORTABLE_KEYS.join(', ')}`);
+    }
+    if (sortDir !== undefined && sortDir !== 'asc' && sortDir !== 'desc') {
+      throw new BadRequestException('sortDir phải là asc hoặc desc');
+    }
+    // page/limit chỉ bật phân trang khi FE thật sự truyền — không đổi hành vi mặc định
+    // (trả full list) cho các màn hình khác đang gọi GET /cskh/pages mà chưa cập nhật.
+    let pageNum: number | undefined;
+    let limitNum: number | undefined;
+    if (page !== undefined || limit !== undefined) {
+      const parsedPage = parseInt(page ?? '1', 10);
+      const parsedLimit = parseInt(limit ?? '10', 10);
+      if (!Number.isFinite(parsedPage) || parsedPage < 1) {
+        throw new BadRequestException('page phải là số nguyên >= 1');
+      }
+      if (!Number.isFinite(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
+        throw new BadRequestException('limit phải là số nguyên từ 1 đến 100');
+      }
+      pageNum = parsedPage;
+      limitNum = parsedLimit;
+    }
     return this.cskh.listPages(user.tenantId || undefined, {
       month: monthTrimmed || undefined,
       date: dateTrimmed || undefined,
       lite: lite === '1' || lite === 'true',
+      search: search?.trim() || undefined,
+      platform: platform?.trim() || undefined,
+      status: status as 'on' | 'off' | undefined,
+      team: team?.trim() || undefined,
+      manager: manager?.trim() || undefined,
+      region: region?.trim() || undefined,
+      sortBy: sortBy as (typeof SORTABLE_KEYS)[number] | undefined,
+      sortDir: (sortDir as 'asc' | 'desc' | undefined) ?? 'desc',
+      page: pageNum,
+      limit: limitNum,
     });
   }
 
@@ -266,6 +325,17 @@ export class CskhController {
       Boolean(body.enabled),
       user.tenantId || undefined,
     );
+  }
+
+  /** Gắn nhãn quản lý (team/người quản lý/khu vực) — nhập tay ở Cài đặt, không liên kết bảng User/Team. */
+  @Patch('pages/:pageId/info')
+  @UseGuards(JwtAuthGuard)
+  setPageInfo(
+    @CurrentUser() user: User,
+    @Param('pageId') pageId: string,
+    @Body() body: { team?: string | null; managerName?: string | null; region?: string | null },
+  ) {
+    return this.cskh.setPageInfo(pageId, body, user.tenantId || undefined);
   }
 
   @Delete('pages/:pageId')

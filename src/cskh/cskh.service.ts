@@ -654,21 +654,52 @@ export class CskhService implements OnModuleInit {
 
   async listPages(
     tenantId?: string,
-    options?: { month?: string; date?: string; lite?: boolean },
+    options?: {
+      month?: string;
+      date?: string;
+      lite?: boolean;
+      search?: string;
+      platform?: string;
+      status?: 'on' | 'off';
+      team?: string;
+      manager?: string;
+      region?: string;
+      sortBy?:
+        | 'name'
+        | 'team'
+        | 'manager'
+        | 'region'
+        | 'msgs'
+        | 'newInbound'
+        | 'unread'
+        | 'adSpend'
+        | 'costPerConv';
+      sortDir?: 'asc' | 'desc';
+      page?: number;
+      limit?: number;
+    },
   ) {
     type PageListRow = {
       pageId: string;
       pageName: string | null;
       enabled: boolean;
       updatedAt: Date;
+      createdAt: Date;
       metadata: Prisma.JsonValue | null;
+      team: string | null;
+      managerName: string | null;
+      region: string | null;
     };
     const pageListSelect = {
       pageId: true,
       pageName: true,
       enabled: true,
       updatedAt: true,
+      createdAt: true,
       metadata: true,
+      team: true,
+      managerName: true,
+      region: true,
     } as const;
 
     const month = options?.month?.trim();
@@ -678,8 +709,30 @@ export class CskhService implements OnModuleInit {
     const inboundMonth =
       !inboundDate && month && /^\d{4}-\d{2}$/.test(month) ? month : undefined;
 
+    // Sentinel cho "chưa gán" — FE dùng đúng chuỗi này khi lọc Team/Quản lý/Khu vực trống.
+    const UNASSIGNED = '__none__';
+    // Filter chạy ở DB, không phải mảng JS ở FE — trang Kênh chỉ hiển thị, không tự lọc/sort.
+    // Không áp cho path `lite` (dropdown chọn page trong inbox) vì đó là danh sách độc lập,
+    // không liên quan tới bộ lọc của trang Kênh.
+    const where: Prisma.FacebookCskhConfigWhereInput = tenantId
+      ? { tenantId }
+      : {};
+    if (!options?.lite) {
+      if (options?.status === 'on') where.enabled = true;
+      else if (options?.status === 'off') where.enabled = false;
+      if (options?.team)
+        where.team = options.team === UNASSIGNED ? null : options.team;
+      if (options?.manager)
+        where.managerName =
+          options.manager === UNASSIGNED ? null : options.manager;
+      if (options?.region)
+        where.region = options.region === UNASSIGNED ? null : options.region;
+      if (options?.search)
+        where.pageName = { contains: options.search, mode: 'insensitive' };
+    }
+
     const rows = await this.prisma.facebookCskhConfig.findMany({
-      where: tenantId ? { tenantId } : undefined,
+      where,
       orderBy: [{ enabled: 'desc' }, { pageName: 'asc' }],
       select: pageListSelect,
     });
@@ -701,6 +754,10 @@ export class CskhService implements OnModuleInit {
     }
 
     const pageIds = rows.map((r) => r.pageId);
+    // Ngày trước ngày đang chọn — dùng để tính chênh lệch (mũi tên tăng/giảm) so với hôm qua.
+    const yesterdayDate = inboundDate
+      ? this.previousDateStr(inboundDate)
+      : undefined;
 
     const oauthPromise = this.prisma.facebookOAuthSession.findFirst({
       where: tenantId ? { tenantId } : undefined,
@@ -714,36 +771,61 @@ export class CskhService implements OnModuleInit {
       },
     });
 
-    const [pageStats, inboundStatsMap, dayTotalMessageMap, oauth] =
-      await Promise.all([
-        pageIds.length
-          ? this.loadPageStatsBundleCached(tenantId, pageIds, {
-              allowStaleDuringBackfill: true,
-            })
-          : Promise.resolve({
-              convMap: new Map<string, number>(),
-              unreadMap: new Map<string, number>(),
-              messageMap: new Map<string, number>(),
-            }),
-        inboundMonth && pageIds.length
-          ? this.loadPageInboundMessageStats(inboundMonth, pageIds)
-          : inboundDate && pageIds.length
-            ? this.loadPageInboundMessageStatsForRangeCached(
-                tenantId,
-                inboundDate,
-                inboundDate,
-                pageIds,
-              )
-            : Promise.resolve(new Map<string, number>()),
-        inboundDate && pageIds.length
-          ? this.loadPageDayTotalMessageStatsForRange(
+    const [
+      pageStats,
+      inboundStatsMap,
+      dayTotalMessageMap,
+      oauth,
+      lastActivityMap,
+      msgsYesterdayMap,
+      inboundYesterdayMap,
+    ] = await Promise.all([
+      pageIds.length
+        ? this.loadPageStatsBundleCached(tenantId, pageIds, {
+            allowStaleDuringBackfill: true,
+          })
+        : Promise.resolve({
+            convMap: new Map<string, number>(),
+            unreadMap: new Map<string, number>(),
+            messageMap: new Map<string, number>(),
+          }),
+      inboundMonth && pageIds.length
+        ? this.loadPageInboundMessageStats(inboundMonth, pageIds)
+        : inboundDate && pageIds.length
+          ? this.loadPageInboundMessageStatsForRangeCached(
+              tenantId,
               inboundDate,
               inboundDate,
               pageIds,
             )
           : Promise.resolve(new Map<string, number>()),
-        oauthPromise,
-      ]);
+      inboundDate && pageIds.length
+        ? this.loadPageDayTotalMessageStatsForRange(
+            inboundDate,
+            inboundDate,
+            pageIds,
+          )
+        : Promise.resolve(new Map<string, number>()),
+      oauthPromise,
+      !options?.lite && pageIds.length
+        ? this.loadPageLastActivityMap(pageIds)
+        : Promise.resolve(new Map<string, Date | null>()),
+      yesterdayDate && pageIds.length
+        ? this.loadPageDayTotalMessageStatsForRange(
+            yesterdayDate,
+            yesterdayDate,
+            pageIds,
+          )
+        : Promise.resolve(new Map<string, number>()),
+      yesterdayDate && pageIds.length
+        ? this.loadPageInboundMessageStatsForRangeCached(
+            tenantId,
+            yesterdayDate,
+            yesterdayDate,
+            pageIds,
+          )
+        : Promise.resolve(new Map<string, number>()),
+    ]);
 
     const convCountMap = pageStats.convMap;
     const unreadCountMap = pageStats.unreadMap;
@@ -831,53 +913,242 @@ export class CskhService implements OnModuleInit {
     let totalAdSpend = 0;
     let adSpendCurrency: string | null = null;
 
-    return {
-      pages: rows.map((row) => {
-        const ad = inboundDate ? adSpendMap.get(row.pageId) : undefined;
-        const inboundCount =
-          inboundMonth || inboundDate
-            ? inboundStatsMap.get(row.pageId) || 0
-            : undefined;
-        let adCostPerConversation = ad?.costPerConversation ?? null;
+    let pageResults = rows.map((row) => {
+      const ad = inboundDate ? adSpendMap.get(row.pageId) : undefined;
+      const inboundCount =
+        inboundMonth || inboundDate
+          ? inboundStatsMap.get(row.pageId) || 0
+          : undefined;
+      const msgsToday = totalMessageStatsMap.get(row.pageId) || 0;
+      // Chênh lệch so với hôm qua — chỉ có ý nghĩa khi đang xem theo 1 ngày cụ thể (inboundDate).
+      const msgsYesterday = inboundDate
+        ? msgsYesterdayMap.get(row.pageId) || 0
+        : undefined;
+      const newInboundYesterday = inboundDate
+        ? inboundYesterdayMap.get(row.pageId) || 0
+        : undefined;
+      const trendOf = (
+        today: number,
+        yesterday: number,
+      ): 'up' | 'down' | 'flat' =>
+        today > yesterday ? 'up' : today < yesterday ? 'down' : 'flat';
+      const deltaOf = (today: number, yesterday: number): number =>
+        Math.abs(today - yesterday);
+      let adCostPerConversation = ad?.costPerConversation ?? null;
+      if (adCostPerConversation == null && ad?.spend != null && ad.spend > 0) {
+        const denom =
+          ad.messagingConversations != null && ad.messagingConversations > 0
+            ? ad.messagingConversations
+            : inboundCount != null && inboundCount > 0
+              ? inboundCount
+              : null;
+        if (denom != null) {
+          adCostPerConversation = ad.spend / denom;
+        }
+      }
+      if (ad?.spend != null && ad.spend > 0) {
+        totalAdSpend += ad.spend;
+        if (!adSpendCurrency && ad.currency) adSpendCurrency = ad.currency;
+      }
+      return {
+        pageId: row.pageId,
+        pageName: row.pageName,
+        enabled: row.enabled,
+        updatedAt: row.updatedAt,
+        connectedAt: row.createdAt,
+        lastActivityAt: lastActivityMap.get(row.pageId) ?? null,
+        pagePictureUrl: this.pagePictureUrl(row.metadata),
+        platform: cskhChannelPlatform(row.metadata),
+        team: row.team,
+        managerName: row.managerName,
+        region: row.region,
+        conversationCount: convCountMap.get(row.pageId) || 0,
+        messageCount: msgsToday,
+        unreadConversationCount: unreadCountMap.get(row.pageId) || 0,
+        inboundMessageCount: inboundCount,
+        msgsYesterday,
+        msgsTrend:
+          msgsYesterday != null ? trendOf(msgsToday, msgsYesterday) : undefined,
+        msgsDelta:
+          msgsYesterday != null ? deltaOf(msgsToday, msgsYesterday) : undefined,
+        newInboundYesterday,
+        newInboundTrend:
+          inboundCount != null && newInboundYesterday != null
+            ? trendOf(inboundCount, newInboundYesterday)
+            : undefined,
+        newInboundDelta:
+          inboundCount != null && newInboundYesterday != null
+            ? deltaOf(inboundCount, newInboundYesterday)
+            : undefined,
+        adSpend: ad?.spend ?? null,
+        adSpendCurrency: ad?.currency ?? null,
+        adMessagingConversations: ad?.messagingConversations ?? null,
+        adCostPerConversation,
+        adAccountName: ad?.adAccountName ?? null,
+        adSpendUnavailableReason: ad?.unavailableReason ?? null,
+        adSpendSyncedAt: ad?.syncedAt?.toISOString() ?? null,
+      };
+    });
+
+    // platform là field thật (cskhChannelPlatform, lưu lúc kết nối OAuth) — không đoán theo
+    // tên page. Lọc ở JS sau khi build xong vẫn là xử lý phía BE, FE chỉ gửi ?platform=...
+    if (!options?.lite && options?.platform) {
+      pageResults = pageResults.filter((p) => p.platform === options.platform);
+    }
+
+    // Sort/paginate chạy ở BE — trang Kênh (FE) chỉ nhận mảng đã xử lý sẵn, không tự
+    // sort/paginate lại bằng JS. sortBy/limit không truyền thì giữ nguyên hành vi cũ
+    // (trả full list theo orderBy DB) để không phá các nơi khác đang gọi endpoint này.
+    type SortableRow = {
+      pageName: string | null;
+      team: string | null;
+      managerName: string | null;
+      region: string | null;
+      messageCount: number;
+      inboundMessageCount?: number;
+      unreadConversationCount: number;
+      adSpend: number | null;
+      adCostPerConversation: number | null;
+    };
+    const SORT_EXTRACTORS: Record<string, (p: SortableRow) => number | string> =
+      {
+        name: (p) => (p.pageName || '').toLowerCase(),
+        team: (p) => (p.team || '').toLowerCase(),
+        manager: (p) => (p.managerName || '').toLowerCase(),
+        region: (p) => (p.region || '').toLowerCase(),
+        msgs: (p) => p.messageCount,
+        newInbound: (p) => p.inboundMessageCount ?? 0,
+        unread: (p) => p.unreadConversationCount,
+        adSpend: (p) => p.adSpend ?? -1,
+        costPerConv: (p) => p.adCostPerConversation ?? -1,
+      };
+    if (options?.sortBy && SORT_EXTRACTORS[options.sortBy]) {
+      const extract = SORT_EXTRACTORS[options.sortBy];
+      const dir = options.sortDir === 'asc' ? 1 : -1;
+      pageResults = [...pageResults].sort((a, b) => {
+        const av = extract(a);
+        const bv = extract(b);
+        if (typeof av === 'string' || typeof bv === 'string') {
+          return dir * String(av).localeCompare(String(bv), 'vi');
+        }
+        return dir * ((av as number) - (bv as number));
+      });
+    }
+
+    // Tổng hợp cho khối "Tổng quan" (KPI/donut/insight/tab nền tảng/dropdown facet) — tính trên
+    // đúng tập pageResults đã lọc của request này (page Kênh gọi không kèm filter nên = full
+    // ngày đã chọn). Trả sẵn số đã cộng dồn, FE chỉ render — không tự reduce/sort/đếm lại.
+    type AggregateRow = {
+      pageId: string;
+      pageName: string | null;
+      platform: string;
+      enabled: boolean;
+      messageCount: number;
+      inboundMessageCount?: number;
+      team: string | null;
+      managerName: string | null;
+      region: string | null;
+    };
+    const buildFacet = (
+      list: AggregateRow[],
+      pick: (p: AggregateRow) => string | null,
+    ): {
+      values: { value: string; count: number }[];
+      hasUnassigned: boolean;
+    } => {
+      const seen = new Map<string, number>();
+      let hasUnassigned = false;
+      for (const p of list) {
+        const v = pick(p);
+        if (v) seen.set(v, (seen.get(v) || 0) + 1);
+        else hasUnassigned = true;
+      }
+      const values = [...seen.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0], 'vi'))
+        .map(([value, count]) => ({ value, count }));
+      return { values, hasUnassigned };
+    };
+
+    const totalMsgsAll = pageResults.reduce(
+      (sum, p) => sum + p.messageCount,
+      0,
+    );
+    const activePagesCount = pageResults.filter((p) => p.enabled).length;
+
+    const platformMsgMap = new Map<string, number>();
+    const platformCountMap = new Map<string, number>();
+    for (const p of pageResults) {
+      platformMsgMap.set(
+        p.platform,
+        (platformMsgMap.get(p.platform) || 0) + p.messageCount,
+      );
+      platformCountMap.set(
+        p.platform,
+        (platformCountMap.get(p.platform) || 0) + 1,
+      );
+    }
+    const platformDistribution = [...platformMsgMap.entries()]
+      .map(([platform, msgs]) => ({
+        platform,
+        msgs,
+        pct: totalMsgsAll > 0 ? Math.round((msgs / totalMsgsAll) * 100) : 0,
+      }))
+      .sort((a, b) => b.msgs - a.msgs);
+    const platformFacet = [...platformCountMap.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0], 'vi'))
+      .map(([platform, count]) => ({ platform, count }));
+
+    let topInboundPage: {
+      pageId: string;
+      pageName: string | null;
+      newInbound: number;
+    } | null = null;
+    if (inboundDate) {
+      for (const p of pageResults) {
+        const inbound = p.inboundMessageCount ?? 0;
         if (
-          adCostPerConversation == null &&
-          ad?.spend != null &&
-          ad.spend > 0
+          inbound > 0 &&
+          (!topInboundPage || inbound > topInboundPage.newInbound)
         ) {
-          const denom =
-            ad.messagingConversations != null && ad.messagingConversations > 0
-              ? ad.messagingConversations
-              : inboundCount != null && inboundCount > 0
-                ? inboundCount
-                : null;
-          if (denom != null) {
-            adCostPerConversation = ad.spend / denom;
-          }
+          topInboundPage = {
+            pageId: p.pageId,
+            pageName: p.pageName,
+            newInbound: inbound,
+          };
         }
-        if (ad?.spend != null && ad.spend > 0) {
-          totalAdSpend += ad.spend;
-          if (!adSpendCurrency && ad.currency) adSpendCurrency = ad.currency;
-        }
-        return {
-          pageId: row.pageId,
-          pageName: row.pageName,
-          enabled: row.enabled,
-          updatedAt: row.updatedAt,
-          pagePictureUrl: this.pagePictureUrl(row.metadata),
-          platform: cskhChannelPlatform(row.metadata),
-          conversationCount: convCountMap.get(row.pageId) || 0,
-          messageCount: totalMessageStatsMap.get(row.pageId) || 0,
-          unreadConversationCount: unreadCountMap.get(row.pageId) || 0,
-          inboundMessageCount: inboundCount,
-          adSpend: ad?.spend ?? null,
-          adSpendCurrency: ad?.currency ?? null,
-          adMessagingConversations: ad?.messagingConversations ?? null,
-          adCostPerConversation,
-          adAccountName: ad?.adAccountName ?? null,
-          adSpendUnavailableReason: ad?.unavailableReason ?? null,
-          adSpendSyncedAt: ad?.syncedAt?.toISOString() ?? null,
-        };
-      }),
+      }
+    }
+
+    const teamFacet = buildFacet(pageResults, (p) => p.team);
+    const managerFacet = buildFacet(pageResults, (p) => p.managerName);
+    const regionFacet = buildFacet(pageResults, (p) => p.region);
+
+    const totalFiltered = pageResults.length;
+    let pagination:
+      | { page: number; limit: number; total: number; totalPages: number }
+      | undefined;
+    if (options?.limit) {
+      const limit = options.limit;
+      const totalPages = Math.max(1, Math.ceil(totalFiltered / limit));
+      const page = Math.min(Math.max(1, options.page ?? 1), totalPages);
+      pageResults = pageResults.slice(
+        (page - 1) * limit,
+        (page - 1) * limit + limit,
+      );
+      pagination = { page, limit, total: totalFiltered, totalPages };
+    }
+
+    return {
+      pages: pageResults,
+      pagination,
+      totalMsgs: totalMsgsAll,
+      activePagesCount,
+      platformDistribution,
+      platformFacet,
+      topInboundPage,
+      teamFacet,
+      managerFacet,
+      regionFacet,
       inboundMonth: inboundMonth
         ? {
             month: inboundMonth,
@@ -916,6 +1187,7 @@ export class CskhService implements OnModuleInit {
       oauthUser: oauth?.fbUserName || oauth?.fbUserId || null,
       oauthUpdatedAt: oauth?.updatedAt || null,
       oauthExpiresAt: oauth?.tokenExpiresAt || null,
+      oauthTokenStatus: this.tokenStatusOf(oauth?.tokenExpiresAt),
       oauthSyncStatus,
       oauthSyncError,
       adsReadConnected: adStats.adsReadConnected,
@@ -932,6 +1204,9 @@ export class CskhService implements OnModuleInit {
       enabled: boolean;
       updatedAt: Date;
       metadata: Prisma.JsonValue | null;
+      team: string | null;
+      managerName: string | null;
+      region: string | null;
     }>,
   ) {
     const oauth = await this.prisma.facebookOAuthSession.findFirst({
@@ -969,6 +1244,9 @@ export class CskhService implements OnModuleInit {
         updatedAt: row.updatedAt,
         pagePictureUrl: this.pagePictureUrl(row.metadata),
         platform: cskhChannelPlatform(row.metadata),
+        team: row.team,
+        managerName: row.managerName,
+        region: row.region,
       })),
       oauthConnected: Boolean(oauth),
       oauthUser: oauth?.fbUserName || oauth?.fbUserId || null,
@@ -2271,6 +2549,37 @@ export class CskhService implements OnModuleInit {
     return new Map(rows.map((r) => [r.pageId, r.totalCount]));
   }
 
+  /** Thời điểm tin nhắn gần nhất theo page — MAX(last_message_at), dùng cho panel chi tiết kênh. */
+  private async loadPageLastActivityMap(pageIds: string[]) {
+    if (!pageIds.length) return new Map<string, Date | null>();
+    type Row = { pageId: string; lastActivityAt: Date | null };
+    const rows = await this.prisma.$queryRaw<Row[]>`
+      SELECT page_id AS "pageId", MAX(last_message_at) AS "lastActivityAt"
+      FROM cskh_inbox_conversations
+      WHERE page_id IN (${Prisma.join(pageIds)})
+      GROUP BY page_id
+    `;
+    return new Map(rows.map((r) => [r.pageId, r.lastActivityAt]));
+  }
+
+  /** Ngày lịch liền trước `dateStr` (YYYY-MM-DD) — dùng để so sánh hôm nay/hôm qua. */
+  private previousDateStr(dateStr: string): string {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const dt = new Date(year, month - 1, day - 1);
+    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+  }
+
+  /** Trạng thái token Facebook OAuth dùng để cảnh báo mất kết nối trên trang Kênh. */
+  private tokenStatusOf(
+    expiresAt: Date | null | undefined,
+  ): 'ok' | 'expiring_soon' | 'expired' | 'unknown' {
+    if (!expiresAt) return 'unknown';
+    const diffMs = expiresAt.getTime() - Date.now();
+    if (diffMs < 0) return 'expired';
+    if (diffMs <= 7 * 24 * 60 * 60 * 1000) return 'expiring_soon';
+    return 'ok';
+  }
+
   private monthRangeDays(month: string): { from: string; to: string } {
     const [yearStr, monthStr] = month.split('-');
     const year = Number(yearStr);
@@ -2519,6 +2828,37 @@ export class CskhService implements OnModuleInit {
       throw new NotFoundException('Không tìm thấy page hoặc không có quyền');
     }
     return { pageId, enabled };
+  }
+
+  /** Gắn nhãn quản lý (team/người quản lý/khu vực) cho 1 kênh — nhập tay ở Cài đặt, không liên kết bảng nào khác. */
+  async setPageInfo(
+    pageId: string,
+    data: {
+      team?: string | null;
+      managerName?: string | null;
+      region?: string | null;
+    },
+    tenantId?: string,
+  ) {
+    const where = tenantId ? { pageId, tenantId } : { pageId };
+    const trim = (v?: string | null) => {
+      if (v === undefined) return undefined;
+      const t = v?.trim() ?? '';
+      return t.length ? t : null;
+    };
+    const result = await this.prisma.facebookCskhConfig.updateMany({
+      where,
+      data: {
+        team: trim(data.team),
+        managerName: trim(data.managerName),
+        region: trim(data.region),
+      },
+    });
+    if (result.count === 0) {
+      throw new NotFoundException('Không tìm thấy page hoặc không có quyền');
+    }
+    this.invalidatePageListLiteCache(tenantId);
+    return { pageId, ...data };
   }
 
   async setPagesEnabledBulk(

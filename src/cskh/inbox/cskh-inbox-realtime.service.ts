@@ -62,6 +62,11 @@ export type InboxConversationPayload = {
   labelsLocked?: boolean;
   viewers?: InboxViewerPayload[];
   pendingViewerCount?: number;
+
+  kind: string;
+  sourcePostId: string | null;
+  sourcePermalink: string | null;
+  sourceThumb: string | null;
 };
 
 export type InboxViewerPayload = {

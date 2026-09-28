@@ -6,7 +6,9 @@ import {
   dedupeChatMessages,
   dedupeMediaUrls,
   FB_ATTACHMENT_FIELDS,
+  FB_COMMENT_FIELDS,
   FB_MESSAGE_FIELDS,
+  type GraphCommentAttachment,
   isNoiseMessageText,
   messageNeedsMediaResolve,
   normalizeFbMessage,
@@ -1928,6 +1930,223 @@ export class FacebookGraphService {
       };
       const fbErr = err.response?.data?.error;
       throw new Error(fbErr?.message || err.message || 'Graph API POST error');
+    }
+  }
+
+  /** Lấy danh sách bài đăng (posts) trên kênh FB của Page. */
+  async fetchPageFeed(
+    pageId: string,
+    token: string,
+    limit = 25,
+  ): Promise<
+    Array<{
+      id: string;
+      message?: string;
+      permalink_url?: string;
+      created_time?: string;
+      full_picture?: string;
+    }>
+  > {
+    const data = await this.graphRequest<{
+      data?: Array<{
+        id: string;
+        message?: string;
+        permalink_url?: string;
+        created_time?: string;
+        full_picture?: string;
+      }>;
+    }>(
+      `/${pageId}/feed`,
+      token,
+      {
+        fields: 'id,message,permalink_url,created_time,full_picture',
+        limit,
+      },
+      { priority: 'low' },
+    );
+    return data.data ?? [];
+  }
+
+  /** Lấy thông tin chi tiết của một bài đăng (post) trên kênh FB của Page. */
+  async fetchPagePostById(
+    postId: string,
+    token: string,
+  ): Promise<{
+    id: string;
+    message?: string;
+    permalink_url?: string;
+    full_picture?: string;
+  } | null> {
+    try {
+      const data = await this.graphRequest<{
+        id?: string;
+        message?: string;
+        permalink_url?: string;
+        full_picture?: string;
+      }>(`/${postId}`, token, {
+        fields: 'id,message,permalink_url,full_picture',
+      });
+      return data?.id
+        ? {
+            id: data.id,
+            message: data.message,
+            permalink_url: data.permalink_url,
+            full_picture: data.full_picture,
+          }
+        : null;
+    } catch (e) {
+      this.logger.warn(`fetchPagePostById ${postId}: ${(e as Error).message}`);
+      return null;
+    }
+  }
+
+  async fetchPageCommentById(
+    commentId: string,
+    token: string,
+  ): Promise<{
+    id: string;
+    message?: string;
+    created_time?: string;
+    from?: { id?: string; name?: string };
+    parent?: { id?: string };
+    attachment?: GraphCommentAttachment;
+  } | null> {
+    try {
+      const data = await this.graphRequest<{
+        id?: string;
+        message?: string;
+        created_time?: string;
+        from?: { id?: string; name?: string };
+        parent?: { id?: string };
+        attachment?: GraphCommentAttachment;
+      }>(`/${commentId}`, token, {
+        fields: FB_COMMENT_FIELDS,
+      });
+      return data?.id
+        ? {
+            id: data.id,
+            message: data.message,
+            created_time: data.created_time,
+            from: data.from,
+            parent: data.parent,
+            attachment: data.attachment,
+          }
+        : null;
+    } catch (e) {
+      this.logger.warn(
+        `fetchPageCommentById ${commentId}: ${(e as Error).message}`,
+      );
+      return null;
+    }
+  }
+
+  /** Lấy danh sách bình luận (comments) của một bài đăng (post) trên kênh FB của Page. */
+  async fetchPagePostComments(
+    postId: string,
+    token: string,
+    limit = 50,
+  ): Promise<
+    Array<{
+      id: string;
+      message?: string;
+      created_time?: string;
+      from?: { id?: string; name?: string };
+      parent?: { id?: string };
+      attachment?: GraphCommentAttachment;
+      comments?: {
+        data?: Array<{
+          id: string;
+          message?: string;
+          created_time?: string;
+          from?: { id?: string; name?: string };
+          parent?: { id?: string };
+          attachment?: GraphCommentAttachment;
+        }>;
+      };
+    }>
+  > {
+    const data = await this.graphRequest<{
+      data?: Array<{
+        id: string;
+        message?: string;
+        created_time?: string;
+        from?: { id?: string; name?: string };
+        parent?: { id?: string };
+        attachment?: GraphCommentAttachment;
+        comments?: {
+          data?: Array<{
+            id: string;
+            message?: string;
+            created_time?: string;
+            from?: { id?: string; name?: string };
+            parent?: { id?: string };
+            attachment?: GraphCommentAttachment;
+          }>;
+        };
+      }>;
+    }>(
+      `/${postId}/comments`,
+      token,
+      {
+        fields: `${FB_COMMENT_FIELDS},comments{${FB_COMMENT_FIELDS}}`,
+        limit,
+        filter: 'stream',
+        order: 'chronological',
+      },
+      { priority: 'low' },
+    );
+    return data.data ?? [];
+  }
+
+  /** Trả lời bình luận FB — POST /{fb-comment-id}/comments (Facebook Login + Page token). */
+  async replyPageComment(
+    commentId: string,
+    token: string,
+    message: string,
+  ): Promise<{ id?: string }> {
+    const url = `${GRAPH_BASE}/${commentId}/comments`;
+    try {
+      const res = await axios.post<{ id?: string }>(url, null, {
+        params: { message, access_token: token },
+        timeout: 60_000,
+      });
+      return res.data;
+    } catch (e: unknown) {
+      const err = e as {
+        response?: { data?: { error?: { message?: string } } };
+        message?: string;
+      };
+      throw new Error(
+        err.response?.data?.error?.message ||
+          err.message ||
+          'Graph API POST error',
+      );
+    }
+  }
+
+  /** Ẩn một bình luận FB. */
+  async hidePageComment(
+    commentId: string,
+    token: string,
+    hide = true,
+  ): Promise<{ success?: boolean }> {
+    const url = `${GRAPH_BASE}/${commentId}`;
+    try {
+      const res = await axios.post<{ success?: boolean }>(url, null, {
+        params: { is_hidden: hide ? 'true' : 'false', access_token: token },
+        timeout: 60_000,
+      });
+      return res.data;
+    } catch (e: unknown) {
+      const err = e as {
+        response?: { data?: { error?: { message?: string } } };
+        message?: string;
+      };
+      throw new Error(
+        err.response?.data?.error?.message ||
+          err.message ||
+          'Graph API POST error',
+      );
     }
   }
 }

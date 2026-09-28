@@ -50,6 +50,11 @@ export const CONVERSATION_ACCESS_SELECT_LEGACY = {
   tenantId: true,
   createdAt: true,
   updatedAt: true,
+
+  kind: true,
+  sourcePostId: true,
+  sourcePermalink: true,
+  sourceThumb: true,
 } as const;
 
 export const CONVERSATION_ACCESS_SELECT = {
@@ -93,7 +98,12 @@ async function findWithMigrationFallback(
         select: CONVERSATION_ACCESS_SELECT_LEGACY,
       });
       return row
-        ? { ...row, awaitingLabel: false, customerLang: null, customerLangLabel: null }
+        ? {
+            ...row,
+            awaitingLabel: false,
+            customerLang: null,
+            customerLangLabel: null,
+          }
         : null;
     }
   }
@@ -104,7 +114,9 @@ export async function findInboxConversationById(
   conversationId: string,
   tenantId?: string,
 ): Promise<InboxConversationAccess | null> {
-  const where = tenantId ? { id: conversationId, tenantId } : { id: conversationId };
+  const where = tenantId
+    ? { id: conversationId, tenantId }
+    : { id: conversationId };
   return findWithMigrationFallback(prisma, where);
 }
 

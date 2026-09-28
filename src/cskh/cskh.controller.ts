@@ -35,10 +35,12 @@ import { COOKIE_ACCESS, LEGACY_COOKIE_ACCESS } from '../auth/cookie.constants';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { UsersService } from '../users/users.service';
+import { CskhFacebookCommentsService } from './comment/cskh-facebook-comments.service';
 import { CskhInstagramCommentsService } from './comment/cskh-instagram-comments.service';
 import { CskhInsightService } from './cskh-insight.service';
 import { CskhService } from './cskh.service';
 import { CustomerAnalyticsService } from './customer-analytics.service';
+import { ReplyFbCommentDto } from './dto/reply-fb-comment.dto';
 import { ReplyIgCommentDto } from './dto/reply-ig-comment.dto';
 import { parseMediaProxyUrlFromRequest } from './facebook/facebook-message.util';
 import { verifyFacebookWebhookSignature } from './facebook/facebook-oauth.util';
@@ -93,6 +95,7 @@ export class CskhController {
     private readonly usersService: UsersService,
     private readonly configService: ConfigService,
     private readonly igComments: CskhInstagramCommentsService,
+    private readonly fbComments: CskhFacebookCommentsService,
   ) {}
 
   /** OAuth — không cần JWT (redirect browser). */
@@ -1014,6 +1017,10 @@ export class CskhController {
       void this.igComments.processWebhookPayload(req.body).catch((e) => {
         console.error(`[Webhook POST] IG comments: ${(e as Error).message}`);
       });
+      // Xử lý dữ liệu từ webhook của Facebook.
+      void this.fbComments.processWebhookPayload(req.body).catch((e) => {
+        console.error(`[Webhook POST] FB comments: ${(e as Error).message}`);
+      });
       console.log(
         `[Webhook POST] Payload processed successfully: ${JSON.stringify(result)}`,
       );
@@ -1452,7 +1459,7 @@ export class CskhController {
       req.originalUrl || req.url || '',
       req.query.url,
     );
-    return this.cskh.proxyMediaUrl(url, res);
+    return this.cskh.proxyMediaUrl(url, res, req.headers.range);
   }
 
   /** Proxy ảnh/video Facebook CDN — public. */
@@ -1462,7 +1469,7 @@ export class CskhController {
       req.originalUrl || req.url || '',
       req.query.url,
     );
-    return this.cskh.proxyMediaUrl(url, res);
+    return this.cskh.proxyMediaUrl(url, res, req.headers.range);
   }
 
   /** Avatar Page — fetch Graph + stream (public). */
@@ -1575,6 +1582,51 @@ export class CskhController {
     return this.igComments.hide(
       pageId.trim(),
       igCommentId.trim(),
+      user.tenantId || undefined,
+    );
+  }
+  /** Facebook comments sync — không JWT.
+   */
+  @Post('facebook/comments/sync')
+  @UseGuards(JwtAuthGuard)
+  syncFbComments(@CurrentUser() user: User, @Query('pageId') pageId: string) {
+    if (!pageId?.trim()) throw new BadRequestException('pageId bắt buộc');
+    return this.fbComments.syncPageComments(
+      pageId.trim(),
+      user.tenantId || undefined,
+    );
+  }
+
+  /** Facebook comments reply — không JWT. */
+  @Post('facebook/comments/:fbCommentId/reply')
+  @UseGuards(JwtAuthGuard)
+  replyFbComment(
+    @CurrentUser() user: User,
+    @Param('fbCommentId') fbCommentId: string,
+    @Query('pageId') pageId: string,
+    @Body() dto: ReplyFbCommentDto,
+  ) {
+    if (!pageId?.trim()) throw new BadRequestException('pageId bắt buộc');
+    return this.fbComments.reply(
+      pageId.trim(),
+      fbCommentId.trim(),
+      dto.message,
+      user.tenantId || undefined,
+    );
+  }
+
+  /** Facebook comments hide — không JWT. */
+  @Post('facebook/comments/:fbCommentId/hide')
+  @UseGuards(JwtAuthGuard)
+  hideFbComment(
+    @CurrentUser() user: User,
+    @Param('fbCommentId') fbCommentId: string,
+    @Query('pageId') pageId: string,
+  ) {
+    if (!pageId?.trim()) throw new BadRequestException('pageId bắt buộc');
+    return this.fbComments.hide(
+      pageId.trim(),
+      fbCommentId.trim(),
       user.tenantId || undefined,
     );
   }

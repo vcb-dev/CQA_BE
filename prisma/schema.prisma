@@ -84,6 +84,9 @@ model Tenant {
   igMedia              CskhIgMedia[]
   igComments           CskhIgComment[]
 
+  fbPosts     CskhFbPost[]
+  fbComments  CskhFbComment[]
+
   @@map("tenants")
 }
 
@@ -451,11 +454,19 @@ model CskhInboxConversation {
   labelAssignments   CskhInboxConversationLabel[]
   views              CskhInboxConversationView[]
 
+  kind             String  @default("dm") @db.VarChar(16)
+  sourcePostId     String? @map("source_post_id") @db.VarChar(64)
+  sourcePermalink  String? @map("source_permalink") @db.Text
+  sourceThumb      String? @map("source_thumb") @db.Text
+
   @@unique([pageId, participantPsid])
   @@index([tenantId, lastMessageAt(sort: Desc), id(sort: Desc)])
   @@index([pageId, lastMessageAt(sort: Desc), id(sort: Desc)])
   @@index([tenantId, fromAd, lastMessageAt(sort: Desc), id(sort: Desc)])
   @@index([lastMessageAt(sort: Desc), id(sort: Desc)])
+
+  @@index([tenantId, kind, lastMessageAt(sort: Desc)])
+
   @@map("cskh_inbox_conversations")
 }
 
@@ -614,6 +625,53 @@ model CskhIgComment {
   @@index([pageId, igMediaId, commentedAt(sort: Desc)])
   @@index([tenantId, commentedAt(sort: Desc)])
   @@map("cskh_ig_comments")
+}
+
+/// Bài đăng Facebook (fanpage post) trên kênh CSKH — dùng cho màn Bình luận FB.
+/// Cache metadata bài (nội dung, permalink, ảnh) + lastCommentAt để sort danh sách bài có comment mới.
+model CskhFbPost {
+  id            String    @id @default(uuid()) @db.Uuid
+  pageId        String    @map("page_id")
+  fbPostId      String    @map("fb_post_id") @db.VarChar(64)
+  message       String?   @db.Text
+  permalink     String?   @db.Text
+  thumbnailUrl  String?   @map("thumbnail_url") @db.Text
+  lastCommentAt DateTime? @map("last_comment_at") @db.Timestamptz(6)
+  tenantId      String?   @map("tenant_id") @db.Uuid
+  tenant        Tenant?   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  comments      CskhFbComment[]
+
+  @@unique([pageId, fbPostId])
+  @@index([tenantId, lastCommentAt(sort: Desc)])
+  @@index([pageId, lastCommentAt(sort: Desc)])
+  @@map("cskh_fb_posts")
+}
+
+/// Bình luận (và reply) trên một bài FB — sync từ Page `feed` webhook + Graph API.
+/// Hỗ trợ trả lời / ẩn comment; mỗi comment cũng được mirror sang inbox (`kind = fb_comment`).
+model CskhFbComment {
+  id                 String    @id @default(uuid()) @db.Uuid
+  pageId             String    @map("page_id")
+  fbPostId           String    @map("fb_post_id") @db.VarChar(64)
+  fbCommentId        String    @unique @map("fb_comment_id") @db.VarChar(64)
+  parentFbCommentId  String?   @map("parent_fb_comment_id") @db.VarChar(64)
+  text               String    @db.Text
+  authorName         String?   @map("author_name") @db.VarChar(255)
+  authorFbId         String?   @map("author_fb_id") @db.VarChar(64)
+  direction          String    @default("inbound") @db.VarChar(16)
+  hidden             Boolean   @default(false)
+  commentedAt        DateTime  @map("commented_at") @db.Timestamptz(6)
+  tenantId           String?   @map("tenant_id") @db.Uuid
+  tenant             Tenant?   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  post               CskhFbPost? @relation(fields: [pageId, fbPostId], references: [pageId, fbPostId], onDelete: Cascade)
+
+  @@index([pageId, fbPostId, commentedAt(sort: Desc)])
+  @@index([tenantId, commentedAt(sort: Desc)])
+  @@map("cskh_fb_comments")
 }
 
 // --- Sapo mirror (đầy đủ cột để hiển thị UI / báo cáo) ---

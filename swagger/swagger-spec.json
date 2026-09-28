@@ -3339,6 +3339,116 @@
         ]
       }
     },
+    "/api/v1/cskh/facebook/comments/sync": {
+      "post": {
+        "operationId": "CskhController_syncFbComments",
+        "parameters": [
+          {
+            "name": "pageId",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "cskh"
+        ]
+      }
+    },
+    "/api/v1/cskh/facebook/comments/{fbCommentId}/reply": {
+      "post": {
+        "operationId": "CskhController_replyFbComment",
+        "parameters": [
+          {
+            "name": "fbCommentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pageId",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplyFbCommentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "cskh"
+        ]
+      }
+    },
+    "/api/v1/cskh/facebook/comments/{fbCommentId}/hide": {
+      "post": {
+        "operationId": "CskhController_hideFbComment",
+        "parameters": [
+          {
+            "name": "fbCommentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pageId",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "JWT-auth": []
+          }
+        ],
+        "tags": [
+          "cskh"
+        ]
+      }
+    },
     "/api/v1/ai/audit-chat": {
       "post": {
         "operationId": "AiController_auditChat",
@@ -3971,6 +4081,19 @@
         }
       },
       "ReplyIgCommentDto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2200
+          }
+        },
+        "required": [
+          "message"
+        ]
+      },
+      "ReplyFbCommentDto": {
         "type": "object",
         "properties": {
           "message": {

@@ -39,6 +39,7 @@ import { isAllowedFacebookMediaUrl } from './facebook/facebook-message.util';
 import {
   GRAPH_BASE,
   IG_WEBHOOK_SUBSCRIBED_FIELDS,
+  PAGE_WEBHOOK_SUBSCRIBED_FIELDS,
   buildFacebookOAuthUrl,
   cskhChannelPlatform,
   cskhGraphConversationsOwnerId,
@@ -5238,7 +5239,11 @@ export class CskhService implements OnModuleInit {
   }
 
   /** Proxy media Facebook CDN — public (thẻ img/video không gửi JWT). */
-  async proxyMediaUrl(rawUrl: string, res: Response) {
+  async proxyMediaUrl(
+    rawUrl: string,
+    res: Response,
+    rangeHeader?: string | string[],
+  ) {
     let url = (rawUrl || '').trim();
     if (!url) {
       throw new BadRequestException(
@@ -5251,19 +5256,26 @@ export class CskhService implements OnModuleInit {
     if (url.startsWith('http://')) {
       url = `https://${url.slice('http://'.length)}`;
     }
+    // Lấy header Range nếu có.
+    // Range header là một chuỗi có dạng "bytes=0-1023" hoặc "bytes=0-" (tất cả bytes).
+    const range = Array.isArray(rangeHeader) ? rangeHeader[0] : rangeHeader;
     try {
       const upstream = await axios.get(url, {
         responseType: 'stream',
-        timeout: 30000,
+        timeout: 60_000,
         maxRedirects: 5,
+        validateStatus: (status) => status === 200 || status === 206,
         headers: {
           'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           Referer: 'https://www.facebook.com/',
+          ...(range ? { Range: range } : {}),
         },
       });
+      res.status(upstream.status);
       res.set('Cache-Control', 'public, max-age=3600');
       res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+      res.set('Accept-Ranges', 'bytes');
       const contentType = upstream.headers['content-type'];
       res.set(
         'Content-Type',
@@ -5271,6 +5283,14 @@ export class CskhService implements OnModuleInit {
           ? contentType
           : 'application/octet-stream',
       );
+      const contentRange = upstream.headers['content-range'];
+      if (typeof contentRange === 'string') {
+        res.set('Content-Range', contentRange);
+      }
+      const contentLength = upstream.headers['content-length'];
+      if (typeof contentLength === 'string') {
+        res.set('Content-Length', contentLength);
+      }
       upstream.data.pipe(res);
     } catch (e) {
       this.logger.warn(
@@ -5552,8 +5572,7 @@ export class CskhService implements OnModuleInit {
       const url = `${GRAPH_BASE}/${pageId}/subscribed_apps`;
       const res = await axios.post(url, null, {
         params: {
-          subscribed_fields:
-            'messages,message_echoes,messaging_postbacks,messaging_optins,message_deliveries,message_reads,messaging_referrals',
+          subscribed_fields: PAGE_WEBHOOK_SUBSCRIBED_FIELDS,
           access_token: pageAccessToken,
         },
         timeout: 10000,

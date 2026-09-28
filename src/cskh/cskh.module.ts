@@ -3,6 +3,7 @@ import { AiModule } from '../ai/ai.module';
 import { AuthModule } from '../auth/auth.module';
 import { PancakeModule } from '../pancake/pancake.module';
 import { UsersModule } from '../users/users.module';
+import { CskhFacebookCommentsService } from './comment/cskh-facebook-comments.service';
 import { CskhInstagramCommentsService } from './comment/cskh-instagram-comments.service';
 import { CskhCronService } from './cskh-cron.service';
 import { CskhInsightService } from './cskh-insight.service';
@@ -67,6 +68,7 @@ import { SapoProductService } from './sapo/sapo-product.service';
     CskhCronService,
     RedisQueueService,
     CskhInstagramCommentsService,
+    CskhFacebookCommentsService,
   ],
   exports: [CskhService, CskhInboxService, RedisQueueService],
 })

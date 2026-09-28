@@ -13,6 +13,7 @@ export const FB_OAUTH_SCOPES = [
   'pages_messaging',
   'pages_manage_metadata',
   'pages_read_engagement',
+  'pages_manage_engagement',
   // Tạm bỏ 'pages_events': App chưa được Meta duyệt quyền này
   // 'pages_events',
   'instagram_basic',
@@ -219,6 +220,20 @@ export function verifyFacebookWebhookSignature(
     return false;
   }
 }
+
+/** Page webhook — Messenger + comment trên bài (`feed`).
+ * PAGE_WEBHOOK_SUBSCRIBED_FIELDS để subscribe tất cả các field có thể có.
+ */
+export const PAGE_WEBHOOK_SUBSCRIBED_FIELDS = [
+  'messages',
+  'message_echoes',
+  'messaging_postbacks',
+  'messaging_optins',
+  'message_deliveries',
+  'message_reads',
+  'messaging_referrals',
+  'feed',
+].join(',');
 
 /** IG webhook — field Instagram Graph chấp nhận (không dùng field Page/Messenger). */
 export const IG_WEBHOOK_SUBSCRIBED_FIELDS = [

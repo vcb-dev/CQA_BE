@@ -849,6 +849,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       referralSource: conv.referralSource,
       customerLang: conv.customerLang ?? null,
       customerLangLabel: conv.customerLangLabel ?? null,
+
+      kind: 'kind' in conv ? conv.kind : 'dm',
+      sourcePostId: 'sourcePostId' in conv ? conv.sourcePostId : null,
+      sourcePermalink: 'sourcePermalink' in conv ? conv.sourcePermalink : null,
+      sourceThumb: 'sourceThumb' in conv ? conv.sourceThumb : null,
     };
   }
 
@@ -2567,6 +2572,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       unreadCount: true,
       awaitingLabel: true,
       updatedAt: true,
+
+      kind: true,
+      sourcePostId: true,
+      sourcePermalink: true,
+      sourceThumb: true,
     } as const;
 
     const selectLegacy = {
@@ -2585,6 +2595,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       lastMessageAt: true,
       unreadCount: true,
       updatedAt: true,
+
+      kind: true,
+      sourcePostId: true,
+      sourcePermalink: true,
+      sourceThumb: true,
     } as const;
 
     const fetchPage = async (flags: {
@@ -2729,7 +2744,12 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     }));
 
     const missingPictureIds = itemsWithMeta
-      .filter((i) => !i.customerPictureUrl && i.participantPsid)
+      .filter(
+        (i) =>
+          !i.customerPictureUrl &&
+          i.participantPsid &&
+          !i.participantPsid.startsWith('c:'),
+      )
       .slice(0, 3)
       .map((i) => i.id);
     if (
@@ -4695,6 +4715,12 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
   ) {
     const { conv, config, messagingOwnerId } =
       await this.resolveOutboundMessagingContext(conversationId, tenantId);
+    // Kiểm tra xem hội thoại có phải là hội thoại bình luận không.
+    if (conv.participantPsid.startsWith('c:') || conv.kind === 'fb_comment') {
+      throw new BadRequestException(
+        'Hội thoại bình luận — dùng API trả lời comment, không gửi Messenger.',
+      );
+    }
 
     let outboundText = trimmed;
     let originalText: string | null = null;
@@ -7057,6 +7083,15 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       conversationId,
       tenantId,
     );
+    // Kiểm tra xem hội thoại có phải là hội thoại bình luận không.
+    if (
+      ctx.conv.participantPsid.startsWith('c:') ||
+      ctx.conv.kind === 'fb_comment'
+    ) {
+      throw new BadRequestException(
+        'Hội thoại bình luận — dùng API trả lời comment, không gửi Messenger.',
+      );
+    }
     // platform là kiểm tra platform của page
     // platform là nền tảng áp dụng cho gửi tin nhắn media
     const platform = cskhInboxGraphPlatform(ctx.config.metadata);

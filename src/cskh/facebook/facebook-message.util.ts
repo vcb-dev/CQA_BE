@@ -43,7 +43,10 @@ export function resolveMessengerCustomerPsid(
 }
 
 /** Tin từ khách khi from.id trùng PSID khách của hội thoại. */
-export function isMessengerFromCustomer(senderPsid: string, customerPsid: string): boolean {
+export function isMessengerFromCustomer(
+  senderPsid: string,
+  customerPsid: string,
+): boolean {
   return String(senderPsid) === String(customerPsid);
 }
 
@@ -154,7 +157,11 @@ export function parseMediaFromText(text: string): {
   }
 
   if (/^\[Sticker\]$/i.test(t)) {
-    return { displayText: '[Sticker]', attachmentUrl: null, messageType: 'sticker' };
+    return {
+      displayText: '[Sticker]',
+      attachmentUrl: null,
+      messageType: 'sticker',
+    };
   }
 
   return { displayText: t, attachmentUrl: null, messageType: 'text' };
@@ -175,7 +182,9 @@ export function repairStoredMessage(
   let nextText = parsed.displayText;
   let nextUrl = attachmentUrl ?? parsed.attachmentUrl;
   let nextType: ChatMessageType =
-    messageType === 'video' || messageType === 'image' || messageType === 'sticker'
+    messageType === 'video' ||
+    messageType === 'image' ||
+    messageType === 'sticker'
       ? messageType
       : parsed.messageType;
 
@@ -198,7 +207,12 @@ export function repairStoredMessage(
     (nextUrl ?? null) !== (attachmentUrl ?? null) ||
     nextType !== (messageType || 'text');
 
-  return { changed, text: nextText, attachmentUrl: nextUrl ?? null, messageType: nextType };
+  return {
+    changed,
+    text: nextText,
+    attachmentUrl: nextUrl ?? null,
+    messageType: nextType,
+  };
 }
 
 type FbAttachment = {
@@ -223,7 +237,9 @@ type FbAttachment = {
   };
 };
 
-export function pickAttachmentUrl(att: FbAttachment | null | undefined): string | null {
+export function pickAttachmentUrl(
+  att: FbAttachment | null | undefined,
+): string | null {
   if (!att) return null;
 
   const videoUrl = att.video_data?.url ?? att.video_data?.preview_url ?? null;
@@ -240,8 +256,9 @@ export function pickAttachmentUrl(att: FbAttachment | null | undefined): string 
     null;
   if (imageUrl) return imageUrl;
 
-  const templateImage = att.payload?.elements?.find((el) => el.image_url?.startsWith('http'))
-    ?.image_url;
+  const templateImage = att.payload?.elements?.find((el) =>
+    el.image_url?.startsWith('http'),
+  )?.image_url;
   return templateImage ?? null;
 }
 
@@ -264,7 +281,8 @@ export function attachmentMediaKind(
   att: FbAttachment | null | undefined,
 ): 'video' | 'image' | null {
   if (!att) return null;
-  if (att.type === 'video' || att.mime_type?.startsWith('video/')) return 'video';
+  if (att.type === 'video' || att.mime_type?.startsWith('video/'))
+    return 'video';
   if (
     att.type === 'image' ||
     att.mime_type?.startsWith('image/') ||
@@ -299,7 +317,9 @@ export function extractAllMessageAttachments(msg: FbMessage): Array<{
   label: string;
 }> {
   if (msg.sticker) {
-    return [{ attachmentUrl: null, messageType: 'sticker', label: '[Sticker]' }];
+    return [
+      { attachmentUrl: null, messageType: 'sticker', label: '[Sticker]' },
+    ];
   }
 
   const attachments = (msg.attachments?.data ?? []) as FbAttachment[];
@@ -320,9 +340,17 @@ export function extractAllMessageAttachments(msg: FbMessage): Array<{
       (mediaUrl ? (isVideoMediaUrl(mediaUrl) ? 'video' : 'image') : null);
 
     if (kind === 'video') {
-      results.push({ attachmentUrl: mediaUrl, messageType: 'video', label: '[Video]' });
+      results.push({
+        attachmentUrl: mediaUrl,
+        messageType: 'video',
+        label: '[Video]',
+      });
     } else if (kind === 'image' || mediaUrl) {
-      results.push({ attachmentUrl: mediaUrl, messageType: 'image', label: '[Ảnh]' });
+      results.push({
+        attachmentUrl: mediaUrl,
+        messageType: 'image',
+        label: '[Ảnh]',
+      });
     } else {
       results.push({
         attachmentUrl: mediaUrl,
@@ -368,7 +396,9 @@ export function normalizeFbMessage(
     (a) => a.messageType === 'image' || a.messageType === 'video',
   );
   const mediaUrls = dedupeMediaUrls(
-    mediaAttachments.map((a) => a.attachmentUrl).filter((u): u is string => Boolean(u)),
+    mediaAttachments
+      .map((a) => a.attachmentUrl)
+      .filter((u): u is string => Boolean(u)),
   );
 
   let text = (msg.message || '').trim();
@@ -384,7 +414,10 @@ export function normalizeFbMessage(
       attachmentUrls = [parsed.attachmentUrl];
       messageType = parsed.messageType;
       text = parsed.displayText;
-    } else if (parsed.messageType === 'image' && looksLikeFbMediaFragment(text)) {
+    } else if (
+      parsed.messageType === 'image' &&
+      looksLikeFbMediaFragment(text)
+    ) {
       text = '[Ảnh]';
       messageType = 'image';
     }
@@ -396,10 +429,17 @@ export function normalizeFbMessage(
       text = mediaUrls.length > 1 ? '' : primaryLabel;
     }
     if (messageType === 'video') text = '';
-    if (messageType === 'image' && mediaUrls.length === 1 && looksLikeEmbeddedMediaText(text)) {
+    if (
+      messageType === 'image' &&
+      mediaUrls.length === 1 &&
+      looksLikeEmbeddedMediaText(text)
+    ) {
       text = '[Ảnh]';
     }
-  } else if (allAttachments.length === 1 && allAttachments[0].messageType === 'sticker') {
+  } else if (
+    allAttachments.length === 1 &&
+    allAttachments[0].messageType === 'sticker'
+  ) {
     text = text || allAttachments[0].label;
     messageType = 'sticker';
   } else if (!text && allAttachments[0]?.label) {
@@ -439,7 +479,9 @@ export function computeTrailingCustomerUnread(
   return count;
 }
 
-export function dedupeChatMessages(messages: NormalizedChatMessage[]): NormalizedChatMessage[] {
+export function dedupeChatMessages(
+  messages: NormalizedChatMessage[],
+): NormalizedChatMessage[] {
   const seen = new Set<string>();
   const result: NormalizedChatMessage[] = [];
 
@@ -483,7 +525,8 @@ export function parseInboxPhotoPreviewCount(preview?: string | null): number {
 const INBOX_MEDIA_GROUP_WINDOW_MS = 15_000;
 
 function inboxRowSentAtMs(sentAt: Date | string): number {
-  const n = sentAt instanceof Date ? sentAt.getTime() : new Date(sentAt).getTime();
+  const n =
+    sentAt instanceof Date ? sentAt.getTime() : new Date(sentAt).getTime();
   return Number.isNaN(n) ? 0 : n;
 }
 
@@ -493,28 +536,41 @@ function isInboxImageRow(row: {
 }): boolean {
   const type = (row.messageType ?? '').toLowerCase();
   if (type === 'video' || type === 'sticker' || type === 'audio') return false;
-  return type === 'image' || type === 'photo' || type === 'file' || Boolean(row.attachmentUrl);
+  return (
+    type === 'image' ||
+    type === 'photo' ||
+    type === 'file' ||
+    Boolean(row.attachmentUrl)
+  );
 }
 
 /**
  * Facebook gửi nhiều ảnh một lần → nhiều row inbox.
  * Gộp ảnh kế tiếp (caption trống / [Ảnh]) vào bubble trước, kể cả khi tin đầu có caption.
  */
-export function groupInboxMediaRows<T extends {
-  senderType: string;
-  messageType: string;
-  text?: string | null;
-  attachmentUrl?: string | null;
-  attachmentUrls?: string[];
-  sentAt: Date | string;
-  groupedMediaCount?: number;
-}>(rows: T[]): T[] {
+export function groupInboxMediaRows<
+  T extends {
+    senderType: string;
+    messageType: string;
+    text?: string | null;
+    attachmentUrl?: string | null;
+    attachmentUrls?: string[];
+    sentAt: Date | string;
+    groupedMediaCount?: number;
+  },
+>(rows: T[]): T[] {
   const grouped: T[] = [];
 
   for (const msg of rows) {
     const prev = grouped[grouped.length - 1];
-    const prevUrls = dedupeMediaUrls([...(prev?.attachmentUrls ?? []), prev?.attachmentUrl]);
-    const msgUrls = dedupeMediaUrls([...(msg.attachmentUrls ?? []), msg.attachmentUrl]);
+    const prevUrls = dedupeMediaUrls([
+      ...(prev?.attachmentUrls ?? []),
+      prev?.attachmentUrl,
+    ]);
+    const msgUrls = dedupeMediaUrls([
+      ...(msg.attachmentUrls ?? []),
+      msg.attachmentUrl,
+    ]);
     const canMerge =
       Boolean(prev) &&
       prev!.senderType === msg.senderType &&
@@ -527,7 +583,8 @@ export function groupInboxMediaRows<T extends {
     if (canMerge && prev) {
       const merged = dedupeMediaUrls([...prevUrls, ...msgUrls]);
       prev.groupedMediaCount =
-        (prev.groupedMediaCount ?? Math.max(1, prevUrls.length)) + Math.max(1, msgUrls.length);
+        (prev.groupedMediaCount ?? Math.max(1, prevUrls.length)) +
+        Math.max(1, msgUrls.length);
       if (merged.length) {
         prev.attachmentUrl = prev.attachmentUrl || merged[0];
         prev.attachmentUrls = merged.length > 1 ? merged : undefined;
@@ -543,7 +600,9 @@ export function groupInboxMediaRows<T extends {
         : msgUrls.length > 1
           ? msgUrls
           : undefined,
-      groupedMediaCount: isInboxImageRow(msg) ? Math.max(1, msgUrls.length) : undefined,
+      groupedMediaCount: isInboxImageRow(msg)
+        ? Math.max(1, msgUrls.length)
+        : undefined,
     });
   }
 
@@ -558,14 +617,22 @@ export function inboxListPreview(input: {
   const text = (input.text ?? '').trim();
   const n = Math.max(0, input.attachmentCount ?? 0);
   const type = (input.messageType ?? '').toLowerCase();
-  if (n > 1 && (type === 'image' || type === 'photo' || type === 'file' || !text || text === '[Ảnh]')) {
+  if (
+    n > 1 &&
+    (type === 'image' ||
+      type === 'photo' ||
+      type === 'file' ||
+      !text ||
+      text === '[Ảnh]')
+  ) {
     return `[${n} ảnh]`;
   }
   if (text && text !== '[Không có tin nhắn]') return text;
   if (type === 'video') return '[Video]';
   if (type === 'sticker') return '[Sticker]';
   if (type === 'audio') return '[Audio]';
-  if (n > 0 || type === 'image' || type === 'photo' || type === 'file') return '[Ảnh]';
+  if (n > 0 || type === 'image' || type === 'photo' || type === 'file')
+    return '[Ảnh]';
   return '';
 }
 
@@ -576,6 +643,73 @@ export const FB_MESSAGE_ATTACHMENT_FIELDS = `attachments{${FB_ATTACHMENT_FIELDS}
 
 export const FB_MESSAGE_FIELDS = `id,message,from,created_time,sticker,${FB_MESSAGE_ATTACHMENT_FIELDS}`;
 
+/** Comment Graph — media ở `attachment`, `message` thường rỗng. */
+export const FB_COMMENT_FIELDS =
+  'id,message,from,created_time,parent,attachment{type,url,target{url},media{image{src},source}}';
+
+export type GraphCommentAttachment = {
+  type?: string;
+  url?: string;
+  target?: { url?: string };
+  media?: { image?: { src?: string }; source?: string };
+};
+
+export function isPlayableCommentVideoUrl(raw?: string | null): boolean {
+  const url = String(raw || '').trim();
+  if (!url) return false;
+  if (/\.(mp4|m4v|webm|mov)(\?|$)/i.test(url)) return true;
+  if (/facebook\.com|fb\.com/i.test(url) && /\/videos\//i.test(url))
+    return false;
+  if (/\.(jpg|jpeg|png|gif|webp)(\?|$)/i.test(url)) return false;
+  return false;
+}
+
+export function commentMediaFromGraph(c: {
+  message?: string | null;
+  attachment?: GraphCommentAttachment | null;
+}): {
+  text: string;
+  messageType: string;
+  attachmentUrl: string | null;
+} {
+  const caption = String(c.message ?? '')
+    .trim()
+    .replace(/^\(empty\)$/i, '');
+  const att = c.attachment;
+  const kind = String(att?.type || '').toLowerCase();
+  const isVideo = kind.includes('video');
+  const videoFile =
+    att?.media?.source ||
+    (isPlayableCommentVideoUrl(att?.url) ? att?.url : null) ||
+    (isPlayableCommentVideoUrl(att?.target?.url) ? att?.target?.url : null) ||
+    null;
+  const imageUrl = att?.media?.image?.src || null;
+  const playable = isVideo && isPlayableCommentVideoUrl(videoFile);
+  const attachmentUrl = playable
+    ? videoFile
+    : imageUrl ||
+      (isVideo ? null : att?.url || att?.target?.url || att?.media?.source) ||
+      null;
+  let messageType = 'text';
+  if (playable) messageType = 'video';
+  else if (isVideo && imageUrl) messageType = 'image';
+  else if (kind.includes('sticker'))
+    messageType = attachmentUrl ? 'image' : 'sticker';
+  else if (attachmentUrl || kind.includes('photo') || kind.includes('image')) {
+    messageType = 'image';
+  }
+  const preview = inboxListPreview({
+    text: caption,
+    messageType: playable ? 'video' : messageType,
+    attachmentCount: attachmentUrl ? 1 : 0,
+  });
+  return {
+    text: caption || (isVideo ? '[Video]' : preview) || '(empty)',
+    messageType,
+    attachmentUrl,
+  };
+}
+
 const FB_MEDIA_PROXY_HOST =
   /(?:^|\.)((?:fbcdn\.net|fbsbx\.com|facebook\.com|fb\.com|cdninstagram\.com|instagram\.com))$/i;
 
@@ -585,7 +719,8 @@ export function isAllowedFacebookMediaUrl(raw: string): boolean {
   if (!url) return false;
   try {
     const parsed = new URL(url);
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')
+      return false;
     return FB_MEDIA_PROXY_HOST.test(parsed.hostname);
   } catch {
     return false;
@@ -596,7 +731,10 @@ export function isAllowedFacebookMediaUrl(raw: string): boolean {
  * Lấy URL gốc từ query proxy.
  * Express cắt URL tại `&` nếu client không encode — đọc lại từ originalUrl.
  */
-export function parseMediaProxyUrlFromRequest(rawUrl: string, queryUrl: unknown): string {
+export function parseMediaProxyUrlFromRequest(
+  rawUrl: string,
+  queryUrl: unknown,
+): string {
   const fromQuery = typeof queryUrl === 'string' ? queryUrl.trim() : '';
   if (fromQuery && isAllowedFacebookMediaUrl(fromQuery)) {
     return fromQuery;

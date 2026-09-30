@@ -892,9 +892,19 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       pageId: string;
       fbConversationId: string | null;
       participantPsid: string | null;
+      kind?: string | null;
     },
   >(conv: T): Promise<T> {
-    if (conv.fbConversationId || !conv.participantPsid?.trim()) return conv;
+    const psid = conv.participantPsid?.trim() ?? '';
+    // Comment thread (c:post:author) is not a Messenger conversation.
+    if (
+      conv.fbConversationId ||
+      !psid ||
+      conv.kind === 'fb_comment' ||
+      psid.startsWith('c:')
+    ) {
+      return conv;
+    }
     const config = await this.prisma.facebookCskhConfig.findUnique({
       where: { pageId: conv.pageId },
       select: { pageAccessToken: true, metadata: true },
@@ -903,7 +913,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const fbId = await this.graph.fetchConversationIdByPsid(
       conv.pageId,
       config.pageAccessToken,
-      conv.participantPsid,
+      psid,
       cskhInboxGraphPlatform(config.metadata),
     );
     if (!fbId) return conv;

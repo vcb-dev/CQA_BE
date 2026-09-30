@@ -5366,6 +5366,18 @@ export class CskhService implements OnModuleInit {
     const uid = (psid || '').trim();
     if (!pid || !uid) throw new BadRequestException('Thiếu pageId hoặc psid');
 
+    if (uid.startsWith('c:')) {
+      const svg = `
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+          <rect width="100" height="100" fill="#E2E8F0"/>
+          <circle cx="50" cy="35" r="20" fill="#94A3B8"/>
+          <path d="M15 85 C15 65, 35 60, 50 60 C65 60, 85 65, 85 85" fill="#94A3B8"/>
+        </svg>
+      `.trim();
+      res.type('image/svg+xml');
+      return res.send(svg);
+    }
+
     const config = await this.prisma.facebookCskhConfig.findUnique({
       where: { pageId: pid },
     });

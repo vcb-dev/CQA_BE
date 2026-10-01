@@ -12,6 +12,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { FacebookGraphService } from '../facebook/facebook-graph.service';
 import { cskhInboxGraphPlatform } from '../facebook/facebook-oauth.util';
 import { CskhInboxRealtimeService } from '../inbox/cskh-inbox-realtime.service';
+import { commentThreadPsid } from './cskh-facebook-comments.service';
 
 type IgCommentWebhookValue = {
   id?: string;
@@ -66,9 +67,7 @@ export class CskhInstagramCommentsService {
     requestTenantId?: string,
   ): Prisma.CskhIgCommentWhereInput {
     const tid = this.effectiveTenantId(config, requestTenantId);
-    return tid
-      ? { pageId, igMediaId, tenantId: tid }
-      : { pageId, igMediaId };
+    return tid ? { pageId, igMediaId, tenantId: tid } : { pageId, igMediaId };
   }
 
   private rethrowGraphOrBusy(e: unknown): never {
@@ -87,7 +86,9 @@ export class CskhInstagramCommentsService {
       );
     }
     const msg = (e as Error)?.message || String(e);
-    if (/\(#10\)|Application does not have permission for this action/i.test(msg)) {
+    if (
+      /\(#10\)|Application does not have permission for this action/i.test(msg)
+    ) {
       throw new BadRequestException(
         'Meta chưa cấp quyền đăng bình luận Instagram cho app (instagram_manage_comments). Trong App Dashboard bật quyền này, Development thì IG phải thuộc admin/tester, rồi Cài đặt → Kết nối lại Facebook.',
       );
@@ -100,7 +101,9 @@ export class CskhInstagramCommentsService {
       throw new BadRequestException(
         msg.includes('Kết nối lại')
           ? msg
-          : /Unsupported post request|does not support this operation/i.test(msg)
+          : /Unsupported post request|does not support this operation/i.test(
+                msg,
+              )
             ? 'Instagram không cho trả lời bình luận này (thường là trả lời của trả lời, hoặc thiếu quyền). Thử trả lời comment gốc, hoặc Kết nối lại Facebook trong Cài đặt.'
             : `${msg} — thử Kết nối lại Facebook (Settings) nếu vừa thêm quyền comment.`,
       );
@@ -186,7 +189,6 @@ export class CskhInstagramCommentsService {
     if (!config?.enabled || !config.pageAccessToken) return;
 
     const pageId = config.pageId;
-    const tenantId = config.tenantId ?? undefined;
     const text = String(value.text ?? '').trim() || '(empty)';
     const commentedAt = new Date();
     const authorUsername = value.from?.username ?? undefined;
@@ -244,15 +246,26 @@ export class CskhInstagramCommentsService {
       },
     });
 
-    this.realtime.publish({
-      type: 'ig-comment',
-      pageId,
-      tenantId,
-      conversationId: igMediaId,
-      direction,
-      text,
-      authorUsername,
-    });
+    try {
+      await this.mirrorToInbox({
+        config,
+        igMediaId,
+        igCommentId,
+        parentIgCommentId,
+        text,
+        authorUsername,
+        authorIgId,
+        direction,
+        commentedAt,
+        tenantId: config.tenantId,
+        incrementUnread: direction === 'inbound',
+        publish: true,
+      });
+    } catch (e) {
+      this.logger.warn(
+        `IG comment inbox ${igCommentId}: ${(e as Error).message}`,
+      );
+    }
   }
 
   /** Bổ sung caption/ảnh/permalink cho bài stub từ webhook (bài cũ chưa từng sync list). */
@@ -276,9 +289,7 @@ export class CskhInstagramCommentsService {
         },
       });
     } catch (e) {
-      this.logger.warn(
-        `IG media enrich ${igMediaId}: ${(e as Error).message}`,
-      );
+      this.logger.warn(`IG media enrich ${igMediaId}: ${(e as Error).message}`);
     }
   }
 
@@ -442,7 +453,110 @@ export class CskhInstagramCommentsService {
     } catch (e) {
       this.rethrowGraphOrBusy(e);
     }
-    return { synced: top.length };
+    const mirrored = await this.backfillMediaCommentsToInbox(config, igMediaId);
+    return { synced: mirrored };
+  }
+
+  /**
+   * Đồng bộ comment của cả kênh vào hội thoại — nút Đồng bộ trên màn Hội thoại.
+   * Graph lấy tối đa 12 bài gần nhất; comment đã lưu thì backfill thêm.
+   */
+  async syncPageToInbox(pageId: string, tenantId?: string) {
+    const config = await this.getIgConfigForTenant(pageId, tenantId);
+    try {
+      await this.syncMediaFromGraph(config, tenantId);
+    } catch (e) {
+      this.logger.warn(`IG media sync ${pageId}: ${(e as Error).message}`);
+    }
+    const media = await this.prisma.cskhIgMedia.findMany({
+      where: { pageId },
+      orderBy: { lastCommentAt: { sort: 'desc', nulls: 'last' } },
+      take: 12,
+    });
+    let threadTouches = 0;
+    for (const row of media) {
+      try {
+        const synced = await this.syncComments(pageId, row.igMediaId, tenantId);
+        threadTouches += synced.synced;
+      } catch (e) {
+        this.logger.warn(
+          `IG comment sync ${row.igMediaId}: ${(e as Error).message}`,
+        );
+        threadTouches += await this.backfillMediaCommentsToInbox(
+          config,
+          row.igMediaId,
+        );
+      }
+    }
+    await this.backfillRecentPageComments(config);
+    return { ok: true as const, postCount: media.length, threadTouches };
+  }
+
+  private async backfillMediaCommentsToInbox(
+    config: FacebookCskhConfig,
+    igMediaId: string,
+  ): Promise<number> {
+    const stored = await this.prisma.cskhIgComment.findMany({
+      where: { pageId: config.pageId, igMediaId },
+      orderBy: { commentedAt: 'asc' },
+    });
+    let n = 0;
+    for (const row of stored) {
+      try {
+        await this.mirrorToInbox({
+          config,
+          igMediaId: row.igMediaId,
+          igCommentId: row.igCommentId,
+          parentIgCommentId: row.parentIgCommentId,
+          text: row.text,
+          authorUsername: row.authorUsername,
+          authorIgId: row.authorIgId,
+          direction: row.direction,
+          commentedAt: row.commentedAt,
+          tenantId: row.tenantId,
+        });
+        n += 1;
+      } catch (e) {
+        this.logger.warn(
+          `IG comment backfill ${row.igCommentId}: ${(e as Error).message}`,
+        );
+      }
+    }
+    return n;
+  }
+
+  /** Comment đã có trong DB nhưng bài không nằm trong 12 bài sync Graph. */
+  private async backfillRecentPageComments(
+    config: FacebookCskhConfig,
+  ): Promise<number> {
+    const stored = await this.prisma.cskhIgComment.findMany({
+      where: { pageId: config.pageId },
+      orderBy: { commentedAt: 'desc' },
+      take: 300,
+    });
+    let n = 0;
+    for (const row of stored.reverse()) {
+      try {
+        await this.mirrorToInbox({
+          config,
+          igMediaId: row.igMediaId,
+          igCommentId: row.igCommentId,
+          parentIgCommentId: row.parentIgCommentId,
+          text: row.text,
+          authorUsername: row.authorUsername,
+          authorIgId: row.authorIgId,
+          direction: row.direction,
+          commentedAt: row.commentedAt,
+          tenantId: row.tenantId,
+        });
+        n += 1;
+      } catch (e) {
+        this.logger.warn(
+          `IG comment backfill ${row.igCommentId}: ${(e as Error).message}`,
+        );
+      }
+    }
+    return n;
   }
 
   private upsertGraphCommentOp(
@@ -460,6 +574,9 @@ export class CskhInstagramCommentsService {
   ) {
     const commentedAt = c.timestamp ? new Date(c.timestamp) : fallbackTime;
     const tenantId = this.effectiveTenantId(config, requestTenantId);
+    const authorIgId = c.from?.id ?? null;
+    const direction =
+      authorIgId && authorIgId === config.pageId ? 'outbound' : 'inbound';
     return this.prisma.cskhIgComment.upsert({
       where: { igCommentId: c.id },
       create: {
@@ -469,16 +586,17 @@ export class CskhInstagramCommentsService {
         parentIgCommentId: parentId,
         text: String(c.text ?? '').trim() || '(empty)',
         authorUsername: c.from?.username ?? null,
-        authorIgId: c.from?.id ?? null,
-        direction: 'inbound',
+        authorIgId,
+        direction,
         commentedAt,
         tenantId,
       },
       update: {
         text: String(c.text ?? '').trim() || '(empty)',
         authorUsername: c.from?.username ?? null,
-        authorIgId: c.from?.id ?? null,
+        authorIgId,
         parentIgCommentId: parentId,
+        direction,
       },
     });
   }
@@ -500,6 +618,153 @@ export class CskhInstagramCommentsService {
       });
     } catch (e) {
       this.rethrowGraphOrBusy(e);
+    }
+  }
+
+  private async mirrorToInbox(input: {
+    config: FacebookCskhConfig;
+    igMediaId: string;
+    igCommentId: string;
+    parentIgCommentId: string | null;
+    text: string;
+    authorUsername?: string | null;
+    authorIgId?: string | null;
+    direction: string;
+    commentedAt: Date;
+    tenantId: string | null;
+    incrementUnread?: boolean;
+    publish?: boolean;
+  }): Promise<void> {
+    const pageId = input.config.pageId;
+    let threadAuthorId = String(input.authorIgId || '').trim();
+    if (!threadAuthorId || threadAuthorId === pageId) {
+      if (input.parentIgCommentId) {
+        const parent = await this.prisma.cskhIgComment.findUnique({
+          where: { igCommentId: input.parentIgCommentId },
+          select: { authorIgId: true, direction: true, igCommentId: true },
+        });
+        const author = String(parent?.authorIgId || '').trim();
+        threadAuthorId =
+          author && author !== pageId
+            ? author
+            : parent?.direction === 'inbound'
+              ? author || parent.igCommentId
+              : input.parentIgCommentId;
+      } else {
+        threadAuthorId = input.igCommentId;
+      }
+    }
+    if (!threadAuthorId) return;
+
+    const participantPsid = commentThreadPsid(input.igMediaId, threadAuthorId);
+    const media = await this.prisma.cskhIgMedia.findUnique({
+      where: { pageId_igMediaId: { pageId, igMediaId: input.igMediaId } },
+    });
+    const existingMsg = await this.prisma.cskhInboxMessage.findUnique({
+      where: { fbMessageId: input.igCommentId },
+      select: { id: true },
+    });
+    const existing = await this.prisma.cskhInboxConversation.findUnique({
+      where: { pageId_participantPsid: { pageId, participantPsid } },
+    });
+    const bumpUnread =
+      Boolean(input.incrementUnread) &&
+      input.direction === 'inbound' &&
+      !existingMsg;
+    const newer =
+      !existing?.lastMessageAt ||
+      input.commentedAt.getTime() >= existing.lastMessageAt.getTime();
+
+    const conv = await this.prisma.cskhInboxConversation.upsert({
+      where: { pageId_participantPsid: { pageId, participantPsid } },
+      create: {
+        pageId,
+        pageName: input.config.pageName,
+        participantPsid,
+        customerName: input.authorUsername || 'Khách hàng Instagram',
+        lastMessage: input.text,
+        lastMessageAt: input.commentedAt,
+        unreadCount: bumpUnread ? 1 : 0,
+        kind: 'ig_comment',
+        sourcePostId: clipDb(input.igMediaId, 64),
+        sourcePermalink: media?.permalink ?? null,
+        sourceThumb: media?.thumbnailUrl ?? null,
+        tenantId: input.tenantId,
+      },
+      update: {
+        kind: 'ig_comment',
+        sourcePostId: clipDb(input.igMediaId, 64),
+        ...(input.direction === 'inbound' && input.authorUsername
+          ? { customerName: input.authorUsername }
+          : {}),
+        ...(media?.permalink ? { sourcePermalink: media.permalink } : {}),
+        ...(media?.thumbnailUrl ? { sourceThumb: media.thumbnailUrl } : {}),
+        ...(newer
+          ? { lastMessage: input.text, lastMessageAt: input.commentedAt }
+          : {}),
+        ...(bumpUnread ? { unreadCount: { increment: 1 } } : {}),
+      },
+    });
+
+    const msg = await this.prisma.cskhInboxMessage.upsert({
+      where: { fbMessageId: input.igCommentId },
+      create: {
+        conversationId: conv.id,
+        fbMessageId: input.igCommentId,
+        direction: input.direction,
+        senderType: input.direction === 'outbound' ? 'staff' : 'customer',
+        text: input.text,
+        messageType: 'text',
+        sentAt: input.commentedAt,
+        status: 'sent',
+        tenantId: input.tenantId,
+      },
+      update: { text: input.text, sentAt: input.commentedAt },
+    });
+
+    if (input.publish && (!existingMsg || newer)) {
+      this.realtime.publish({
+        type: 'message',
+        pageId: conv.pageId,
+        conversationId: conv.id,
+        tenantId: conv.tenantId ?? undefined,
+        messages: [
+          {
+            id: msg.id,
+            conversationId: msg.conversationId,
+            fbMessageId: msg.fbMessageId,
+            direction: msg.direction,
+            senderType: msg.senderType,
+            text: msg.text,
+            messageType: msg.messageType,
+            attachmentUrl: msg.attachmentUrl,
+            sentAt: msg.sentAt.toISOString(),
+            status: msg.status,
+          },
+        ],
+        conversation: {
+          id: conv.id,
+          pageId: conv.pageId,
+          pageName: conv.pageName,
+          participantPsid: conv.participantPsid,
+          customerName: conv.customerName,
+          customerPictureUrl: conv.customerPictureUrl,
+          lastMessage: conv.lastMessage,
+          lastMessageAt: conv.lastMessageAt?.toISOString() ?? null,
+          unreadCount: conv.unreadCount,
+          awaitingLabel: conv.awaitingLabel,
+          fromAd: conv.fromAd,
+          adTitle: conv.adTitle,
+          adId: conv.adId,
+          referralSource: conv.referralSource,
+          kind: conv.kind,
+          sourcePostId: conv.sourcePostId,
+          sourcePermalink: conv.sourcePermalink,
+          sourceThumb: conv.sourceThumb,
+          customerLang: conv.customerLang,
+          customerLangLabel: conv.customerLangLabel,
+        },
+      });
     }
   }
 
@@ -526,9 +791,7 @@ export class CskhInstagramCommentsService {
     }
 
     if (existing.hidden) {
-      throw new BadRequestException(
-        'Không thể trả lời bình luận đã ẩn.',
-      );
+      throw new BadRequestException('Không thể trả lời bình luận đã ẩn.');
     }
 
     // IG chỉ 1 tầng reply — trả lời vào comment gốc nếu đang click vào reply.
@@ -565,13 +828,17 @@ export class CskhInstagramCommentsService {
       where: { pageId, igMediaId: existing.igMediaId },
       data: { lastCommentAt: commentedAt },
     });
-    this.realtime.publish({
-      type: 'ig-comment',
-      pageId,
-      tenantId,
-      conversationId: existing.igMediaId,
-      direction: 'outbound',
+    await this.mirrorToInbox({
+      config,
+      igMediaId: existing.igMediaId,
+      igCommentId: newId || `local-${Date.now()}`,
+      parentIgCommentId: targetCommentId,
       text: message.trim(),
+      authorIgId: pageId,
+      direction: 'outbound',
+      commentedAt,
+      tenantId: this.effectiveTenantId(config, tenantId),
+      publish: true,
     });
     return { ok: true, replyId: newId || null };
   }

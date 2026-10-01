@@ -4726,7 +4726,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const { conv, config, messagingOwnerId } =
       await this.resolveOutboundMessagingContext(conversationId, tenantId);
     // Kiểm tra xem hội thoại có phải là hội thoại bình luận không.
-    if (conv.participantPsid.startsWith('c:') || conv.kind === 'fb_comment') {
+    if (
+      conv.participantPsid.startsWith('c:') ||
+      conv.kind === 'fb_comment' ||
+      conv.kind === 'ig_comment'
+    ) {
       throw new BadRequestException(
         'Hội thoại bình luận — dùng API trả lời comment, không gửi Messenger.',
       );
@@ -7096,7 +7100,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     // Kiểm tra xem hội thoại có phải là hội thoại bình luận không.
     if (
       ctx.conv.participantPsid.startsWith('c:') ||
-      ctx.conv.kind === 'fb_comment'
+      ctx.conv.kind === 'fb_comment' ||
+      ctx.conv.kind === 'ig_comment'
     ) {
       throw new BadRequestException(
         'Hội thoại bình luận — dùng API trả lời comment, không gửi Messenger.',

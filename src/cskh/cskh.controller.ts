@@ -1542,8 +1542,12 @@ export class CskhController {
     @Query('pageId') pageId: string,
     @Query('mediaId') mediaId: string,
   ) {
-    if (!pageId?.trim() || !mediaId?.trim()) {
-      throw new BadRequestException('pageId và mediaId bắt buộc');
+    if (!pageId?.trim()) throw new BadRequestException('pageId bắt buộc');
+    if (!mediaId?.trim()) {
+      return this.igComments.syncPageToInbox(
+        pageId.trim(),
+        user.tenantId || undefined,
+      );
     }
     return this.igComments.syncComments(
       pageId.trim(),

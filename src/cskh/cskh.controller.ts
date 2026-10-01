@@ -1073,6 +1073,7 @@ export class CskhController {
     @Query('legacy') legacy?: string,
     @Query('platform') platform?: string,
     @Query('month') month?: string,
+    @Query('kind') kind?: string,
   ) {
     const parsedLimit = limit ? Number(limit) : undefined;
     const parsedSinceDays = sinceDays ? Number(sinceDays) : undefined;
@@ -1081,6 +1082,7 @@ export class CskhController {
       fromAdOnly: fromAdOnly === '1' || fromAdOnly === 'true',
       unreadOnly: unreadOnly === '1' || unreadOnly === 'true',
       organicOnly: organicOnly === '1' || organicOnly === 'true',
+      kind: this.parseInboxKindQuery(kind),
       limit:
         Number.isFinite(parsedLimit) && parsedLimit! > 0
           ? parsedLimit
@@ -1647,6 +1649,11 @@ export class CskhController {
     ];
     if (!ids.length) return undefined;
     return ids.slice(0, 200);
+  }
+
+  private parseInboxKindQuery(raw?: string): 'dm' | 'comment' | undefined {
+    if (raw === 'dm' || raw === 'comment') return raw;
+    return undefined;
   }
 
   private parseInboxPlatformQuery(

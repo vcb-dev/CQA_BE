@@ -2236,6 +2236,14 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "kind",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {

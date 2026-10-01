@@ -2061,6 +2061,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       monthTo?: Date;
       labelId?: string;
       unlabeledOnly?: boolean;
+      kind?: 'dm' | 'comment';
       cursor?: { lastMessageAt: Date; id: string } | null;
       pageIds?: string[];
     },
@@ -2076,6 +2077,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     if (opts.unreadOnly)
       andClauses.push(this.unreadStatusWhere(flags.includeAwaitingInUnread));
     if (opts.organicOnly) andClauses.push({ fromAd: false });
+    if (opts.kind === 'dm') andClauses.push({ kind: 'dm' });
+    else if (opts.kind === 'comment') {
+      andClauses.push({ kind: { in: ['fb_comment', 'ig_comment'] } });
+    }
     if (flags.includeLabelFilters && opts.labelId) {
       andClauses.push(this.labelIdWhere(opts.labelId));
     }
@@ -2415,6 +2420,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       includeLabels?: boolean;
       platform?: 'messenger' | 'instagram' | 'tiktok';
       pageIds?: string[];
+      kind?: 'dm' | 'comment';
     },
   ): Promise<{
     items: CskhInboxConversation[];
@@ -2433,6 +2439,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       opts?.fromAdOnly ? 'ad' : '',
       opts?.unreadOnly ? 'ur' : '',
       opts?.organicOnly ? 'og' : '',
+      opts?.kind ?? '',
       opts?.search?.trim() ?? '',
       opts?.labelId ?? '',
       opts?.unlabeledOnly ? 'ul' : '',
@@ -2501,6 +2508,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           includeLabels?: boolean;
           platform?: 'messenger' | 'instagram' | 'tiktok';
           pageIds?: string[];
+          kind?: 'dm' | 'comment';
         }
       | undefined,
     listCacheKey: string,
@@ -2529,6 +2537,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       opts?.fromAdOnly ||
       opts?.unreadOnly ||
       opts?.organicOnly ||
+      opts?.kind ||
       opts?.search?.trim() ||
       hasLabelFilter
     );
@@ -2538,6 +2547,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       fromAdOnly: opts?.fromAdOnly,
       unreadOnly: opts?.unreadOnly,
       organicOnly: opts?.organicOnly,
+      kind: opts?.kind,
       search: opts?.search,
       sinceDays: opts?.sinceDays,
       month: monthRange ?? undefined,
@@ -2813,6 +2823,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       fromAdOnly?: boolean;
       unreadOnly?: boolean;
       organicOnly?: boolean;
+      kind?: 'dm' | 'comment';
       maxItems?: number;
       limit?: number;
     },

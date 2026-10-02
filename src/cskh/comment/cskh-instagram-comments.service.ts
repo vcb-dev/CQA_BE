@@ -685,6 +685,7 @@ export class CskhInstagramCommentsService {
         lastMessage: input.text,
         lastMessageAt: input.commentedAt,
         unreadCount: bumpUnread ? 1 : 0,
+        needsReply: input.direction !== 'outbound',
         kind: 'ig_comment',
         sourcePostId: clipDb(input.igMediaId, 64),
         sourcePermalink: media?.permalink ?? null,
@@ -700,7 +701,11 @@ export class CskhInstagramCommentsService {
         ...(media?.permalink ? { sourcePermalink: media.permalink } : {}),
         ...(media?.thumbnailUrl ? { sourceThumb: media.thumbnailUrl } : {}),
         ...(newer
-          ? { lastMessage: input.text, lastMessageAt: input.commentedAt }
+          ? {
+              lastMessage: input.text,
+              lastMessageAt: input.commentedAt,
+              needsReply: input.direction !== 'outbound',
+            }
           : {}),
         ...(bumpUnread ? { unreadCount: { increment: 1 } } : {}),
       },
@@ -753,6 +758,7 @@ export class CskhInstagramCommentsService {
           lastMessageAt: conv.lastMessageAt?.toISOString() ?? null,
           unreadCount: conv.unreadCount,
           awaitingLabel: conv.awaitingLabel,
+          needsReply: conv.needsReply,
           fromAd: conv.fromAd,
           adTitle: conv.adTitle,
           adId: conv.adId,

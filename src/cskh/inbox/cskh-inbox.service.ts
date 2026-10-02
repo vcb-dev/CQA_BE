@@ -843,6 +843,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       lastMessageAt: conv.lastMessageAt?.toISOString() ?? null,
       unreadCount: conv.unreadCount,
       awaitingLabel: conv.awaitingLabel,
+      needsReply: 'needsReply' in conv ? Boolean(conv.needsReply) : false,
       fromAd: conv.fromAd,
       adTitle: conv.adTitle,
       adId: conv.adId,
@@ -1530,6 +1531,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         lastMessage: listPreview || msg.text || '[Ảnh]',
         lastMessageAt: new Date(event.timestamp ?? Date.now()),
         unreadCount: isFromPage ? 0 : 1,
+        needsReply: !isFromPage,
         tenantId: config?.tenantId || null,
       },
       update: {
@@ -1539,6 +1541,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         lastMessage: listPreview || undefined,
         lastMessageAt: new Date(event.timestamp ?? Date.now()),
         unreadCount: isFromPage ? 0 : { increment: 1 },
+        needsReply: !isFromPage,
         tenantId: config?.tenantId || undefined,
       },
     });
@@ -2064,6 +2067,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       kind?: 'dm' | 'comment';
       cursor?: { lastMessageAt: Date; id: string } | null;
       pageIds?: string[];
+      needsReplyOnly?: boolean;
     },
     flags: { includeAwaitingInUnread: boolean; includeLabelFilters: boolean },
   ): Prisma.CskhInboxConversationWhereInput {
@@ -2124,6 +2128,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         ],
       });
     }
+    if (opts.needsReplyOnly) andClauses.push({ needsReply: true });
     return andClauses.length > 0 ? { AND: andClauses } : {};
   }
 
@@ -2223,7 +2228,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       pageIds = explicitPageIds;
     } else if (platform) {
       pageIds = await this.pageIdsForGraphPlatform(platform, tenantId);
-      if (!pageIds.length) return { total: 0, fromAd: 0, unread: 0, normal: 0 };
+      if (!pageIds.length)
+        return { total: 0, fromAd: 0, unread: 0, needsReply: 0, normal: 0 };
     }
     return this.countConversationStatsTimed(pageId, tenantId, pageIds, month);
   }
@@ -2235,6 +2241,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       fromAdOnly?: boolean;
       unreadOnly?: boolean;
       organicOnly?: boolean;
+      needsReplyOnly?: boolean;
       sinceDays?: number;
       month?: InboxMonthRange;
       pageIds?: string[];
@@ -2275,6 +2282,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     total: number;
     fromAd: number;
     unread: number;
+    needsReply: number;
     normal: number;
   } | null> {
     let whereSql = Prisma.sql`WHERE c.last_message_at IS NOT NULL`;
@@ -2300,6 +2308,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
               total: number;
               from_ad: number;
               unread: number;
+              needs_reply: number;
               normal: number;
             }>
           >`
@@ -2307,6 +2316,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
               COUNT(*)::int AS total,
               COUNT(*) FILTER (WHERE c.from_ad)::int AS from_ad,
               ${unreadSql} AS unread,
+              COUNT(*) FILTER (WHERE c.needs_reply)::int AS needs_reply,
               COUNT(*) FILTER (WHERE NOT c.from_ad)::int AS normal
             FROM cskh_inbox_conversations c
             ${whereSql}
@@ -2315,11 +2325,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         { maxWait: 3_000, timeout: 12_000 },
       );
       const row = rows[0];
-      if (!row) return { total: 0, fromAd: 0, unread: 0, normal: 0 };
+      if (!row)
+        return { total: 0, fromAd: 0, unread: 0, needsReply: 0, normal: 0 };
       return {
         total: Number(row.total ?? 0),
         fromAd: Number(row.from_ad ?? 0),
         unread: Number(row.unread ?? 0),
+        needsReply: Number(row.needs_reply ?? 0),
         normal: Number(row.normal ?? 0),
       };
     } catch (e) {
@@ -2340,6 +2352,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     total: number;
     fromAd: number;
     unread: number;
+    needsReply: number;
     normal: number;
   }> {
     const window = this.resolveInboxTimeWindow({ month });
@@ -2400,7 +2413,20 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         { ...base, unreadOnly: true },
         flags,
       )) ?? 0;
-    return { total, fromAd, unread, normal: Math.max(0, total - fromAd) };
+    const needsReply =
+      (await this.countListMatching(
+        pageId,
+        tenantId,
+        { ...base, needsReplyOnly: true },
+        flags,
+      )) ?? 0;
+    return {
+      total,
+      fromAd,
+      unread,
+      needsReply,
+      normal: Math.max(0, total - fromAd),
+    };
   }
 
   async listConversations(
@@ -2421,6 +2447,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       platform?: 'messenger' | 'instagram' | 'tiktok';
       pageIds?: string[];
       kind?: 'dm' | 'comment';
+      needsReplyOnly?: boolean;
     },
   ): Promise<{
     items: CskhInboxConversation[];
@@ -2446,6 +2473,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       window.month?.key ?? `d${window.sinceDays ?? ''}`,
       (opts?.pageIds ?? []).slice().sort().join(','),
       opts?.cursor ?? '',
+      opts?.needsReplyOnly ? 'nr' : '',
     ].join('|');
     if (!opts?.cursor) {
       const cachedList = this.conversationListCache.get(listCacheKey);
@@ -2509,6 +2537,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           platform?: 'messenger' | 'instagram' | 'tiktok';
           pageIds?: string[];
           kind?: 'dm' | 'comment';
+          needsReplyOnly?: boolean;
         }
       | undefined,
     listCacheKey: string,
@@ -2539,7 +2568,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       opts?.organicOnly ||
       opts?.kind ||
       opts?.search?.trim() ||
-      hasLabelFilter
+      hasLabelFilter ||
+      opts?.needsReplyOnly
     );
     const needLabels = opts?.includeLabels === true || hasLabelFilter;
     const monthRange = parseInboxMonthKey(opts?.month);
@@ -2555,6 +2585,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       unlabeledOnly: opts?.unlabeledOnly,
       cursor,
       pageIds: platformPageIds,
+      needsReplyOnly: opts?.needsReplyOnly,
     };
 
     if (!isScrollPage && !hasListFilter) {
@@ -2591,6 +2622,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       lastMessageAt: true,
       unreadCount: true,
       awaitingLabel: true,
+      needsReply: true,
       updatedAt: true,
 
       kind: true,
@@ -2614,6 +2646,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       lastMessage: true,
       lastMessageAt: true,
       unreadCount: true,
+      needsReply: true,
       updatedAt: true,
 
       kind: true,
@@ -4819,6 +4852,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         lastMessageAt: new Date(),
         unreadCount: 0,
         awaitingLabel: false,
+        needsReply: false,
       },
     });
 
@@ -7176,6 +7210,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         lastMessageAt: new Date(),
         unreadCount: 0,
         awaitingLabel: false,
+        needsReply: false,
       },
     });
     // publishMessageRealtime: publish message realtime

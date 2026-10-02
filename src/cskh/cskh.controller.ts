@@ -1074,6 +1074,7 @@ export class CskhController {
     @Query('platform') platform?: string,
     @Query('month') month?: string,
     @Query('kind') kind?: string,
+    @Query('needsReplyOnly') needsReplyOnly?: string,
   ) {
     const parsedLimit = limit ? Number(limit) : undefined;
     const parsedSinceDays = sinceDays ? Number(sinceDays) : undefined;
@@ -1099,6 +1100,7 @@ export class CskhController {
       includeLabels: includeLabels === '1' || includeLabels === 'true',
       platform: graphPlatform,
       pageIds: this.parsePageIdsQuery(pageIds),
+      needsReplyOnly: needsReplyOnly === '1' || needsReplyOnly === 'true',
     };
     if (legacy === '1' || legacy === 'true') {
       return this.inbox.listConversationsLegacy(

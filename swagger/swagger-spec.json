@@ -2244,6 +2244,14 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "needsReplyOnly",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {

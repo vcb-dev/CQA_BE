@@ -925,6 +925,47 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     return { ...conv, fbConversationId: fbId };
   }
 
+  /** Kéo tin từ Graph nền — không chặn GET messages (webhook đã có tin gần đây). */
+  private scheduleBackgroundConversationHydration(
+    conv: {
+      id: string;
+      pageId: string;
+      fbConversationId: string | null;
+      participantPsid: string | null;
+    },
+    fetchLimit: number,
+    tenantId: string | undefined,
+    conversationId: string,
+  ): void {
+    const fbConversationId = conv.fbConversationId?.trim();
+    if (!fbConversationId || !conv.participantPsid) return;
+    const lastGraph = this.lastGraphRefresh.get(conversationId) ?? 0;
+    if (Date.now() - lastGraph < this.graphRefreshCooldownMs) return;
+
+    void this.prisma.facebookCskhConfig
+      .findUnique({
+        where: { pageId: conv.pageId },
+        select: { pageAccessToken: true },
+      })
+      .then((config) => {
+        if (!config?.pageAccessToken) return;
+        this.lastGraphRefresh.set(conversationId, Date.now());
+        return this.refreshConversationMessages(
+          conv.id,
+          conv.pageId,
+          fbConversationId,
+          config.pageAccessToken,
+          fetchLimit,
+          tenantId,
+        );
+      })
+      .catch((e) => {
+        this.logger.debug(
+          `getMessages background hydrate conv=${conversationId.slice(0, 8)}: ${(e as Error).message}`,
+        );
+      });
+  }
+
   private runDeepHistory(
     conv: { id: string; pageId: string; fbConversationId: string },
     token: string,
@@ -3556,10 +3597,32 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       );
     this.touchUserActivity(conv.pageId);
 
-    conv = await this.ensureFbConversationLinked(conv);
-
     const hasSince = sinceDate && !Number.isNaN(sinceDate.getTime());
     const hasBefore = beforeDate && !Number.isNaN(beforeDate.getTime());
+    // Chỉ chờ Graph khi refresh=1 (thread trống) hoặc cuộn lấy tin cũ — webhook đã có tin trong DB.
+    const blockOnGraph = forceRefresh || Boolean(hasBefore);
+    if (blockOnGraph) {
+      // Nếu blockOnGraph=true, đợi đồng bộ Graph trước khi trả kết quả.
+      conv = await this.ensureFbConversationLinked(conv);
+    } else if (!conv.fbConversationId && conv.participantPsid) {
+      // Nếu thread trống và chưa có fbConversationId, đợi đồng bộ Graph trước khi trả kết quả.
+      void this.ensureFbConversationLinked(conv)
+        .then((linked) => {
+          if (!linked.fbConversationId || !linked.participantPsid) return;
+          this.scheduleBackgroundConversationHydration(
+            linked,
+            fetchLimit,
+            tenantId,
+            conversationId,
+          );
+        })
+        .catch((e) => {
+          this.logger.debug(
+            `getMessages link fb conv background conv=${conversationId.slice(0, 8)}: ${(e as Error).message}`,
+          );
+        });
+    }
+
     if (conv.fbConversationId && conv.participantPsid) {
       const previewMismatch =
         !hasSince &&
@@ -3576,7 +3639,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           fetchLimit,
           tenantId,
         );
-        if (messages.length === 0) {
+        if (messages.length === 0 && forceRefresh) {
           await reconcileTask;
           messages = await this.loadConversationMessages(
             conversationId,
@@ -3597,10 +3660,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       const graphCooled = Date.now() - lastGraph >= this.graphRefreshCooldownMs;
       const needOlderFromGraph =
         hasBefore && messages.length < Math.min(fetchLimit, 8);
-      // Có tin trong DB thì trả ngay — đừng chờ Graph (mở chat bị trống/treo).
+      // Chỉ chờ Graph khi refresh=1 (thread trống) hoặc cuộn lấy tin cũ — webhook đã có tin trong DB.
       const mustAwaitGraph =
-        (!hasSince && !hasBefore && messages.length === 0) ||
-        needOlderFromGraph;
+        needOlderFromGraph ||
+        (forceRefresh && !hasSince && !hasBefore && messages.length === 0);
       const shouldGraphRefresh =
         mustAwaitGraph || (forceRefresh && graphCooled);
       const fbConversationId = conv.fbConversationId;
@@ -3663,6 +3726,19 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
             }
           }
         }
+      } else if (
+        !hasSince &&
+        !hasBefore &&
+        !forceRefresh &&
+        messages.length === 0 &&
+        conv.participantPsid
+      ) {
+        this.scheduleBackgroundConversationHydration(
+          conv,
+          fetchLimit,
+          tenantId,
+          conversationId,
+        );
       } else if (!hasSince && !hasBefore && fbConversationId) {
         const lastDeep = this.lastDeepHistory.get(conversationId) ?? 0;
         if (Date.now() - lastDeep >= this.deepHistoryCooldownMs) {

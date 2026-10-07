@@ -52,6 +52,7 @@ export type InboxConversationPayload = {
   lastMessageAt: string | null;
   unreadCount: number;
   awaitingLabel?: boolean;
+  needsReply?: boolean;
   fromAd: boolean;
   adTitle: string | null;
   adId?: string | null;

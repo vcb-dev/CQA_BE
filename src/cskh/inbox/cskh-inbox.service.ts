@@ -843,9 +843,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       lastMessageAt: conv.lastMessageAt?.toISOString() ?? null,
       unreadCount: conv.unreadCount,
       awaitingLabel: conv.awaitingLabel,
+      needsReply: 'needsReply' in conv ? Boolean(conv.needsReply) : false,
       fromAd: conv.fromAd,
       adTitle: conv.adTitle,
       adId: conv.adId,
+      // adPostPermalink là permalink của post của ad
+      adPostPermalink:
+        'adPostPermalink' in conv ? (conv.adPostPermalink ?? null) : null,
       referralSource: conv.referralSource,
       customerLang: conv.customerLang ?? null,
       customerLangLabel: conv.customerLangLabel ?? null,
@@ -892,9 +896,19 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       pageId: string;
       fbConversationId: string | null;
       participantPsid: string | null;
+      kind?: string | null;
     },
   >(conv: T): Promise<T> {
-    if (conv.fbConversationId || !conv.participantPsid?.trim()) return conv;
+    const psid = conv.participantPsid?.trim() ?? '';
+    // Comment thread (c:post:author) is not a Messenger conversation.
+    if (
+      conv.fbConversationId ||
+      !psid ||
+      conv.kind === 'fb_comment' ||
+      psid.startsWith('c:')
+    ) {
+      return conv;
+    }
     const config = await this.prisma.facebookCskhConfig.findUnique({
       where: { pageId: conv.pageId },
       select: { pageAccessToken: true, metadata: true },
@@ -903,7 +917,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const fbId = await this.graph.fetchConversationIdByPsid(
       conv.pageId,
       config.pageAccessToken,
-      conv.participantPsid,
+      psid,
       cskhInboxGraphPlatform(config.metadata),
     );
     if (!fbId) return conv;
@@ -912,6 +926,47 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       data: { fbConversationId: fbId },
     });
     return { ...conv, fbConversationId: fbId };
+  }
+
+  /** Kéo tin từ Graph nền — không chặn GET messages (webhook đã có tin gần đây). */
+  private scheduleBackgroundConversationHydration(
+    conv: {
+      id: string;
+      pageId: string;
+      fbConversationId: string | null;
+      participantPsid: string | null;
+    },
+    fetchLimit: number,
+    tenantId: string | undefined,
+    conversationId: string,
+  ): void {
+    const fbConversationId = conv.fbConversationId?.trim();
+    if (!fbConversationId || !conv.participantPsid) return;
+    const lastGraph = this.lastGraphRefresh.get(conversationId) ?? 0;
+    if (Date.now() - lastGraph < this.graphRefreshCooldownMs) return;
+
+    void this.prisma.facebookCskhConfig
+      .findUnique({
+        where: { pageId: conv.pageId },
+        select: { pageAccessToken: true },
+      })
+      .then((config) => {
+        if (!config?.pageAccessToken) return;
+        this.lastGraphRefresh.set(conversationId, Date.now());
+        return this.refreshConversationMessages(
+          conv.id,
+          conv.pageId,
+          fbConversationId,
+          config.pageAccessToken,
+          fetchLimit,
+          tenantId,
+        );
+      })
+      .catch((e) => {
+        this.logger.debug(
+          `getMessages background hydrate conv=${conversationId.slice(0, 8)}: ${(e as Error).message}`,
+        );
+      });
   }
 
   private runDeepHistory(
@@ -1520,6 +1575,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         lastMessage: listPreview || msg.text || '[Ảnh]',
         lastMessageAt: new Date(event.timestamp ?? Date.now()),
         unreadCount: isFromPage ? 0 : 1,
+        needsReply: !isFromPage,
         tenantId: config?.tenantId || null,
       },
       update: {
@@ -1529,6 +1585,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         lastMessage: listPreview || undefined,
         lastMessageAt: new Date(event.timestamp ?? Date.now()),
         unreadCount: isFromPage ? 0 : { increment: 1 },
+        needsReply: !isFromPage,
         tenantId: config?.tenantId || undefined,
       },
     });
@@ -1895,6 +1952,18 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const pageName = config?.pageName ?? null;
     const referralAt = new Date(event.timestamp ?? Date.now());
 
+    // adPostPermalink là permalink của post của ad
+    let adPostPermalink: string | null = null;
+    if (parsed.adPostId && config?.pageAccessToken) {
+      // fetchPagePostById là hàm để fetch post của ad từ Graph
+      const post = await this.graph.fetchPagePostById(
+        parsed.adPostId,
+        config.pageAccessToken,
+      );
+      // permalink_url là permalink của post của ad
+      adPostPermalink = post?.permalink_url?.trim() || null;
+    }
+
     // Luôn ghi đè ad mới nhất khi Meta gửi referral (không giữ QC lần đầu).
     const conv = await this.prisma.cskhInboxConversation.upsert({
       where: {
@@ -1907,6 +1976,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         fromAd: true,
         adId: parsed.adId,
         adTitle: parsed.adTitle,
+        ...(adPostPermalink ? { adPostPermalink } : {}),
         referralSource: parsed.referralSource,
         referralAt,
         tenantId: config?.tenantId || null,
@@ -1920,6 +1990,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         fromAd: true,
         ...(parsed.adId ? { adId: parsed.adId } : {}),
         ...(parsed.adTitle ? { adTitle: parsed.adTitle } : {}),
+        ...(adPostPermalink ? { adPostPermalink } : {}),
         referralSource: parsed.referralSource ?? undefined,
         referralAt,
         tenantId: config?.tenantId || undefined,
@@ -2051,8 +2122,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       monthTo?: Date;
       labelId?: string;
       unlabeledOnly?: boolean;
+      kind?: 'dm' | 'comment';
       cursor?: { lastMessageAt: Date; id: string } | null;
       pageIds?: string[];
+      needsReplyOnly?: boolean;
     },
     flags: { includeAwaitingInUnread: boolean; includeLabelFilters: boolean },
   ): Prisma.CskhInboxConversationWhereInput {
@@ -2066,6 +2139,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     if (opts.unreadOnly)
       andClauses.push(this.unreadStatusWhere(flags.includeAwaitingInUnread));
     if (opts.organicOnly) andClauses.push({ fromAd: false });
+    if (opts.kind === 'dm') andClauses.push({ kind: 'dm' });
+    else if (opts.kind === 'comment') {
+      andClauses.push({ kind: { in: ['fb_comment', 'ig_comment'] } });
+    }
     if (flags.includeLabelFilters && opts.labelId) {
       andClauses.push(this.labelIdWhere(opts.labelId));
     }
@@ -2109,6 +2186,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         ],
       });
     }
+    if (opts.needsReplyOnly) andClauses.push({ needsReply: true });
     return andClauses.length > 0 ? { AND: andClauses } : {};
   }
 
@@ -2208,7 +2286,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       pageIds = explicitPageIds;
     } else if (platform) {
       pageIds = await this.pageIdsForGraphPlatform(platform, tenantId);
-      if (!pageIds.length) return { total: 0, fromAd: 0, unread: 0, normal: 0 };
+      if (!pageIds.length)
+        return { total: 0, fromAd: 0, unread: 0, needsReply: 0, normal: 0 };
     }
     return this.countConversationStatsTimed(pageId, tenantId, pageIds, month);
   }
@@ -2220,6 +2299,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       fromAdOnly?: boolean;
       unreadOnly?: boolean;
       organicOnly?: boolean;
+      needsReplyOnly?: boolean;
       sinceDays?: number;
       month?: InboxMonthRange;
       pageIds?: string[];
@@ -2260,6 +2340,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     total: number;
     fromAd: number;
     unread: number;
+    needsReply: number;
     normal: number;
   } | null> {
     let whereSql = Prisma.sql`WHERE c.last_message_at IS NOT NULL`;
@@ -2285,6 +2366,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
               total: number;
               from_ad: number;
               unread: number;
+              needs_reply: number;
               normal: number;
             }>
           >`
@@ -2292,6 +2374,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
               COUNT(*)::int AS total,
               COUNT(*) FILTER (WHERE c.from_ad)::int AS from_ad,
               ${unreadSql} AS unread,
+              COUNT(*) FILTER (WHERE c.needs_reply)::int AS needs_reply,
               COUNT(*) FILTER (WHERE NOT c.from_ad)::int AS normal
             FROM cskh_inbox_conversations c
             ${whereSql}
@@ -2300,11 +2383,13 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         { maxWait: 3_000, timeout: 12_000 },
       );
       const row = rows[0];
-      if (!row) return { total: 0, fromAd: 0, unread: 0, normal: 0 };
+      if (!row)
+        return { total: 0, fromAd: 0, unread: 0, needsReply: 0, normal: 0 };
       return {
         total: Number(row.total ?? 0),
         fromAd: Number(row.from_ad ?? 0),
         unread: Number(row.unread ?? 0),
+        needsReply: Number(row.needs_reply ?? 0),
         normal: Number(row.normal ?? 0),
       };
     } catch (e) {
@@ -2325,6 +2410,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     total: number;
     fromAd: number;
     unread: number;
+    needsReply: number;
     normal: number;
   }> {
     const window = this.resolveInboxTimeWindow({ month });
@@ -2385,7 +2471,20 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         { ...base, unreadOnly: true },
         flags,
       )) ?? 0;
-    return { total, fromAd, unread, normal: Math.max(0, total - fromAd) };
+    const needsReply =
+      (await this.countListMatching(
+        pageId,
+        tenantId,
+        { ...base, needsReplyOnly: true },
+        flags,
+      )) ?? 0;
+    return {
+      total,
+      fromAd,
+      unread,
+      needsReply,
+      normal: Math.max(0, total - fromAd),
+    };
   }
 
   async listConversations(
@@ -2405,6 +2504,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       includeLabels?: boolean;
       platform?: 'messenger' | 'instagram' | 'tiktok';
       pageIds?: string[];
+      kind?: 'dm' | 'comment';
+      needsReplyOnly?: boolean;
     },
   ): Promise<{
     items: CskhInboxConversation[];
@@ -2423,12 +2524,14 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       opts?.fromAdOnly ? 'ad' : '',
       opts?.unreadOnly ? 'ur' : '',
       opts?.organicOnly ? 'og' : '',
+      opts?.kind ?? '',
       opts?.search?.trim() ?? '',
       opts?.labelId ?? '',
       opts?.unlabeledOnly ? 'ul' : '',
       window.month?.key ?? `d${window.sinceDays ?? ''}`,
       (opts?.pageIds ?? []).slice().sort().join(','),
       opts?.cursor ?? '',
+      opts?.needsReplyOnly ? 'nr' : '',
     ].join('|');
     if (!opts?.cursor) {
       const cachedList = this.conversationListCache.get(listCacheKey);
@@ -2491,6 +2594,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           includeLabels?: boolean;
           platform?: 'messenger' | 'instagram' | 'tiktok';
           pageIds?: string[];
+          kind?: 'dm' | 'comment';
+          needsReplyOnly?: boolean;
         }
       | undefined,
     listCacheKey: string,
@@ -2519,8 +2624,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       opts?.fromAdOnly ||
       opts?.unreadOnly ||
       opts?.organicOnly ||
+      opts?.kind ||
       opts?.search?.trim() ||
-      hasLabelFilter
+      hasLabelFilter ||
+      opts?.needsReplyOnly
     );
     const needLabels = opts?.includeLabels === true || hasLabelFilter;
     const monthRange = parseInboxMonthKey(opts?.month);
@@ -2528,6 +2635,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       fromAdOnly: opts?.fromAdOnly,
       unreadOnly: opts?.unreadOnly,
       organicOnly: opts?.organicOnly,
+      kind: opts?.kind,
       search: opts?.search,
       sinceDays: opts?.sinceDays,
       month: monthRange ?? undefined,
@@ -2535,6 +2643,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       unlabeledOnly: opts?.unlabeledOnly,
       cursor,
       pageIds: platformPageIds,
+      needsReplyOnly: opts?.needsReplyOnly,
     };
 
     if (!isScrollPage && !hasListFilter) {
@@ -2571,6 +2680,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       lastMessageAt: true,
       unreadCount: true,
       awaitingLabel: true,
+      needsReply: true,
       updatedAt: true,
 
       kind: true,
@@ -2594,6 +2704,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       lastMessage: true,
       lastMessageAt: true,
       unreadCount: true,
+      needsReply: true,
       updatedAt: true,
 
       kind: true,
@@ -2803,6 +2914,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       fromAdOnly?: boolean;
       unreadOnly?: boolean;
       organicOnly?: boolean;
+      kind?: 'dm' | 'comment';
       maxItems?: number;
       limit?: number;
     },
@@ -3502,10 +3614,32 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       );
     this.touchUserActivity(conv.pageId);
 
-    conv = await this.ensureFbConversationLinked(conv);
-
     const hasSince = sinceDate && !Number.isNaN(sinceDate.getTime());
     const hasBefore = beforeDate && !Number.isNaN(beforeDate.getTime());
+    // Chỉ chờ Graph khi refresh=1 (thread trống) hoặc cuộn lấy tin cũ — webhook đã có tin trong DB.
+    const blockOnGraph = forceRefresh || Boolean(hasBefore);
+    if (blockOnGraph) {
+      // Nếu blockOnGraph=true, đợi đồng bộ Graph trước khi trả kết quả.
+      conv = await this.ensureFbConversationLinked(conv);
+    } else if (!conv.fbConversationId && conv.participantPsid) {
+      // Nếu thread trống và chưa có fbConversationId, đợi đồng bộ Graph trước khi trả kết quả.
+      void this.ensureFbConversationLinked(conv)
+        .then((linked) => {
+          if (!linked.fbConversationId || !linked.participantPsid) return;
+          this.scheduleBackgroundConversationHydration(
+            linked,
+            fetchLimit,
+            tenantId,
+            conversationId,
+          );
+        })
+        .catch((e) => {
+          this.logger.debug(
+            `getMessages link fb conv background conv=${conversationId.slice(0, 8)}: ${(e as Error).message}`,
+          );
+        });
+    }
+
     if (conv.fbConversationId && conv.participantPsid) {
       const previewMismatch =
         !hasSince &&
@@ -3522,7 +3656,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
           fetchLimit,
           tenantId,
         );
-        if (messages.length === 0) {
+        if (messages.length === 0 && forceRefresh) {
           await reconcileTask;
           messages = await this.loadConversationMessages(
             conversationId,
@@ -3543,10 +3677,10 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       const graphCooled = Date.now() - lastGraph >= this.graphRefreshCooldownMs;
       const needOlderFromGraph =
         hasBefore && messages.length < Math.min(fetchLimit, 8);
-      // Có tin trong DB thì trả ngay — đừng chờ Graph (mở chat bị trống/treo).
+      // Chỉ chờ Graph khi refresh=1 (thread trống) hoặc cuộn lấy tin cũ — webhook đã có tin trong DB.
       const mustAwaitGraph =
-        (!hasSince && !hasBefore && messages.length === 0) ||
-        needOlderFromGraph;
+        needOlderFromGraph ||
+        (forceRefresh && !hasSince && !hasBefore && messages.length === 0);
       const shouldGraphRefresh =
         mustAwaitGraph || (forceRefresh && graphCooled);
       const fbConversationId = conv.fbConversationId;
@@ -3609,6 +3743,19 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
             }
           }
         }
+      } else if (
+        !hasSince &&
+        !hasBefore &&
+        !forceRefresh &&
+        messages.length === 0 &&
+        conv.participantPsid
+      ) {
+        this.scheduleBackgroundConversationHydration(
+          conv,
+          fetchLimit,
+          tenantId,
+          conversationId,
+        );
       } else if (!hasSince && !hasBefore && fbConversationId) {
         const lastDeep = this.lastDeepHistory.get(conversationId) ?? 0;
         if (Date.now() - lastDeep >= this.deepHistoryCooldownMs) {
@@ -4716,7 +4863,11 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const { conv, config, messagingOwnerId } =
       await this.resolveOutboundMessagingContext(conversationId, tenantId);
     // Kiểm tra xem hội thoại có phải là hội thoại bình luận không.
-    if (conv.participantPsid.startsWith('c:') || conv.kind === 'fb_comment') {
+    if (
+      conv.participantPsid.startsWith('c:') ||
+      conv.kind === 'fb_comment' ||
+      conv.kind === 'ig_comment'
+    ) {
       throw new BadRequestException(
         'Hội thoại bình luận — dùng API trả lời comment, không gửi Messenger.',
       );
@@ -4794,6 +4945,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         lastMessageAt: new Date(),
         unreadCount: 0,
         awaitingLabel: false,
+        needsReply: false,
       },
     });
 
@@ -7086,7 +7238,8 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     // Kiểm tra xem hội thoại có phải là hội thoại bình luận không.
     if (
       ctx.conv.participantPsid.startsWith('c:') ||
-      ctx.conv.kind === 'fb_comment'
+      ctx.conv.kind === 'fb_comment' ||
+      ctx.conv.kind === 'ig_comment'
     ) {
       throw new BadRequestException(
         'Hội thoại bình luận — dùng API trả lời comment, không gửi Messenger.',
@@ -7150,6 +7303,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         lastMessageAt: new Date(),
         unreadCount: 0,
         awaitingLabel: false,
+        needsReply: false,
       },
     });
     // publishMessageRealtime: publish message realtime

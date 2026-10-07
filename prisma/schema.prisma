@@ -438,9 +438,13 @@ model CskhInboxConversation {
   lastMessageAt      DateTime?                    @map("last_message_at") @db.Timestamptz(6)
   unreadCount        Int                          @default(0) @map("unread_count")
   awaitingLabel      Boolean                      @default(false) @map("awaiting_label")
+
+  needsReply         Boolean @default(false)      @map("needs_reply")
+
   fromAd             Boolean                      @default(false) @map("from_ad")
   adId               String?                      @map("ad_id") @db.VarChar
   adTitle            String?                      @map("ad_title") @db.VarChar
+  adPostPermalink    String?                      @map("ad_post_permalink") @db.Text
   referralSource     String?                      @map("referral_source") @db.VarChar
   referralAt         DateTime?                    @map("referral_at") @db.Timestamptz(6)
   // Ngôn ngữ khách (ISO 639-1) — dùng khi NV bật tự dịch khi gửi. Persist ở BE.
@@ -461,6 +465,7 @@ model CskhInboxConversation {
 
   @@unique([pageId, participantPsid])
   @@index([tenantId, lastMessageAt(sort: Desc), id(sort: Desc)])
+  @@index([tenantId, needsReply, lastMessageAt(sort: Desc), id(sort: Desc)])
   @@index([pageId, lastMessageAt(sort: Desc), id(sort: Desc)])
   @@index([tenantId, fromAd, lastMessageAt(sort: Desc), id(sort: Desc)])
   @@index([lastMessageAt(sort: Desc), id(sort: Desc)])

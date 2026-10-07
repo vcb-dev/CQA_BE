@@ -31,6 +31,7 @@ export function isPrismaRetryableDbError(e: unknown): boolean {
   return isPrismaBusyError(e);
 }
 
+// CONVERSATION_ACCESS_SELECT_LEGACY là cấu hình lấy dữ liệu từ conversation
 export const CONVERSATION_ACCESS_SELECT_LEGACY = {
   id: true,
   pageId: true,
@@ -42,6 +43,7 @@ export const CONVERSATION_ACCESS_SELECT_LEGACY = {
   fromAd: true,
   adId: true,
   adTitle: true,
+  adPostPermalink: true,
   referralSource: true,
   referralAt: true,
   lastMessage: true,
@@ -60,6 +62,7 @@ export const CONVERSATION_ACCESS_SELECT_LEGACY = {
 export const CONVERSATION_ACCESS_SELECT = {
   ...CONVERSATION_ACCESS_SELECT_LEGACY,
   awaitingLabel: true,
+  needsReply: true,
   customerLang: true,
   customerLangLabel: true,
 } as const;
@@ -89,7 +92,12 @@ async function findWithMigrationFallback(
         },
       });
       return withAwaiting
-        ? { ...withAwaiting, customerLang: null, customerLangLabel: null }
+        ? {
+            ...withAwaiting,
+            customerLang: null,
+            customerLangLabel: null,
+            needsReply: false,
+          }
         : null;
     } catch (e2) {
       if (!isInboxSchemaMigrationError(e2)) throw e2;
@@ -101,6 +109,7 @@ async function findWithMigrationFallback(
         ? {
             ...row,
             awaitingLabel: false,
+            needsReply: false,
             customerLang: null,
             customerLangLabel: null,
           }

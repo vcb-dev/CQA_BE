@@ -1073,6 +1073,8 @@ export class CskhController {
     @Query('legacy') legacy?: string,
     @Query('platform') platform?: string,
     @Query('month') month?: string,
+    @Query('kind') kind?: string,
+    @Query('needsReplyOnly') needsReplyOnly?: string,
   ) {
     const parsedLimit = limit ? Number(limit) : undefined;
     const parsedSinceDays = sinceDays ? Number(sinceDays) : undefined;
@@ -1081,6 +1083,7 @@ export class CskhController {
       fromAdOnly: fromAdOnly === '1' || fromAdOnly === 'true',
       unreadOnly: unreadOnly === '1' || unreadOnly === 'true',
       organicOnly: organicOnly === '1' || organicOnly === 'true',
+      kind: this.parseInboxKindQuery(kind),
       limit:
         Number.isFinite(parsedLimit) && parsedLimit! > 0
           ? parsedLimit
@@ -1097,6 +1100,7 @@ export class CskhController {
       includeLabels: includeLabels === '1' || includeLabels === 'true',
       platform: graphPlatform,
       pageIds: this.parsePageIdsQuery(pageIds),
+      needsReplyOnly: needsReplyOnly === '1' || needsReplyOnly === 'true',
     };
     if (legacy === '1' || legacy === 'true') {
       return this.inbox.listConversationsLegacy(
@@ -1542,8 +1546,12 @@ export class CskhController {
     @Query('pageId') pageId: string,
     @Query('mediaId') mediaId: string,
   ) {
-    if (!pageId?.trim() || !mediaId?.trim()) {
-      throw new BadRequestException('pageId và mediaId bắt buộc');
+    if (!pageId?.trim()) throw new BadRequestException('pageId bắt buộc');
+    if (!mediaId?.trim()) {
+      return this.igComments.syncPageToInbox(
+        pageId.trim(),
+        user.tenantId || undefined,
+      );
     }
     return this.igComments.syncComments(
       pageId.trim(),
@@ -1643,6 +1651,11 @@ export class CskhController {
     ];
     if (!ids.length) return undefined;
     return ids.slice(0, 200);
+  }
+
+  private parseInboxKindQuery(raw?: string): 'dm' | 'comment' | undefined {
+    if (raw === 'dm' || raw === 'comment') return raw;
+    return undefined;
   }
 
   private parseInboxPlatformQuery(

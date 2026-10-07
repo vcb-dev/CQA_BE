@@ -1640,6 +1640,32 @@ export class CskhService implements OnModuleInit {
     this.adInsightsConvCache.set(cacheKey, { at: Date.now(), data: payload });
     return payload;
   }
+  // resolveConversationAdPostUrl là hàm để resolve permalink của post của ad từ conversation để lưu vào DB
+  private async resolveConversationAdPostUrl(
+    conv: { id: string; pageId: string; adPostPermalink?: string | null },
+    effectiveAdId: string,
+    userAccessToken: string,
+  ): Promise<string | null> {
+    const stored = conv.adPostPermalink?.trim();
+    if (stored?.startsWith('http')) return stored;
+    const pageConfig = await this.prisma.facebookCskhConfig.findUnique({
+      where: { pageId: conv.pageId },
+      select: { pageAccessToken: true },
+    });
+    if (!pageConfig?.pageAccessToken) return stored || null;
+    const url = await this.ads.fetchAdPostPermalink(
+      effectiveAdId,
+      userAccessToken,
+      pageConfig.pageAccessToken,
+      this.graph,
+    );
+    if (url) {
+      void this.prisma.cskhInboxConversation
+        .update({ where: { id: conv.id }, data: { adPostPermalink: url } })
+        .catch(() => undefined);
+    }
+    return url;
+  }
 
   private async loadConversationAdInsights(
     conversationId: string,
@@ -1659,6 +1685,7 @@ export class CskhService implements OnModuleInit {
     const empty = (reason: string): AdInsightsPayload => ({
       adId: conv.adId ?? '',
       adName: conv.adTitle,
+      adPostUrl: conv.adPostPermalink?.trim() || null,
       adsetName: null,
       campaignName: null,
       adImageUrl: null,
@@ -1719,10 +1746,17 @@ export class CskhService implements OnModuleInit {
             ? insights.spend / localConversationCount
             : null);
 
+        const adPostUrl = await this.resolveConversationAdPostUrl(
+          conv,
+          effectiveAdId,
+          session.userAccessToken,
+        );
+
         return {
           ...insights,
           adId: effectiveAdId,
           adName: insights.adName ?? conv.adTitle,
+          adPostUrl,
           localConversationCount,
           estimatedForThisConversation,
           unavailableReason: null,
@@ -1740,11 +1774,17 @@ export class CskhService implements OnModuleInit {
             adName: null as string | null,
             adImageUrl: null as string | null,
           }));
+        const adPostUrl = await this.resolveConversationAdPostUrl(
+          conv,
+          effectiveAdId,
+          session.userAccessToken,
+        );
         return {
           ...empty(reason),
           adId: effectiveAdId,
           adName: creative.adName ?? conv.adTitle,
           adImageUrl: creative.adImageUrl,
+          adPostUrl,
           localConversationCount,
         };
       }
@@ -5365,6 +5405,18 @@ export class CskhService implements OnModuleInit {
     const pid = (pageId || '').trim();
     const uid = (psid || '').trim();
     if (!pid || !uid) throw new BadRequestException('Thiếu pageId hoặc psid');
+
+    if (uid.startsWith('c:')) {
+      const svg = `
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+          <rect width="100" height="100" fill="#E2E8F0"/>
+          <circle cx="50" cy="35" r="20" fill="#94A3B8"/>
+          <path d="M15 85 C15 65, 35 60, 50 60 C65 60, 85 65, 85 85" fill="#94A3B8"/>
+        </svg>
+      `.trim();
+      res.type('image/svg+xml');
+      return res.send(svg);
+    }
 
     const config = await this.prisma.facebookCskhConfig.findUnique({
       where: { pageId: pid },

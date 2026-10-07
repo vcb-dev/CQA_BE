@@ -56,6 +56,7 @@ export type InboxConversationPayload = {
   fromAd: boolean;
   adTitle: string | null;
   adId?: string | null;
+  adPostPermalink?: string | null;
   referralSource?: string | null;
   customerLang?: string | null;
   customerLangLabel?: string | null;

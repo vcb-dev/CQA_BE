@@ -58,11 +58,21 @@ export interface OmsRevenueByProductRow {
   sku: string;
   quantity: number;
   order_count: number;
+  sub_total_price: number;
+  total_discounts: number;
   total_price: number;
+  net_revenue: number;
+  [key: string]: unknown;
 }
 
+/** Response của report runner generic `/reports/{id}` — id = "sales-revenue-by-product". */
 export interface OmsRevenueByProductResponse {
+  report: { id: string; name: string; columns: unknown[] };
   data: OmsRevenueByProductRow[];
+  summary: OmsRevenueByProductRow;
+  total: number;
+  page: number;
+  page_size: number;
 }
 
 export interface OmsProductListItem {

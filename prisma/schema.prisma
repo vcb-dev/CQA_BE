@@ -87,6 +87,9 @@ model Tenant {
   fbPosts     CskhFbPost[]
   fbComments  CskhFbComment[]
 
+  mediaFolders CskhMediaFolder[]
+  mediaAssets  CskhMediaAsset[]
+
   @@map("tenants")
 }
 
@@ -962,4 +965,38 @@ model PancakeLead {
   @@index([stage])
   @@index([updatedAt])
   @@map("pancake_leads")
+}
+
+/// Kho ảnh chung trong chat — một tenant một kho, folder một cấp.
+model CskhMediaFolder {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String?  @map("tenant_id") @db.Uuid
+  name      String   @db.VarChar(80)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant Tenant?          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assets CskhMediaAsset[]
+
+  @@unique([name])
+  @@map("cskh_media_folders")
+}
+
+model CskhMediaAsset {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String?  @map("tenant_id") @db.Uuid
+  folderId  String   @map("folder_id") @db.Uuid
+  name      String   @db.VarChar(200)
+  mimeType  String   @map("mime_type") @db.VarChar(80)
+  sizeBytes Int      @map("size_bytes")
+  publicId  String   @map("public_id") @db.VarChar(512)
+  url       String   @db.Text
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant Tenant?         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  folder CskhMediaFolder @relation(fields: [folderId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([folderId])
+  @@map("cskh_media_assets")
 }

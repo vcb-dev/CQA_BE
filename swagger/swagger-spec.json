@@ -3465,6 +3465,192 @@
         ]
       }
     },
+    "/api/v1/cskh/media-library/folders": {
+      "get": {
+        "operationId": "CskhMediaLibraryController_listFolders",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "CskhMediaLibrary"
+        ]
+      },
+      "post": {
+        "operationId": "CskhMediaLibraryController_createFolder",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "CskhMediaLibrary"
+        ]
+      }
+    },
+    "/api/v1/cskh/media-library/folders/{folderId}": {
+      "delete": {
+        "operationId": "CskhMediaLibraryController_deleteFolder",
+        "parameters": [
+          {
+            "name": "folderId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "CskhMediaLibrary"
+        ]
+      }
+    },
+    "/api/v1/cskh/media-library/assets": {
+      "get": {
+        "operationId": "CskhMediaLibraryController_listAssets",
+        "parameters": [
+          {
+            "name": "folderId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "CskhMediaLibrary"
+        ]
+      }
+    },
+    "/api/v1/cskh/media-library/folders/{folderId}/assets": {
+      "get": {
+        "operationId": "CskhMediaLibraryController_listFolderAssets",
+        "parameters": [
+          {
+            "name": "folderId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "CskhMediaLibrary"
+        ]
+      },
+      "post": {
+        "operationId": "CskhMediaLibraryController_upload",
+        "parameters": [
+          {
+            "name": "folderId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "CskhMediaLibrary"
+        ]
+      }
+    },
+    "/api/v1/cskh/media-library/assets/{assetId}": {
+      "delete": {
+        "operationId": "CskhMediaLibraryController_deleteAsset",
+        "parameters": [
+          {
+            "name": "assetId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "CskhMediaLibrary"
+        ]
+      }
+    },
     "/api/v1/ai/audit-chat": {
       "post": {
         "operationId": "AiController_auditChat",

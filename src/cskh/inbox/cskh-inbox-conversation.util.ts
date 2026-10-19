@@ -60,6 +60,7 @@ export const CONVERSATION_ACCESS_SELECT_LEGACY = {
 export const CONVERSATION_ACCESS_SELECT = {
   ...CONVERSATION_ACCESS_SELECT_LEGACY,
   awaitingLabel: true,
+  needsReply: true,
   customerLang: true,
   customerLangLabel: true,
 } as const;
@@ -89,7 +90,12 @@ async function findWithMigrationFallback(
         },
       });
       return withAwaiting
-        ? { ...withAwaiting, customerLang: null, customerLangLabel: null }
+        ? {
+            ...withAwaiting,
+            customerLang: null,
+            customerLangLabel: null,
+            needsReply: false,
+          }
         : null;
     } catch (e2) {
       if (!isInboxSchemaMigrationError(e2)) throw e2;
@@ -101,6 +107,7 @@ async function findWithMigrationFallback(
         ? {
             ...row,
             awaitingLabel: false,
+            needsReply: false,
             customerLang: null,
             customerLangLabel: null,
           }

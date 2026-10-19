@@ -438,6 +438,9 @@ model CskhInboxConversation {
   lastMessageAt      DateTime?                    @map("last_message_at") @db.Timestamptz(6)
   unreadCount        Int                          @default(0) @map("unread_count")
   awaitingLabel      Boolean                      @default(false) @map("awaiting_label")
+
+  needsReply         Boolean @default(false)      @map("needs_reply")
+
   fromAd             Boolean                      @default(false) @map("from_ad")
   adId               String?                      @map("ad_id") @db.VarChar
   adTitle            String?                      @map("ad_title") @db.VarChar
@@ -461,6 +464,7 @@ model CskhInboxConversation {
 
   @@unique([pageId, participantPsid])
   @@index([tenantId, lastMessageAt(sort: Desc), id(sort: Desc)])
+  @@index([tenantId, needsReply, lastMessageAt(sort: Desc), id(sort: Desc)])
   @@index([pageId, lastMessageAt(sort: Desc), id(sort: Desc)])
   @@index([tenantId, fromAd, lastMessageAt(sort: Desc), id(sort: Desc)])
   @@index([lastMessageAt(sort: Desc), id(sort: Desc)])

@@ -723,6 +723,7 @@ export class CskhFacebookCommentsService {
         lastMessage: input.text,
         lastMessageAt: input.commentedAt,
         unreadCount: bumpUnread ? 1 : 0,
+        needsReply: input.direction !== 'outbound',
         kind: 'fb_comment',
         sourcePostId: input.fbPostId,
         sourcePermalink: post?.permalink ?? null,
@@ -736,7 +737,11 @@ export class CskhFacebookCommentsService {
         ...(post?.permalink ? { sourcePermalink: post.permalink } : {}),
         ...(post?.thumbnailUrl ? { sourceThumb: post.thumbnailUrl } : {}),
         ...(newer
-          ? { lastMessage: input.text, lastMessageAt: input.commentedAt }
+          ? {
+              lastMessage: input.text,
+              lastMessageAt: input.commentedAt,
+              needsReply: input.direction !== 'outbound',
+            }
           : {}),
         ...(bumpUnread ? { unreadCount: { increment: 1 } } : {}),
       },
@@ -789,6 +794,7 @@ export class CskhFacebookCommentsService {
       lastMessageAt: Date | null;
       unreadCount: number;
       awaitingLabel: boolean;
+      needsReply: boolean;
       fromAd: boolean;
       adTitle: string | null;
       adId: string | null;
@@ -844,6 +850,7 @@ export class CskhFacebookCommentsService {
         lastMessageAt: conv.lastMessageAt?.toISOString() ?? null,
         unreadCount: conv.unreadCount,
         awaitingLabel: conv.awaitingLabel,
+        needsReply: conv.needsReply,
         fromAd: conv.fromAd,
         adTitle: conv.adTitle,
         adId: conv.adId,

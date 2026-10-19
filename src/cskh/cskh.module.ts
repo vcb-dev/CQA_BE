@@ -17,6 +17,8 @@ import { MetaConversionsService } from './facebook/meta-conversions.service';
 import { CskhInboxLabelsService } from './inbox/cskh-inbox-labels.service';
 import { CskhInboxRealtimeService } from './inbox/cskh-inbox-realtime.service';
 import { CskhInboxService } from './inbox/cskh-inbox.service';
+import { CskhMediaLibraryController } from './media/cskh-media-library.controller';
+import { CskhMediaLibraryService } from './media/cskh-media-library.service';
 import { OmsApiService } from './oms/oms-api.service';
 import { OmsCatalogService } from './oms/oms-catalog.service';
 import { OmsOrderService } from './oms/oms-order.service';
@@ -37,7 +39,7 @@ import { SapoProductService } from './sapo/sapo-product.service';
 
 @Module({
   imports: [AiModule, AuthModule, UsersModule, forwardRef(() => PancakeModule)],
-  controllers: [CskhController],
+  controllers: [CskhController, CskhMediaLibraryController],
   providers: [
     CskhRedisSignalsService,
     GraphApiCoordinatorService,
@@ -69,6 +71,7 @@ import { SapoProductService } from './sapo/sapo-product.service';
     RedisQueueService,
     CskhInstagramCommentsService,
     CskhFacebookCommentsService,
+    CskhMediaLibraryService,
   ],
   exports: [CskhService, CskhInboxService, RedisQueueService],
 })

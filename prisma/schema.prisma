@@ -444,6 +444,7 @@ model CskhInboxConversation {
   fromAd             Boolean                      @default(false) @map("from_ad")
   adId               String?                      @map("ad_id") @db.VarChar
   adTitle            String?                      @map("ad_title") @db.VarChar
+  adPostPermalink    String?                      @map("ad_post_permalink") @db.Text
   referralSource     String?                      @map("referral_source") @db.VarChar
   referralAt         DateTime?                    @map("referral_at") @db.Timestamptz(6)
   // Ngôn ngữ khách (ISO 639-1) — dùng khi NV bật tự dịch khi gửi. Persist ở BE.

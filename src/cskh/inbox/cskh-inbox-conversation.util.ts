@@ -31,6 +31,7 @@ export function isPrismaRetryableDbError(e: unknown): boolean {
   return isPrismaBusyError(e);
 }
 
+// CONVERSATION_ACCESS_SELECT_LEGACY là cấu hình lấy dữ liệu từ conversation
 export const CONVERSATION_ACCESS_SELECT_LEGACY = {
   id: true,
   pageId: true,
@@ -42,6 +43,7 @@ export const CONVERSATION_ACCESS_SELECT_LEGACY = {
   fromAd: true,
   adId: true,
   adTitle: true,
+  adPostPermalink: true,
   referralSource: true,
   referralAt: true,
   lastMessage: true,

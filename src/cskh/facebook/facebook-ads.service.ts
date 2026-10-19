@@ -1,11 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
-import { GRAPH_BASE } from './facebook-oauth.util';
 import {
   extractPageIdFromCreative,
   extractPageIdFromPromotedObject,
   pageIdsMatch,
 } from './cskh-ads-creative.util';
+import { FacebookGraphService } from './facebook-graph.service';
+import { GRAPH_BASE } from './facebook-oauth.util';
 
 export type AdInsightsPayload = {
   adId: string;
@@ -14,6 +15,8 @@ export type AdInsightsPayload = {
   campaignName: string | null;
   /** Ảnh creative / thumbnail từ Marketing API hoặc webhook ads_context. */
   adImageUrl?: string | null;
+  /** Permalink bài đăng Facebook gắn với ad (Click-to-Messenger). */
+  adPostUrl?: string | null;
   currency: string | null;
   spend: number | null;
   impressions: number | null;
@@ -62,7 +65,13 @@ const MESSAGING_CONVERSATION_STARTED_TYPES = [
   'messaging_conversation_started',
 ] as const;
 
-type AdAccountRow = { id: string; name?: string; account_id?: string; currency?: string; account_status?: number };
+type AdAccountRow = {
+  id: string;
+  name?: string;
+  account_id?: string;
+  currency?: string;
+  account_status?: number;
+};
 
 /** Gợi ý QC của Page — lưu sau lần discover đầu để lần sau chỉ 1 API insights. */
 export type PageAdHint = {
@@ -95,20 +104,52 @@ type AccountEstimateResult = {
   }>;
 };
 
+type AdCreativeResponse = {
+  creative?: {
+    effective_object_story_id?: string;
+    object_story_id?: string;
+  };
+};
+
 @Injectable()
 export class FacebookAdsService {
   private readonly logger = new Logger(FacebookAdsService.name);
-  private readonly cache = new Map<string, { at: number; data: Omit<AdInsightsPayload, 'estimatedForThisConversation' | 'localConversationCount' | 'unavailableReason'> }>();
+  private readonly cache = new Map<
+    string,
+    {
+      at: number;
+      data: Omit<
+        AdInsightsPayload,
+        | 'estimatedForThisConversation'
+        | 'localConversationCount'
+        | 'unavailableReason'
+      >;
+    }
+  >();
   private readonly creativeCache = new Map<
     string,
     { at: number; data: { adName: string | null; adImageUrl: string | null } }
   >();
-  private readonly cacheTtlMs = Number(process.env.CSKH_AD_INSIGHTS_CACHE_MS || 3_600_000);
-  private readonly pageAccountFilterCache = new Map<string, { at: number; accounts: AdAccountRow[] }>();
+  private readonly postUrlCache = new Map<
+    string,
+    { at: number; url: string | null }
+  >();
+  private readonly cacheTtlMs = Number(
+    process.env.CSKH_AD_INSIGHTS_CACHE_MS || 3_600_000,
+  );
+  private readonly pageAccountFilterCache = new Map<
+    string,
+    { at: number; accounts: AdAccountRow[] }
+  >();
   private readonly pageAccountFilterCacheTtlMs = 3_600_000;
   /** Cache Page → adset QC (sau lần tra đầu, chỉ cần 1 request insights). */
-  private readonly pageAdHintCache = new Map<string, { at: number; hint: PageAdHint }>();
-  private readonly pageAdHintTtlMs = Number(process.env.CSKH_PAGE_AD_HINT_CACHE_MS || 21_600_000);
+  private readonly pageAdHintCache = new Map<
+    string,
+    { at: number; hint: PageAdHint }
+  >();
+  private readonly pageAdHintTtlMs = Number(
+    process.env.CSKH_PAGE_AD_HINT_CACHE_MS || 21_600_000,
+  );
   /** Tránh gọi lại listAds khi Meta trả 400 liên tục (rate / param). */
   private listAdsBrokenUntil = new Map<string, number>();
   /** Meta ads-management rate limit theo tài khoản QC (80004). */
@@ -116,12 +157,19 @@ export class FacebookAdsService {
   /** Meta app/user rate limit (17 — User request limit reached). */
   private graphUserRateLimitedUntil = 0;
   private graphAdsInflight = 0;
-  private readonly graphAdsMaxInflight = Number(process.env.CSKH_GRAPH_ADS_MAX_INFLIGHT || 2);
+  private readonly graphAdsMaxInflight = Number(
+    process.env.CSKH_GRAPH_ADS_MAX_INFLIGHT || 2,
+  );
   private graphAdsWaitQueue: Array<() => void> = [];
   /** Không gọi lại discover khi đã biết Page không có QC trên tài khoản này. */
   private readonly discoverMissUntil = new Map<string, number>();
-  private readonly discoverMissTtlMs = Number(process.env.CSKH_PAGE_AD_DISCOVER_MISS_MS || 21_600_000);
-  private readonly discoverInflight = new Map<string, Promise<PageAdHint | null>>();
+  private readonly discoverMissTtlMs = Number(
+    process.env.CSKH_PAGE_AD_DISCOVER_MISS_MS || 21_600_000,
+  );
+  private readonly discoverInflight = new Map<
+    string,
+    Promise<PageAdHint | null>
+  >();
   private adsetPageFilterSupported: boolean | null = null;
 
   private discoverKey(accountId: string, pageId: string): string {
@@ -135,8 +183,11 @@ export class FacebookAdsService {
 
   private graphErrorMessage(e: unknown): string {
     if (axios.isAxiosError(e)) {
-      const meta = (e.response?.data as { error?: { message?: string; code?: number } })?.error;
-      if (meta?.message) return `[${meta.code ?? e.response?.status}] ${meta.message}`;
+      const meta = (
+        e.response?.data as { error?: { message?: string; code?: number } }
+      )?.error;
+      if (meta?.message)
+        return `[${meta.code ?? e.response?.status}] ${meta.message}`;
       return e.message;
     }
     return (e as Error).message;
@@ -158,7 +209,9 @@ export class FacebookAdsService {
 
   private markUserRateLimited(minutes = 20): void {
     this.graphUserRateLimitedUntil = Date.now() + minutes * 60_000;
-    this.logger.warn(`Meta user/app rate limit — tạm dừng ads API ~${minutes} phút`);
+    this.logger.warn(
+      `Meta user/app rate limit — tạm dừng ads API ~${minutes} phút`,
+    );
   }
 
   getPageAdHint(pageId: string): PageAdHint | null {
@@ -172,12 +225,18 @@ export class FacebookAdsService {
     const accKey = `${pageId}:${hint.adAccountId}`;
     this.pageAccountFilterCache.set(accKey, {
       at: Date.now(),
-      accounts: [{ id: hint.adAccountId, name: hint.adAccountName ?? undefined }],
+      accounts: [
+        { id: hint.adAccountId, name: hint.adAccountName ?? undefined },
+      ],
     });
   }
 
   /** Ưu tiên tài khoản QC đã biết — khi có adset_id chỉ thử 1 tài khoản. */
-  orderAccountsForPage(pageId: string, accounts: AdAccountRow[], max = 2): AdAccountRow[] {
+  orderAccountsForPage(
+    pageId: string,
+    accounts: AdAccountRow[],
+    max = 2,
+  ): AdAccountRow[] {
     const hint = this.getPageAdHint(pageId);
     if (!hint?.adAccountId) return accounts.filter((a) => a.id).slice(0, max);
     const hit = accounts.filter((a) => a.id === hint.adAccountId);
@@ -193,8 +252,13 @@ export class FacebookAdsService {
   }
 
   private markAccountRateLimited(adAccountId: string, minutes = 30): void {
-    this.accountRateLimitedUntil.set(adAccountId, Date.now() + minutes * 60_000);
-    this.logger.warn(`Meta ads rate limit — tạm dừng ${adAccountId} ~${minutes} phút`);
+    this.accountRateLimitedUntil.set(
+      adAccountId,
+      Date.now() + minutes * 60_000,
+    );
+    this.logger.warn(
+      `Meta ads rate limit — tạm dừng ${adAccountId} ~${minutes} phút`,
+    );
   }
 
   private async acquireGraphAdsSlot(): Promise<void> {
@@ -251,8 +315,15 @@ export class FacebookAdsService {
     return Date.now() < until;
   }
 
-  private markListAdsBroken(adAccountId: string, pageId: string, minutes = 15): void {
-    this.listAdsBrokenUntil.set(`${adAccountId}:${pageId}`, Date.now() + minutes * 60_000);
+  private markListAdsBroken(
+    adAccountId: string,
+    pageId: string,
+    minutes = 15,
+  ): void {
+    this.listAdsBrokenUntil.set(
+      `${adAccountId}:${pageId}`,
+      Date.now() + minutes * 60_000,
+    );
     if (minutes >= 30) {
       this.markAccountRateLimited(adAccountId, minutes);
     }
@@ -274,26 +345,36 @@ export class FacebookAdsService {
     return null;
   }
 
-  private parseMessagingConversationCount(actions: MetaActionRow[] | undefined): number | null {
+  private parseMessagingConversationCount(
+    actions: MetaActionRow[] | undefined,
+  ): number | null {
     return this.pickMessagingMetric(actions);
   }
 
-  private parseMessagingConversationCost(costPerAction: MetaActionRow[] | undefined): number | null {
+  private parseMessagingConversationCost(
+    costPerAction: MetaActionRow[] | undefined,
+  ): number | null {
     return this.pickMessagingMetric(costPerAction);
   }
 
   private resolveMessagingInsights(
     row: Record<string, unknown>,
     spend: number,
-  ): { messagingConversations: number | null; costPerConversation: number | null } {
+  ): {
+    messagingConversations: number | null;
+    costPerConversation: number | null;
+  } {
     const actions = row.actions as MetaActionRow[] | undefined;
-    const costPerAction = row.cost_per_action_type as MetaActionRow[] | undefined;
+    const costPerAction = row.cost_per_action_type as
+      | MetaActionRow[]
+      | undefined;
 
     const messagingConversations =
       this.parseMessagingConversationCount(actions) ??
       this.parseMessagingConversationCount(costPerAction);
 
-    let costPerConversation = this.parseMessagingConversationCost(costPerAction);
+    let costPerConversation =
+      this.parseMessagingConversationCost(costPerAction);
     if (costPerConversation != null) {
       return { messagingConversations, costPerConversation };
     }
@@ -315,12 +396,12 @@ export class FacebookAdsService {
 
   /** 30 ngày lịch VN (gồm hôm nay) — khớp Ads Manager khi xem đến ngày hiện tại. */
   private insightsTimeRangeVn(): { since: string; until: string } {
-    const until = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(
-      new Date(),
-    );
-    const since = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(
-      new Date(Date.now() - 29 * 86_400_000),
-    );
+    const until = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Ho_Chi_Minh',
+    }).format(new Date());
+    const since = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Ho_Chi_Minh',
+    }).format(new Date(Date.now() - 29 * 86_400_000));
     return { since, until };
   }
 
@@ -343,16 +424,22 @@ export class FacebookAdsService {
   private async fetchLevelMessagingInsights(
     account: AdAccountRow,
     level: 'campaign' | 'adset',
-    filter:
-      | { field: 'campaign.id' | 'campaign.name' | 'adset.id' | 'adset.name'; value: string },
+    filter: {
+      field: 'campaign.id' | 'campaign.name' | 'adset.id' | 'adset.name';
+      value: string;
+    },
     userAccessToken: string,
     opts?: { since?: string; until?: string; bypassCache?: boolean },
   ): Promise<AccountEstimateResult | null> {
     if (!account.id || !filter.value.trim()) return null;
     const rangeKey =
-      opts?.since && opts?.until ? `${opts.since}:${opts.until}` : this.insightsTimeRangeVn();
+      opts?.since && opts?.until
+        ? `${opts.since}:${opts.until}`
+        : this.insightsTimeRangeVn();
     const rangeLabel =
-      typeof rangeKey === 'string' ? rangeKey : `${rangeKey.since}:${rangeKey.until}`;
+      typeof rangeKey === 'string'
+        ? rangeKey
+        : `${rangeKey.since}:${rangeKey.until}`;
     const cacheKey = `level-messaging:v1:${level}:${account.id}:${filter.field}:${filter.value}:${rangeLabel}`;
     if (opts?.bypassCache) {
       this.cache.delete(cacheKey);
@@ -371,7 +458,9 @@ export class FacebookAdsService {
     const params: Record<string, string | number> = {
       level,
       fields,
-      filtering: JSON.stringify([{ field: filter.field, operator: 'EQUAL', value: filter.value }]),
+      filtering: JSON.stringify([
+        { field: filter.field, operator: 'EQUAL', value: filter.value },
+      ]),
       limit: 5,
       access_token: userAccessToken,
     };
@@ -383,12 +472,9 @@ export class FacebookAdsService {
 
     let insightRows: Array<Record<string, unknown>> = [];
     try {
-      const res = await this.graphGet<{ data?: Array<Record<string, unknown>> }>(
-        account.id,
-        `${GRAPH_BASE}/${account.id}/insights`,
-        params,
-        20_000,
-      );
+      const res = await this.graphGet<{
+        data?: Array<Record<string, unknown>>;
+      }>(account.id, `${GRAPH_BASE}/${account.id}/insights`, params, 20_000);
       insightRows = Array.isArray(res?.data) ? res.data : [];
     } catch (e) {
       this.logger.warn(
@@ -404,7 +490,10 @@ export class FacebookAdsService {
     if (parsed.spend <= 0 && parsed.messagingConversations == null) return null;
 
     const result: AccountEstimateResult = {
-      currency: (row.account_currency as string | undefined) ?? account.currency ?? null,
+      currency:
+        (row.account_currency as string | undefined) ??
+        account.currency ??
+        null,
       spend: parsed.spend > 0 ? parsed.spend : null,
       messagingConversations: parsed.messagingConversations,
       costPerConversation: parsed.costPerConversation,
@@ -424,7 +513,9 @@ export class FacebookAdsService {
       at: Date.now(),
       data: result as unknown as Omit<
         AdInsightsPayload,
-        'estimatedForThisConversation' | 'localConversationCount' | 'unavailableReason'
+        | 'estimatedForThisConversation'
+        | 'localConversationCount'
+        | 'unavailableReason'
       >,
     });
     return result;
@@ -434,7 +525,14 @@ export class FacebookAdsService {
     adId: string,
     userAccessToken: string,
     opts?: { since?: Date; until?: Date; bypassCache?: boolean },
-  ): Promise<Omit<AdInsightsPayload, 'estimatedForThisConversation' | 'localConversationCount' | 'unavailableReason'>> {
+  ): Promise<
+    Omit<
+      AdInsightsPayload,
+      | 'estimatedForThisConversation'
+      | 'localConversationCount'
+      | 'unavailableReason'
+    >
+  > {
     const since = opts?.since ? this.formatDate(opts.since) : null;
     const until = opts?.until ? this.formatDate(opts.until) : null;
     const cacheKey = `${adId}:v3:${since ?? 'default'}:${until ?? 'default'}`;
@@ -465,7 +563,9 @@ export class FacebookAdsService {
         }),
         this.fetchAdCreativePreview(adId, userAccessToken),
       ]);
-      const row = Array.isArray(insightsRes.data?.data) ? insightsRes.data.data[0] : null;
+      const row = Array.isArray(insightsRes.data?.data)
+        ? insightsRes.data.data[0]
+        : null;
       if (!row) {
         return {
           adId,
@@ -486,7 +586,8 @@ export class FacebookAdsService {
 
       const spend = row.spend != null ? Number(row.spend) : null;
       const spendNum = spend != null && Number.isFinite(spend) ? spend : 0;
-      const { messagingConversations, costPerConversation } = this.resolveMessagingInsights(row, spendNum);
+      const { messagingConversations, costPerConversation } =
+        this.resolveMessagingInsights(row, spendNum);
 
       const payload = {
         adId,
@@ -563,8 +664,60 @@ export class FacebookAdsService {
       this.creativeCache.set(cacheKey, { at: Date.now(), data });
       return data;
     } catch (e) {
-      this.logger.debug(`fetchAdCreativePreview ${id}: ${this.graphErrorMessage(e)}`);
+      this.logger.debug(
+        `fetchAdCreativePreview ${id}: ${this.graphErrorMessage(e)}`,
+      );
       return { adName: null, adImageUrl: null };
+    }
+  }
+
+  // fetchAdPostPermalink là hàm để fetch permalink của post của ad từ Graph
+  async fetchAdPostPermalink(
+    adId: string,
+    userAccessToken: string,
+    pageAccessToken: string,
+    graph: FacebookGraphService,
+  ): Promise<string | null> {
+    const id = adId?.trim();
+    if (!id || !userAccessToken?.trim() || !pageAccessToken?.trim()) {
+      return null;
+    }
+    const cacheKey = `posturl:${id}`;
+    const cached = this.postUrlCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < this.cacheTtlMs) {
+      return cached.url;
+    }
+    try {
+      const res = await axios.get<AdCreativeResponse>(`${GRAPH_BASE}/${id}`, {
+        params: {
+          fields: 'creative{effective_object_story_id,object_story_id}',
+          access_token: userAccessToken.trim(),
+        },
+        timeout: 15_000,
+      });
+      const creative = res.data.creative;
+
+      const storyId = (
+        creative?.effective_object_story_id ??
+        creative?.object_story_id ??
+        ''
+      ).trim();
+      if (!storyId) {
+        this.postUrlCache.set(cacheKey, { at: Date.now(), url: null });
+        return null;
+      }
+      // fetchPagePostById là hàm để fetch post của ad từ Graph
+      const post = await graph.fetchPagePostById(storyId, pageAccessToken);
+      // permalink_url là permalink của post của ad
+      const url = post?.permalink_url?.trim() || null;
+      this.postUrlCache.set(cacheKey, { at: Date.now(), url });
+      return url;
+    } catch (e) {
+      this.logger.debug(
+        `fetchAdPostPermalink ad=${id}: ${this.graphErrorMessage(e)}`,
+      );
+      this.postUrlCache.set(cacheKey, { at: Date.now(), url: null });
+      return null;
     }
   }
 
@@ -582,7 +735,10 @@ export class FacebookAdsService {
       if (hit) return [hit];
     }
 
-    const cacheKey = `${pageId}:${accounts.slice(0, 5).map((a) => a.id).join(',')}`;
+    const cacheKey = `${pageId}:${accounts
+      .slice(0, 5)
+      .map((a) => a.id)
+      .join(',')}`;
     const cached = this.pageAccountFilterCache.get(cacheKey);
     if (cached && Date.now() - cached.at < this.pageAccountFilterCacheTtlMs) {
       return cached.accounts;
@@ -623,7 +779,11 @@ export class FacebookAdsService {
     pageId: string,
     userAccessToken: string,
   ): Promise<PageAdHint | null> {
-    if (!account.id || this.isAccountRateLimited(account.id) || this.isGraphUserRateLimited()) {
+    if (
+      !account.id ||
+      this.isAccountRateLimited(account.id) ||
+      this.isGraphUserRateLimited()
+    ) {
       return null;
     }
 
@@ -634,7 +794,11 @@ export class FacebookAdsService {
     const inflight = this.discoverInflight.get(key);
     if (inflight) return inflight;
 
-    const task = this.discoverPageAdsetHintOnce(account, pageId, userAccessToken);
+    const task = this.discoverPageAdsetHintOnce(
+      account,
+      pageId,
+      userAccessToken,
+    );
     this.discoverInflight.set(key, task);
     try {
       const hint = await task;
@@ -680,7 +844,9 @@ export class FacebookAdsService {
 
     if (this.adsetPageFilterSupported !== false) {
       try {
-        const adsetRes = await this.graphGet<{ data?: Array<Record<string, unknown>> }>(
+        const adsetRes = await this.graphGet<{
+          data?: Array<Record<string, unknown>>;
+        }>(
           account.id,
           `${GRAPH_BASE}/${account.id}/adsets`,
           {
@@ -688,7 +854,11 @@ export class FacebookAdsService {
             limit: 5,
             filtering: JSON.stringify([
               statusIn,
-              { field: 'promoted_object.page_id', operator: 'EQUAL', value: pageId },
+              {
+                field: 'promoted_object.page_id',
+                operator: 'EQUAL',
+                value: pageId,
+              },
             ]),
             access_token: userAccessToken,
           },
@@ -711,7 +881,9 @@ export class FacebookAdsService {
     }
 
     try {
-      const res = await this.graphGet<{ data?: Array<Record<string, unknown>> }>(
+      const res = await this.graphGet<{
+        data?: Array<Record<string, unknown>>;
+      }>(
         account.id,
         `${GRAPH_BASE}/${account.id}/ads`,
         {
@@ -719,7 +891,11 @@ export class FacebookAdsService {
             'id,adset{id,name,promoted_object},campaign{id,name},creative{object_story_spec}',
           limit: 50,
           filtering: JSON.stringify([
-            { field: 'ad.effective_status', operator: 'IN', value: ['ACTIVE', 'PAUSED'] },
+            {
+              field: 'ad.effective_status',
+              operator: 'IN',
+              value: ['ACTIVE', 'PAUSED'],
+            },
           ]),
           access_token: userAccessToken,
         },
@@ -751,7 +927,9 @@ export class FacebookAdsService {
     if (!pageId || !accounts.length) return null;
     if (this.isGraphUserRateLimited()) return null;
 
-    const tryHint = async (hint: PageAdHint): Promise<AccountEstimateResult | null> => {
+    const tryHint = async (
+      hint: PageAdHint,
+    ): Promise<AccountEstimateResult | null> => {
       const est = await this.fetchAdsetMessagingInsights(
         { id: hint.adAccountId, name: hint.adAccountName ?? undefined },
         { adsetId: hint.adsetId, adsetName: hint.adsetName },
@@ -787,7 +965,11 @@ export class FacebookAdsService {
     );
     for (const account of ordered.slice(0, maxTry)) {
       if (!account.id || this.isAccountRateLimited(account.id)) continue;
-      const hint = await this.discoverPageAdsetHint(account, pageId, userAccessToken);
+      const hint = await this.discoverPageAdsetHint(
+        account,
+        pageId,
+        userAccessToken,
+      );
       if (!hint) continue;
       this.savePageAdHint(pageId, hint);
       const est = await tryHint(hint);
@@ -824,7 +1006,8 @@ export class FacebookAdsService {
     costPerConversation: number | null;
   } {
     const spend = row.spend != null ? Number(row.spend) : 0;
-    const { messagingConversations, costPerConversation } = this.resolveMessagingInsights(row, spend);
+    const { messagingConversations, costPerConversation } =
+      this.resolveMessagingInsights(row, spend);
     return {
       spend: Number.isFinite(spend) ? spend : 0,
       messagingConversations,
@@ -838,7 +1021,8 @@ export class FacebookAdsService {
     _preset: string,
   ): Promise<Record<string, unknown> | null> {
     const params: Record<string, string> = {
-      fields: 'spend,actions,cost_per_action_type,account_currency,date_start,date_stop',
+      fields:
+        'spend,actions,cost_per_action_type,account_currency,date_start,date_stop',
       access_token: userAccessToken,
     };
     this.applyInsightsTimeRange(params);
@@ -847,7 +1031,7 @@ export class FacebookAdsService {
       timeout: 12_000,
     });
     return Array.isArray(res.data?.data)
-      ? (res.data.data[0] as Record<string, unknown> | undefined) ?? null
+      ? ((res.data.data[0] as Record<string, unknown> | undefined) ?? null)
       : null;
   }
 
@@ -866,7 +1050,9 @@ export class FacebookAdsService {
     const cacheKey = `top-campaigns:${adAccountId}:${limit}`;
     const cached = this.cache.get(cacheKey);
     if (cached && Date.now() - cached.at < this.cacheTtlMs) {
-      const rows = (cached.data as { topCampaigns?: AccountEstimateResult['topCampaigns'] }).topCampaigns;
+      const rows = (
+        cached.data as { topCampaigns?: AccountEstimateResult['topCampaigns'] }
+      ).topCampaigns;
       return rows ?? [];
     }
 
@@ -889,9 +1075,13 @@ export class FacebookAdsService {
           if (!name) return null;
           const spend = row.spend != null ? Number(row.spend) : null;
           const spendNum = spend != null && Number.isFinite(spend) ? spend : 0;
-          const messagingConversations = this.parseMessagingConversationCount(
-            row.actions as MetaActionRow[],
-          ) ?? this.parseMessagingConversationCount(row.cost_per_action_type as MetaActionRow[]);
+          const messagingConversations =
+            this.parseMessagingConversationCount(
+              row.actions as MetaActionRow[],
+            ) ??
+            this.parseMessagingConversationCount(
+              row.cost_per_action_type as MetaActionRow[],
+            );
           return {
             campaignName: name,
             spend: Number.isFinite(spend) ? spend : null,
@@ -904,7 +1094,9 @@ export class FacebookAdsService {
         at: Date.now(),
         data: { topCampaigns } as unknown as Omit<
           AdInsightsPayload,
-          'estimatedForThisConversation' | 'localConversationCount' | 'unavailableReason'
+          | 'estimatedForThisConversation'
+          | 'localConversationCount'
+          | 'unavailableReason'
         >,
       });
       return topCampaigns;
@@ -931,15 +1123,26 @@ export class FacebookAdsService {
     }>
   > {
     if (!pageId) return [];
-    if (this.isListAdsBroken(adAccountId, pageId) || this.isAccountRateLimited(adAccountId)) {
+    if (
+      this.isListAdsBroken(adAccountId, pageId) ||
+      this.isAccountRateLimited(adAccountId)
+    ) {
       return [];
     }
 
     const cacheKey = `page-ads:${adAccountId}:${pageId}:${limit}`;
     const cached = this.cache.get(cacheKey);
     if (cached && Date.now() - cached.at < this.cacheTtlMs) {
-      const rows = (cached.data as { pageAds?: Array<{ id: string; name: string | null; campaignName: string | null; adsetName: string | null }> })
-        .pageAds;
+      const rows = (
+        cached.data as {
+          pageAds?: Array<{
+            id: string;
+            name: string | null;
+            campaignName: string | null;
+            adsetName: string | null;
+          }>;
+        }
+      ).pageAds;
       return rows ?? [];
     }
 
@@ -963,10 +1166,18 @@ export class FacebookAdsService {
       return msg;
     };
 
-    const pushAd = (row: Record<string, unknown>, adsetName?: string | null) => {
+    const pushAd = (
+      row: Record<string, unknown>,
+      adsetName?: string | null,
+    ) => {
       if (pageAds.length >= limit) return;
       const status = String(row.effective_status ?? '');
-      if (status && !['ACTIVE', 'PAUSED', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED'].includes(status)) {
+      if (
+        status &&
+        !['ACTIVE', 'PAUSED', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED'].includes(
+          status,
+        )
+      ) {
         return;
       }
       const id = String(row.id ?? '');
@@ -984,7 +1195,9 @@ export class FacebookAdsService {
 
     // 1) Một request — ads + creative / adset promoted_object (nhẹ nhất)
     try {
-      const res = await this.graphGet<{ data?: Array<Record<string, unknown>> }>(
+      const res = await this.graphGet<{
+        data?: Array<Record<string, unknown>>;
+      }>(
         adAccountId,
         `${GRAPH_BASE}/${adAccountId}/ads`,
         {
@@ -992,7 +1205,11 @@ export class FacebookAdsService {
             'id,name,effective_status,campaign{id,name},adset{id,name,promoted_object},creative{object_story_spec}',
           limit: 150,
           filtering: JSON.stringify([
-            { field: 'ad.effective_status', operator: 'IN', value: ['ACTIVE', 'PAUSED'] },
+            {
+              field: 'ad.effective_status',
+              operator: 'IN',
+              value: ['ACTIVE', 'PAUSED'],
+            },
           ]),
           access_token: userAccessToken,
         },
@@ -1011,20 +1228,32 @@ export class FacebookAdsService {
       }
     } catch (e) {
       const msg = noteFail(e);
-      this.logger.warn(`listAdsForPage ads account=${adAccountId} page=${pageId}: ${msg}`);
+      this.logger.warn(
+        `listAdsForPage ads account=${adAccountId} page=${pageId}: ${msg}`,
+      );
     }
 
     // 2) Ad sets Click-to-Messenger — chỉ khi bước 1 không tìm thấy QC nào
-    if (pageAds.length === 0 && !this.isAccountRateLimited(adAccountId) && !this.isGraphUserRateLimited()) {
+    if (
+      pageAds.length === 0 &&
+      !this.isAccountRateLimited(adAccountId) &&
+      !this.isGraphUserRateLimited()
+    ) {
       try {
-        const adsetRes = await this.graphGet<{ data?: Array<Record<string, unknown>> }>(
+        const adsetRes = await this.graphGet<{
+          data?: Array<Record<string, unknown>>;
+        }>(
           adAccountId,
           `${GRAPH_BASE}/${adAccountId}/adsets`,
           {
             fields: 'id,name,promoted_object,effective_status',
             limit: 100,
             filtering: JSON.stringify([
-              { field: 'adset.effective_status', operator: 'IN', value: ['ACTIVE', 'PAUSED'] },
+              {
+                field: 'adset.effective_status',
+                operator: 'IN',
+                value: ['ACTIVE', 'PAUSED'],
+              },
             ]),
             access_token: userAccessToken,
           },
@@ -1033,19 +1262,28 @@ export class FacebookAdsService {
         const adsets = Array.isArray(adsetRes?.data) ? adsetRes.data : [];
         for (const adset of adsets) {
           if (pageAds.length >= limit) break;
-          const po = adset.promoted_object as Record<string, unknown> | undefined;
+          const po = adset.promoted_object as
+            | Record<string, unknown>
+            | undefined;
           if (!pageIdsMatch(po?.page_id, pageId)) continue;
           const adsetId = String(adset.id ?? '');
           if (!adsetId) continue;
           try {
-            const adsRes = await this.graphGet<{ data?: Array<Record<string, unknown>> }>(
+            const adsRes = await this.graphGet<{
+              data?: Array<Record<string, unknown>>;
+            }>(
               adAccountId,
               `${GRAPH_BASE}/${adsetId}/ads`,
               {
-                fields: 'id,name,effective_status,campaign{id,name},adset{id,name}',
+                fields:
+                  'id,name,effective_status,campaign{id,name},adset{id,name}',
                 limit: 50,
                 filtering: JSON.stringify([
-                  { field: 'ad.effective_status', operator: 'IN', value: ['ACTIVE', 'PAUSED'] },
+                  {
+                    field: 'ad.effective_status',
+                    operator: 'IN',
+                    value: ['ACTIVE', 'PAUSED'],
+                  },
                 ]),
                 access_token: userAccessToken,
               },
@@ -1062,7 +1300,9 @@ export class FacebookAdsService {
         }
       } catch (e) {
         const msg = noteFail(e);
-        this.logger.debug(`listAdsForPage adsets account=${adAccountId} page=${pageId}: ${msg}`);
+        this.logger.debug(
+          `listAdsForPage adsets account=${adAccountId} page=${pageId}: ${msg}`,
+        );
       }
     }
 
@@ -1074,7 +1314,9 @@ export class FacebookAdsService {
       at: Date.now(),
       data: { pageAds } as unknown as Omit<
         AdInsightsPayload,
-        'estimatedForThisConversation' | 'localConversationCount' | 'unavailableReason'
+        | 'estimatedForThisConversation'
+        | 'localConversationCount'
+        | 'unavailableReason'
       >,
     });
     return pageAds;
@@ -1086,7 +1328,12 @@ export class FacebookAdsService {
     pageId: string,
     userAccessToken: string,
   ): Promise<number> {
-    const ads = await this.listAdsForPage(adAccountId, pageId, userAccessToken, 10);
+    const ads = await this.listAdsForPage(
+      adAccountId,
+      pageId,
+      userAccessToken,
+      10,
+    );
     return ads.length;
   }
 
@@ -1111,7 +1358,11 @@ export class FacebookAdsService {
       }
     }
 
-    const pageAds = await this.listAdsForPage(account.id, pageId, userAccessToken);
+    const pageAds = await this.listAdsForPage(
+      account.id,
+      pageId,
+      userAccessToken,
+    );
     if (!pageAds.length) return null;
 
     const adIds = pageAds.map((a) => a.id);
@@ -1124,7 +1375,9 @@ export class FacebookAdsService {
           level: 'ad',
           fields:
             'ad_id,ad_name,campaign_id,campaign_name,adset_id,adset_name,spend,actions,cost_per_action_type,account_currency,date_start,date_stop',
-          filtering: JSON.stringify([{ field: 'ad.id', operator: 'IN', value: batch }]),
+          filtering: JSON.stringify([
+            { field: 'ad.id', operator: 'IN', value: batch },
+          ]),
           limit: 100,
           access_token: userAccessToken,
         };
@@ -1133,7 +1386,9 @@ export class FacebookAdsService {
         } else {
           this.applyInsightsTimeRange(insightParams);
         }
-        const res = await this.graphGet<{ data?: Array<Record<string, unknown>> }>(
+        const res = await this.graphGet<{
+          data?: Array<Record<string, unknown>>;
+        }>(
           account.id,
           `${GRAPH_BASE}/${account.id}/insights`,
           insightParams,
@@ -1176,7 +1431,10 @@ export class FacebookAdsService {
       totalMessaging > 0 && totalSpend > 0 ? totalSpend / totalMessaging : null;
 
     const result: AccountEstimateResult = {
-      currency: (firstRow.account_currency as string | undefined) ?? account.currency ?? null,
+      currency:
+        (firstRow.account_currency as string | undefined) ??
+        account.currency ??
+        null,
       spend: totalSpend > 0 ? totalSpend : null,
       messagingConversations: totalMessaging > 0 ? totalMessaging : null,
       costPerConversation,
@@ -1185,10 +1443,15 @@ export class FacebookAdsService {
       adAccountId: account.id,
       adAccountName: account.name ?? null,
       campaignName:
-        (bestRow?.campaign_name as string | undefined) ?? bestAdMeta?.campaignName ?? null,
+        (bestRow?.campaign_name as string | undefined) ??
+        bestAdMeta?.campaignName ??
+        null,
       campaignId: (bestRow?.campaign_id as string | undefined) ?? null,
       adName: bestAdMeta?.name ?? null,
-      adsetName: (bestRow?.adset_name as string | undefined) ?? bestAdMeta?.adsetName ?? null,
+      adsetName:
+        (bestRow?.adset_name as string | undefined) ??
+        bestAdMeta?.adsetName ??
+        null,
       adsetId: (bestRow?.adset_id as string | undefined) ?? null,
       topCampaigns: [],
     };
@@ -1197,7 +1460,9 @@ export class FacebookAdsService {
       at: Date.now(),
       data: result as unknown as Omit<
         AdInsightsPayload,
-        'estimatedForThisConversation' | 'localConversationCount' | 'unavailableReason'
+        | 'estimatedForThisConversation'
+        | 'localConversationCount'
+        | 'unavailableReason'
       >,
     });
     return result;
@@ -1270,7 +1535,12 @@ export class FacebookAdsService {
     adAccountId: string,
     pageId: string,
     userAccessToken: string,
-  ): Promise<{ adId: string; adName: string | null; campaignName: string | null; adsetName: string | null } | null> {
+  ): Promise<{
+    adId: string;
+    adName: string | null;
+    campaignName: string | null;
+    adsetName: string | null;
+  } | null> {
     if (!pageId) return null;
     const cacheKey = `page-lead-ad:${adAccountId}:${pageId}`;
     const cached = this.cache.get(cacheKey);
@@ -1293,7 +1563,12 @@ export class FacebookAdsService {
     }
 
     try {
-      const pageAds = await this.listAdsForPage(adAccountId, pageId, userAccessToken, 1);
+      const pageAds = await this.listAdsForPage(
+        adAccountId,
+        pageId,
+        userAccessToken,
+        1,
+      );
       const hit = pageAds[0];
       if (!hit) return null;
       const result = {
@@ -1306,7 +1581,9 @@ export class FacebookAdsService {
         at: Date.now(),
         data: result as unknown as Omit<
           AdInsightsPayload,
-          'estimatedForThisConversation' | 'localConversationCount' | 'unavailableReason'
+          | 'estimatedForThisConversation'
+          | 'localConversationCount'
+          | 'unavailableReason'
         >,
       });
       return result;
@@ -1329,8 +1606,11 @@ export class FacebookAdsService {
     const cachedTop = this.cache.get(topCacheKey);
     let topCampaigns =
       cachedTop && Date.now() - cachedTop.at < this.cacheTtlMs
-        ? ((cachedTop.data as { topCampaigns?: AccountEstimateResult['topCampaigns'] }).topCampaigns ??
-          [])
+        ? ((
+            cachedTop.data as {
+              topCampaigns?: AccountEstimateResult['topCampaigns'];
+            }
+          ).topCampaigns ?? [])
         : [];
 
     if (!topCampaigns.length) {
@@ -1345,12 +1625,20 @@ export class FacebookAdsService {
         topCampaigns = [];
       }
       if (!topCampaigns.length) {
-        void this.fetchTopCampaignInsights(account.id, userAccessToken, 3).catch(() => undefined);
+        void this.fetchTopCampaignInsights(
+          account.id,
+          userAccessToken,
+          3,
+        ).catch(() => undefined);
       }
     }
 
     if (pageId) {
-      void this.fetchLeadingAdForPage(account.id, pageId, userAccessToken).catch(() => undefined);
+      void this.fetchLeadingAdForPage(
+        account.id,
+        pageId,
+        userAccessToken,
+      ).catch(() => undefined);
     }
 
     const top = topCampaigns[0];
@@ -1393,19 +1681,28 @@ export class FacebookAdsService {
 
     const accounts = await this.fetchAdAccounts(userAccessToken);
     const preferred = (preferredAccountIds ?? []).filter(Boolean);
-    const activeAccounts = accounts.filter((a) => a.id && a.account_status !== 2);
-    if (!activeAccounts.length && accounts[0]?.id) activeAccounts.push(accounts[0]);
+    const activeAccounts = accounts.filter(
+      (a) => a.id && a.account_status !== 2,
+    );
+    if (!activeAccounts.length && accounts[0]?.id)
+      activeAccounts.push(accounts[0]);
     if (!activeAccounts.length) return null;
 
     if (pageId) {
       const ordered = this.orderAccountsForPage(pageId, activeAccounts, 2);
-      const fast = await this.fetchPageAdInsightsFast(pageId, ordered, userAccessToken);
+      const fast = await this.fetchPageAdInsightsFast(
+        pageId,
+        ordered,
+        userAccessToken,
+      );
       if (fast) {
         this.cache.set(cacheKey, {
           at: Date.now(),
           data: fast as unknown as Omit<
             AdInsightsPayload,
-            'estimatedForThisConversation' | 'localConversationCount' | 'unavailableReason'
+            | 'estimatedForThisConversation'
+            | 'localConversationCount'
+            | 'unavailableReason'
           >,
         });
         return fast;
@@ -1413,7 +1710,9 @@ export class FacebookAdsService {
     }
 
     const ordered: AdAccountRow[] = preferred.length
-      ? activeAccounts.filter((a) => a.id && preferred.includes(a.id)).slice(0, 2)
+      ? activeAccounts
+          .filter((a) => a.id && preferred.includes(a.id))
+          .slice(0, 2)
       : activeAccounts.filter((a) => a.id).slice(0, 2);
 
     const datePresets = ['last_30d'] as const;
@@ -1435,7 +1734,11 @@ export class FacebookAdsService {
     for (const { account, preset } of tasks) {
       if (account.id && this.isAccountRateLimited(account.id)) continue;
       try {
-        const row = await this.fetchAccountInsightsRow(account, userAccessToken, preset);
+        const row = await this.fetchAccountInsightsRow(
+          account,
+          userAccessToken,
+          preset,
+        );
         if (!row) continue;
         const parsed = this.parseInsightsRow(row);
         candidates.push({
@@ -1455,12 +1758,16 @@ export class FacebookAdsService {
 
     if (!candidates.length) return null;
 
-    const withMessaging = candidates.filter((c) => c.costPerConversation != null && c.spend > 0);
+    const withMessaging = candidates.filter(
+      (c) => c.costPerConversation != null && c.spend > 0,
+    );
     const withSpend = candidates.filter((c) => c.spend > 0);
     const pick =
       withMessaging.sort(
         (a, b) =>
-          b.spend + (b.costPerConversation ?? 0) * 100 - (a.spend + (a.costPerConversation ?? 0) * 100),
+          b.spend +
+          (b.costPerConversation ?? 0) * 100 -
+          (a.spend + (a.costPerConversation ?? 0) * 100),
       )[0] ??
       withSpend.sort((a, b) => b.spend - a.spend)[0] ??
       candidates[0];
@@ -1468,7 +1775,10 @@ export class FacebookAdsService {
 
     const row = pick.row;
     let result: AccountEstimateResult = {
-      currency: (row.account_currency as string | undefined) ?? pick.account.currency ?? null,
+      currency:
+        (row.account_currency as string | undefined) ??
+        pick.account.currency ??
+        null,
       spend: pick.spend > 0 ? pick.spend : null,
       messagingConversations: pick.messagingConversations,
       costPerConversation: pick.costPerConversation,
@@ -1511,7 +1821,9 @@ export class FacebookAdsService {
         topCampaigns: result.topCampaigns,
       } as unknown as Omit<
         AdInsightsPayload,
-        'estimatedForThisConversation' | 'localConversationCount' | 'unavailableReason'
+        | 'estimatedForThisConversation'
+        | 'localConversationCount'
+        | 'unavailableReason'
       >,
     });
     return result;

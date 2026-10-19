@@ -18,6 +18,7 @@ export type ParsedAdReferral = {
   adTitle: string | null;
   adImageUrl: string | null;
   referralSource: string | null;
+  adPostId: string | null;
 };
 
 /** Mẫu regex — tin hệ thống Facebook báo khách vào từ quảng cáo. */
@@ -62,13 +63,27 @@ export function isAdReferralNoiseText(text: string): boolean {
   return AD_REFERRAL_NOISE_PATTERNS.some((p) => p.test(t));
 }
 
-export function parseWebhookReferral(referral: FbWebhookReferral | null | undefined): ParsedAdReferral {
+// parseWebhookReferral là hàm để parse dữ liệu từ webhook referral
+export function parseWebhookReferral(
+  referral: FbWebhookReferral | null | undefined,
+): ParsedAdReferral {
   if (!referral || typeof referral !== 'object') {
-    return { fromAd: false, adId: null, adTitle: null, adImageUrl: null, referralSource: null };
+    return {
+      fromAd: false,
+      adId: null,
+      adTitle: null,
+      adImageUrl: null,
+      referralSource: null,
+      adPostId: null,
+    };
   }
 
-  const source = typeof referral.source === 'string' ? referral.source.trim() : null;
-  const adId = typeof referral.ad_id === 'string' && referral.ad_id.trim() ? referral.ad_id.trim() : null;
+  const source =
+    typeof referral.source === 'string' ? referral.source.trim() : null;
+  const adId =
+    typeof referral.ad_id === 'string' && referral.ad_id.trim()
+      ? referral.ad_id.trim()
+      : null;
   const adTitle =
     typeof referral.ads_context_data?.ad_title === 'string' &&
     referral.ads_context_data.ad_title.trim()
@@ -80,6 +95,11 @@ export function parseWebhookReferral(referral: FbWebhookReferral | null | undefi
       ? referral.ads_context_data.photo_url.trim()
       : null;
   const fromAd = source === 'ADS' || Boolean(adId);
+  const adPostId =
+    typeof referral.ads_context_data?.post_id === 'string' &&
+    referral.ads_context_data.post_id.trim()
+      ? referral.ads_context_data.post_id.trim()
+      : null;
 
   return {
     fromAd,
@@ -87,9 +107,11 @@ export function parseWebhookReferral(referral: FbWebhookReferral | null | undefi
     adTitle,
     adImageUrl: photo,
     referralSource: source,
+    adPostId,
   };
 }
 
+// detectAdFromMessageTexts là hàm để phát hiện ad từ text message
 export function detectAdFromMessageTexts(texts: string[]): ParsedAdReferral {
   const hit = texts.some(isAdReferralNoiseText);
   return {
@@ -98,6 +120,7 @@ export function detectAdFromMessageTexts(texts: string[]): ParsedAdReferral {
     adTitle: null,
     adImageUrl: null,
     referralSource: hit ? 'HEURISTIC' : null,
+    adPostId: null,
   };
 }
 

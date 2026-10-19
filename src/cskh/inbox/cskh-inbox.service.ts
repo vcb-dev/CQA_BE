@@ -847,6 +847,9 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
       fromAd: conv.fromAd,
       adTitle: conv.adTitle,
       adId: conv.adId,
+      // adPostPermalink là permalink của post của ad
+      adPostPermalink:
+        'adPostPermalink' in conv ? (conv.adPostPermalink ?? null) : null,
       referralSource: conv.referralSource,
       customerLang: conv.customerLang ?? null,
       customerLangLabel: conv.customerLangLabel ?? null,
@@ -1949,6 +1952,18 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
     const pageName = config?.pageName ?? null;
     const referralAt = new Date(event.timestamp ?? Date.now());
 
+    // adPostPermalink là permalink của post của ad
+    let adPostPermalink: string | null = null;
+    if (parsed.adPostId && config?.pageAccessToken) {
+      // fetchPagePostById là hàm để fetch post của ad từ Graph
+      const post = await this.graph.fetchPagePostById(
+        parsed.adPostId,
+        config.pageAccessToken,
+      );
+      // permalink_url là permalink của post của ad
+      adPostPermalink = post?.permalink_url?.trim() || null;
+    }
+
     // Luôn ghi đè ad mới nhất khi Meta gửi referral (không giữ QC lần đầu).
     const conv = await this.prisma.cskhInboxConversation.upsert({
       where: {
@@ -1961,6 +1976,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         fromAd: true,
         adId: parsed.adId,
         adTitle: parsed.adTitle,
+        ...(adPostPermalink ? { adPostPermalink } : {}),
         referralSource: parsed.referralSource,
         referralAt,
         tenantId: config?.tenantId || null,
@@ -1974,6 +1990,7 @@ export class CskhInboxService implements OnModuleInit, OnModuleDestroy {
         fromAd: true,
         ...(parsed.adId ? { adId: parsed.adId } : {}),
         ...(parsed.adTitle ? { adTitle: parsed.adTitle } : {}),
+        ...(adPostPermalink ? { adPostPermalink } : {}),
         referralSource: parsed.referralSource ?? undefined,
         referralAt,
         tenantId: config?.tenantId || undefined,
